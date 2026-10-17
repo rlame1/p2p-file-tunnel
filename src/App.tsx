@@ -323,7 +323,14 @@ export default function App() {
                   setTransfers((prev) =>
                     prev.map((item) =>
                       item.id === fileId && item.direction === 'incoming'
-                        ? { ...item, status: 'completed', downloadUrl, ... }
+                        ? { 
+                            ...item, 
+                            status: 'completed', 
+                            downloadUrl, 
+                            speedBps, 
+                            verified: true, 
+                            completedAt: Date.now() 
+                          }
                         : item
                     )
                   );
@@ -402,7 +409,14 @@ export default function App() {
               setTransfers((prev) =>
                 prev.map((item) =>
                   item.id === fileId && item.direction === 'incoming'
-                    ? { ...item, status: 'completed', downloadUrl, ... }
+                    ? { 
+                        ...item, 
+                        status: 'completed', 
+                        downloadUrl, 
+                        speedBps, 
+                        verified: true, 
+                        completedAt: Date.now() 
+                      }
                     : item
                 )
               );
@@ -3137,3 +3151,109 @@ export default function App() {
                       Encrypted Peer Scratchpad
                     </h2>
                     <p className="text-xs text-slate-400 mt-0.5">
+                      Exchange AES-256-GCM encrypted verification notes, archive passwords, or instructions across the tunnel.
+                    </p>
+
+                    <form onSubmit={handleSendEncryptedNote} className="mt-3 flex gap-2">
+                      <input
+                        type="text"
+                        value={noteInput}
+                        onChange={(e) => setNoteInput(e.target.value)}
+                        placeholder="Write an encrypted message to connected peers..."
+                        className="flex-1 px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                      />
+                      <button
+                        type="submit"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        Send E2EE Note
+                      </button>
+                    </form>
+                  </div>
+
+                  {notes.length > 0 && (
+                    <div className="space-y-2 max-h-36 overflow-y-auto pt-2 border-t border-slate-800">
+                      {notes.map((n) => (
+                        <div
+                          key={n.id}
+                          className="p-2.5 bg-slate-950 border border-slate-800 rounded text-xs flex items-start justify-between gap-3"
+                        >
+                          <div>
+                            <span className="font-semibold text-sky-400">
+                              {n.senderLabel}:
+                            </span>{' '}
+                            <span className="text-slate-200">{n.text}</span>
+                          </div>
+                          <span className="font-mono text-[11px] text-slate-500 tabular-nums shrink-0">
+                            {new Date(n.timestamp).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'inspector' && (
+          <ClientInspectorView
+            roomCode={roomCode}
+            keyFingerprint={keyFingerprint}
+            exeBridgeConnected={exeBridgeConnected}
+            connectionState={connectionState}
+            natReport={natReport}
+            peers={peers}
+            transfers={transfers}
+          />
+        )}
+
+        {activeTab === 'diagnostics' && (
+          <NatDiagnosticsView
+            report={natReport}
+            isProbing={isProbingNat}
+            onRunProbe={executeNatProbe}
+            selectedStrategy={transportStrategy}
+            onSelectStrategy={setTransportStrategy}
+          />
+        )}
+
+        {activeTab === 'ledger' && (
+          <TransferLedgerView
+            transfers={transfers}
+            onClearCompleted={() =>
+              setTransfers((prev) =>
+                prev.filter((t) => t.status !== 'completed')
+              )
+            }
+            onSwitchToStudio={() => setActiveTab('studio')}
+          />
+        )}
+
+
+      </main>
+
+      <footer className="border-t border-slate-800/80 py-4 px-6 text-xs text-slate-400">
+        <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div>
+            AetherTunnel — End-to-End Encrypted P2P File Transfer &amp; NAT Traversal Suite
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setActiveTab('diagnostics')}
+              className="hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              ICE / STUN Diagnostics
+            </button>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
