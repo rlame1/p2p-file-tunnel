@@ -609,11 +609,17 @@ export default function App() {
       channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
       if (!managedByPeerJs) {
-        channel.onmessage = (ev: MessageEvent) => {
-          if (ev.data instanceof ArrayBuffer && handleRawBinaryFrame(ev.data)) {
+        channel.onmessage = async (ev: MessageEvent) => {
+          let data = ev.data;
+          if (data instanceof Blob) {
+            try {
+              data = await data.arrayBuffer();
+            } catch {}
+          }
+          if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) {
             return;
           }
-          void handleTunnelPacket(ev.data, 'WebRTC Direct (UDP/DTLS)');
+          void handleTunnelPacket(data, 'WebRTC Direct (UDP/DTLS)');
         };
       }
 
@@ -2512,7 +2518,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.0</span>
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.1</span>
         </a>
 
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}
