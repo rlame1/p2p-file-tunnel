@@ -54,8 +54,8 @@ type ActiveTab = 'studio' | 'diagnostics' | 'ledger' | 'releases';
 
 // Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
 const WIRE_CHUNK_BYTES = 240 * 1024;
-// Optimal 2 Parallel RTCPeerConnections: saturates Chromium's single C++ webrtc_network_thread without 8-way SCTP lock contention
-const MAX_PARALLEL_LANES = 2;
+// Single Dedicated RTCPeerConnection: 100% direct C++ webrtc_network_thread path with zero multi-connection lock overhead
+const MAX_PARALLEL_LANES = 1;
 // 32 chunks per wave (~7.5 MB) fits 100% inside CPU L3 cache
 const CHUNKS_PER_WAVE = 32;
 // 8 MB high-water mark & 4 MB low-water mark per independent RTCPeerConnection
@@ -141,7 +141,7 @@ export default function App() {
   const laneRoundRobinRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const displayedLaneCount = Math.max(MAX_PARALLEL_LANES, openPoolCount);
+  const displayedLaneCount = 1;
 
   // 1. Derive AES-256-GCM Key whenever roomCode or passphrase changes
   useEffect(() => {
@@ -570,7 +570,7 @@ export default function App() {
             ...prev,
             {
               id: conn.peer,
-              deviceLabel: 'Remote WebRTC Peer (Dual-Lane Striped Pipe)',
+              deviceLabel: 'Remote WebRTC Peer (Direct SCTP Pipe)',
               natType: 'STUN Direct Hole-Punched',
               joinedAt: Date.now(),
             },
@@ -1543,12 +1543,12 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Zero-Configuration P2P File Tunnel</span>
                   <span aria-hidden="true">·</span>
-                  <span>8-Connection Zero-Split SCTP + Raw Binary Serializer</span>
+                  <span>Direct Zero-Copy SCTP + Raw Binary Serializer</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
                     {isPeerConnected
                       ? connectionState === 'connected_p2p'
-                        ? `Direct WebRTC P2P Active (${displayedLaneCount}x Parallel Connections)`
+                        ? 'Direct WebRTC P2P Active (1x Dedicated SCTP)'
                         : 'Encrypted Binary TCP/443 Relay Active'
                       : 'Awaiting Peer Pairing'}
                   </span>
@@ -1570,7 +1570,7 @@ export default function App() {
                 >
                   <Users className="w-3.5 h-3.5" />
                   {virtualPeerActive
-                    ? '8-Lane Sandbox Connected (Click to Disconnect)'
+                    ? 'Sandbox Peer Connected (Click to Disconnect)'
                     : 'Connect Local Sandbox Peer'}
                 </button>
 
@@ -1618,7 +1618,7 @@ export default function App() {
                     {transportStrategy === 'websocket_relay'
                       ? 'TCP/443 Binary Relay'
                       : connectionState === 'connected_p2p'
-                      ? `Direct UDP (${displayedLaneCount}x Parallel SCTP)`
+                      ? 'Direct UDP (1x Dedicated SCTP)'
                       : 'Hybrid Auto-Failover'}
                   </span>
                 </div>
@@ -1643,10 +1643,10 @@ export default function App() {
                   <Zap className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
-                  {chunkSizeLabel} Stripe · {displayedLaneCount} Lanes
+                  {chunkSizeLabel} · 1x Direct SCTP
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  16 MB In-Flight Window · Zero-Copy Wire Frames
+                  8 MB In-Flight Window · Zero-Copy Wire Frames
                 </div>
               </div>
             </div>
@@ -1807,18 +1807,18 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Hardware-Tuned SCTP Engine Status (Replaces manual 1x-8x guesswork) */}
+                    {/* Hardware-Tuned SCTP Engine Status */}
                     <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-lg space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-300 font-medium">
                           SCTP Engine Profile
                         </span>
                         <span className="font-mono text-emerald-400">
-                          Auto-Tuned Dual-SCTP ({displayedLaneCount}x Active)
+                          1x Direct Zero-Copy SCTP
                         </span>
                       </div>
                       <div className="text-xs text-slate-400 leading-relaxed">
-                        Locked to Chromium&apos;s maximum throughput sweet spot: <span className="text-slate-200 font-mono">240 KB</span> atomic zero-copy frames, <span className="text-slate-200 font-mono">7.5 MB</span> L3-cache wave, and synchronous zero-await packet bursting.
+                        Single dedicated WebRTC SCTP pipe: <span className="text-slate-200 font-mono">240 KB</span> atomic zero-copy frames, <span className="text-slate-200 font-mono">7.5 MB</span> L3-cache wave, and synchronous zero-await packet bursting.
                       </div>
                     </div>
                   </div>
@@ -1839,7 +1839,7 @@ export default function App() {
                           onClick={toggleVirtualSandboxPeer}
                           className="text-sky-400 hover:text-sky-300 font-medium cursor-pointer whitespace-nowrap"
                         >
-                          + Spawn 8-Lane Sandbox Peer
+                          + Spawn Sandbox Peer
                         </button>
                       </div>
                     ) : (

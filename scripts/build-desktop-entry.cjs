@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildWindowsGuiExe } = require('./pe-exe-builder.cjs');
+const { execFileSync } = require('child_process');
+const { buildWindowsGuiExe, CSHARP_KERNEL_APP_SOURCE } = require('./pe-exe-builder.cjs');
 
 const distDir = path.join(__dirname, '..', 'dist');
 const outDownloadsDir = path.join(distDir, 'downloads');
@@ -47,9 +48,37 @@ const standaloneHtmlOut = path.join(
 fs.writeFileSync(standaloneHtmlOut, singleFileHtml, 'utf8');
 
 // 2. Build Native Windows Standalone GUI Executable (.exe)
-const winExeBuffer = buildWindowsGuiExe(singleFileHtml);
 const winExeOut = path.join(outDownloadsDir, 'AetherTunnel-win-x64.exe');
-fs.writeFileSync(winExeOut, winExeBuffer);
+const csOut = path.join(outDownloadsDir, 'AetherTunnelKernel.cs');
+fs.writeFileSync(csOut, CSHARP_KERNEL_APP_SOURCE, 'utf8');
+
+let compiledDirectly = false;
+try {
+  execFileSync('mcs', [
+    '-target:winexe',
+    '-optimize+',
+    '-r:System.dll',
+    '-r:System.Core.dll',
+    '-r:System.Drawing.dll',
+    '-r:System.Windows.Forms.dll',
+    `-out:${winExeOut}`,
+    csOut,
+  ], { stdio: 'inherit' });
+  if (fs.existsSync(winExeOut)) {
+    compiledDirectly = true;
+    console.log('Compiled pure native .NET Windows GUI executable via mcs:', winExeOut);
+  }
+} catch {
+  // Fallback to PE32 self-compiling binary when mcs is not installed
+}
+
+if (!compiledDirectly) {
+  const winExeBuffer = buildWindowsGuiExe();
+  fs.writeFileSync(winExeOut, winExeBuffer);
+}
+try {
+  fs.unlinkSync(csOut);
+} catch {}
 
 // 3. Build macOS Universal Double-Click Executable (.command) & Linux Executable (.sh)
 const b64Html = Buffer.from(singleFileHtml, 'utf8').toString('base64');

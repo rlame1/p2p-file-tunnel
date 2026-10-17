@@ -1026,16 +1026,21 @@ function buildWindowsGuiExe() {
   buf.writeUInt32LE(0x2070, 0x400 + 12);
   buf.writeUInt32LE(0x2050, 0x400 + 16);
 
+  // Hint/Name entries aligned to 2-byte boundaries:
+  // 0x480 (RVA 0x2080): GetModuleFileNameA (2 + 19 = 21 bytes -> next even 0x498)
   buf.writeUInt16LE(0, 0x480);
-  buf.write('GetCommandLineA\0', 0x482, 'ascii');
-  buf.writeUInt16LE(0, 0x494);
-  buf.write('SetEnvironmentVariableA\0', 0x496, 'ascii');
-  buf.writeUInt16LE(0, 0x4b0);
-  buf.write('WinExec\0', 0x4b2, 'ascii');
-  buf.writeUInt16LE(0, 0x4bc);
-  buf.write('ExitProcess\0', 0x4be, 'ascii');
+  buf.write('GetModuleFileNameA\0', 0x482, 'ascii');
+  // 0x498 (RVA 0x2098): SetEnvironmentVariableA (2 + 24 = 26 bytes -> next even 0x4b4)
+  buf.writeUInt16LE(0, 0x498);
+  buf.write('SetEnvironmentVariableA\0', 0x49a, 'ascii');
+  // 0x4b4 (RVA 0x20b4): WinExec (2 + 8 = 10 bytes -> next even 0x4c0)
+  buf.writeUInt16LE(0, 0x4b4);
+  buf.write('WinExec\0', 0x4b6, 'ascii');
+  // 0x4c0 (RVA 0x20c0): ExitProcess
+  buf.writeUInt16LE(0, 0x4c0);
+  buf.write('ExitProcess\0', 0x4c2, 'ascii');
 
-  const thunks = [0x2080, 0x2094, 0x20b0, 0x20bc, 0];
+  const thunks = [0x2080, 0x2098, 0x20b4, 0x20c0, 0];
   thunks.forEach((rva, idx) => {
     buf.writeUInt32LE(rva, 0x430 + idx * 4);
     buf.writeUInt32LE(rva, 0x450 + idx * 4);
@@ -1044,51 +1049,52 @@ function buildWindowsGuiExe() {
   buf.write('KERNEL32.dll\0', 0x470, 'ascii');
 
   // .data Section (File Offset 0x600, RVA 0x3000)
-  buf.write('AETHER_CMDLINE\0', 0x600, 'ascii');
+  // 0x600 (RVA 0x3000): Environment variable name "AETHER_EXE\0"
+  buf.write('AETHER_EXE\0', 0x600, 'ascii');
 
-  // Compiles & launches the 64-bit Native Windows Kernel-Socket application using Windows's built-in csc.exe
+  // 0x620 (RVA 0x3020): PowerShell command with ZERO inner double-quotes and direct byte-offset 3584 (0x0e00) slicing!
   const psCommand =
     'powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "' +
-    "$raw = $env:AETHER_CMDLINE.Trim(); " +
-    "if ($raw.StartsWith('\\\"')) { $exe = $raw.Split('\\\"')[1] } else { $exe = $raw.Split(' ')[0] }; " +
-    "$dir = Join-Path $env:LOCALAPPDATA 'AetherTunnel'; " +
-    "New-Item -ItemType Directory -Force -Path $dir | Out-Null; " +
-    "$cs = Join-Path $dir 'AetherTunnelKernel_v3.cs'; " +
-    "$bin = Join-Path $dir 'AetherTunnelKernel_v3.exe'; " +
-    "$text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($exe)); " +
-    "$m = '/*AETHERTUNNEL_CSHARP_KERNEL_SOURCE*/'; " +
-    "$idx = $text.IndexOf($m); " +
-    "if ($idx -ge 0) { " +
-    "  [System.IO.File]::WriteAllText($cs, $text.Substring($idx), [System.Text.Encoding]::UTF8); " +
-    "  $csc = Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe'; " +
-    "  if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe' }; " +
-    "  & $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs; " +
-    "  if (Test-Path $bin) { Start-Process $bin } " +
-    '}"\0';
+    "$b=[IO.File]::ReadAllBytes($env:AETHER_EXE);" +
+    "$s=[Text.Encoding]::UTF8.GetString($b,3584,$b.Length-3584);" +
+    "$d=Join-Path $env:LOCALAPPDATA 'AetherTunnel';" +
+    "New-Item -ItemType Directory -Force -Path $d|Out-Null;" +
+    "$cs=Join-Path $d 'AetherTunnelKernel_v4.cs';" +
+    "$bin=Join-Path $d 'AetherTunnelKernel_v4.exe';" +
+    "[IO.File]::WriteAllText($cs,$s,[Text.Encoding]::UTF8);" +
+    "$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';" +
+    "if(-not(Test-Path $csc)){$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'};" +
+    "& $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs;" +
+    "if(Test-Path $bin){Start-Process $bin}" +
+    '"\0';
 
   buf.write(psCommand, 0x620, 'ascii');
 
   // .text Section Machine Code (File Offset 0x200, RVA 0x1000)
   const code = Buffer.from([
-    0xff, 0x15, 0x50, 0x20, 0x40, 0x00, // call GetCommandLineA
-    0x50,                               // push eax
-    0x68, 0x00, 0x30, 0x40, 0x00,       // push "AETHER_CMDLINE"
+    // GetModuleFileNameA(0, 0x00403500, 500)
+    0x68, 0xf4, 0x01, 0x00, 0x00,       // push 500
+    0x68, 0x00, 0x35, 0x40, 0x00,       // push 0x00403500 (path buffer in .data)
+    0x6a, 0x00,                         // push 0 (hModule = NULL)
+    0xff, 0x15, 0x50, 0x20, 0x40, 0x00, // call GetModuleFileNameA
+    // SetEnvironmentVariableA("AETHER_EXE", 0x00403500)
+    0x68, 0x00, 0x35, 0x40, 0x00,       // push 0x00403500
+    0x68, 0x00, 0x30, 0x40, 0x00,       // push 0x00403000 ("AETHER_EXE")
     0xff, 0x15, 0x54, 0x20, 0x40, 0x00, // call SetEnvironmentVariableA
-    0x6a, 0x00,                         // push SW_HIDE
-    0x68, 0x20, 0x30, 0x40, 0x00,       // push psCommand
+    // WinExec(0x00403020, SW_HIDE)
+    0x6a, 0x00,                         // push 0 (SW_HIDE)
+    0x68, 0x20, 0x30, 0x40, 0x00,       // push 0x00403020 (psCommand)
     0xff, 0x15, 0x58, 0x20, 0x40, 0x00, // call WinExec
+    // ExitProcess(0)
     0x6a, 0x00,                         // push 0
     0xff, 0x15, 0x5c, 0x20, 0x40, 0x00, // call ExitProcess
     0xc3,                               // ret
   ]);
   code.copy(buf, 0x200);
 
-  const markerAndCs = Buffer.from(
-    '\n/*AETHERTUNNEL_CSHARP_KERNEL_SOURCE*/\n' + CSHARP_KERNEL_APP_SOURCE,
-    'utf8'
-  );
-
-  return Buffer.concat([buf, markerAndCs]);
+  // Append C# source directly at byte offset 3584 (0x0e00)
+  const csBytes = Buffer.from(CSHARP_KERNEL_APP_SOURCE, 'utf8');
+  return Buffer.concat([buf, csBytes]);
 }
 
 module.exports = { buildWindowsGuiExe, CSHARP_KERNEL_APP_SOURCE };

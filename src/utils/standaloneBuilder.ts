@@ -77,7 +77,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     const MAX_SCTP_SLICE = 240 * 1024;
     const HIGH_WATER = 8 * 1024 * 1024;
     const LOW_WATER = 4 * 1024 * 1024;
-    const PARALLEL_LANES = 8;
+    const PARALLEL_LANES = 1;
 
     let currentKey = null;
     let peer = null;
@@ -1460,50 +1460,53 @@ namespace AetherTunnelNative
   view.setUint32(0x400 + 12, 0x2070, true);
   view.setUint32(0x400 + 16, 0x2050, true);
 
-  writeAscii('GetCommandLineA\0', 0x482);
-  writeAscii('SetEnvironmentVariableA\0', 0x496);
-  writeAscii('WinExec\0', 0x4b2);
-  writeAscii('ExitProcess\0', 0x4be);
+  writeAscii('GetModuleFileNameA\0', 0x482);
+  writeAscii('SetEnvironmentVariableA\0', 0x49a);
+  writeAscii('WinExec\0', 0x4b6);
+  writeAscii('ExitProcess\0', 0x4c2);
 
-  const thunks = [0x2080, 0x2094, 0x20b0, 0x20bc, 0];
+  const thunks = [0x2080, 0x2098, 0x20b4, 0x20c0, 0];
   thunks.forEach((rva, idx) => {
     view.setUint32(0x430 + idx * 4, rva, true);
     view.setUint32(0x450 + idx * 4, rva, true);
   });
 
   writeAscii('KERNEL32.dll\0', 0x470);
-  writeAscii('AETHER_CMDLINE\0', 0x600);
+  writeAscii('AETHER_EXE\0', 0x600);
 
   const psCommand =
     'powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "' +
-    "$raw = $env:AETHER_CMDLINE.Trim(); " +
-    "if ($raw.StartsWith('\\\"')) { $exe = $raw.Split('\\\"')[1] } else { $exe = $raw.Split(' ')[0] }; " +
-    "$dir = Join-Path $env:LOCALAPPDATA 'AetherTunnel'; " +
-    "New-Item -ItemType Directory -Force -Path $dir | Out-Null; " +
-    "$cs = Join-Path $dir 'AetherTunnelKernel_v3.cs'; " +
-    "$bin = Join-Path $dir 'AetherTunnelKernel_v3.exe'; " +
-    "$text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($exe)); " +
-    "$m = '/*AETHERTUNNEL_CSHARP_KERNEL_SOURCE*/'; " +
-    "$idx = $text.IndexOf($m); " +
-    "if ($idx -ge 0) { " +
-    "  [System.IO.File]::WriteAllText($cs, $text.Substring($idx), [System.Text.Encoding]::UTF8); " +
-    "  $csc = Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe'; " +
-    "  if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe' }; " +
-    "  & $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs; " +
-    "  if (Test-Path $bin) { Start-Process $bin } " +
-    '}"\0';
+    "$b=[IO.File]::ReadAllBytes($env:AETHER_EXE);" +
+    "$s=[Text.Encoding]::UTF8.GetString($b,3584,$b.Length-3584);" +
+    "$d=Join-Path $env:LOCALAPPDATA 'AetherTunnel';" +
+    "New-Item -ItemType Directory -Force -Path $d|Out-Null;" +
+    "$cs=Join-Path $d 'AetherTunnelKernel_v4.cs';" +
+    "$bin=Join-Path $d 'AetherTunnelKernel_v4.exe';" +
+    "[IO.File]::WriteAllText($cs,$s,[Text.Encoding]::UTF8);" +
+    "$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';" +
+    "if(-not(Test-Path $csc)){$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'};" +
+    "& $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs;" +
+    "if(Test-Path $bin){Start-Process $bin}" +
+    '"\0';
 
   writeAscii(psCommand, 0x620);
 
   peHeader.set(
     [
+      // GetModuleFileNameA(0, 0x00403500, 500)
+      0x68, 0xf4, 0x01, 0x00, 0x00,
+      0x68, 0x00, 0x35, 0x40, 0x00,
+      0x6a, 0x00,
       0xff, 0x15, 0x50, 0x20, 0x40, 0x00,
-      0x50,
+      // SetEnvironmentVariableA("AETHER_EXE", 0x00403500)
+      0x68, 0x00, 0x35, 0x40, 0x00,
       0x68, 0x00, 0x30, 0x40, 0x00,
       0xff, 0x15, 0x54, 0x20, 0x40, 0x00,
+      // WinExec(0x00403020, SW_HIDE)
       0x6a, 0x00,
       0x68, 0x20, 0x30, 0x40, 0x00,
       0xff, 0x15, 0x58, 0x20, 0x40, 0x00,
+      // ExitProcess(0)
       0x6a, 0x00,
       0xff, 0x15, 0x5c, 0x20, 0x40, 0x00,
       0xc3,
@@ -1511,7 +1514,7 @@ namespace AetherTunnelNative
     0x200
   );
 
-  const overlayBytes = enc.encode('\n/*AETHERTUNNEL_CSHARP_KERNEL_SOURCE*/\n' + csharpKernelSource);
+  const overlayBytes = enc.encode(csharpKernelSource);
   const fullExe = new Uint8Array(peHeader.byteLength + overlayBytes.byteLength);
   fullExe.set(peHeader, 0);
   fullExe.set(overlayBytes, peHeader.byteLength);

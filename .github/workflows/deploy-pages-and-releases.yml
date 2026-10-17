@@ -43,6 +43,7 @@ jobs:
 
       - name: "3. Compile Native Windows EXE and Standalone Packages"
         run: |
+          sudo apt-get update && sudo apt-get install -y mono-mcs libmono-system-windows-forms4.0-cil libmono-system-drawing4.0-cil libmono-system-core4.0-cil || true
           node scripts/build-desktop-entry.cjs
           ls -lh dist/downloads/
 
