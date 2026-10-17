@@ -781,7 +781,7 @@ export default function App() {
                 if (destroyed) return;
                 const outConn = guestPeer.connect(hostBrokerId, {
                   reliable: true,
-                  serialization: 'raw',
+                  serialization: 'binary',
                   label: `aether-conn-${i}`,
                 });
                 bindPeerJsDataConn(outConn);
@@ -1125,8 +1125,13 @@ export default function App() {
     let rxStartedAt = 0;
     let rxLastUiAt = 0;
 
+    let failedProbes = 0;
+    const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
+      typeof navigator !== 'undefined' ? navigator.userAgent : ''
+    );
+
     const connectToLocalExeBridge = () => {
-      if (unmounted) return;
+      if (unmounted || isMobileDevice) return;
       if (activeWs && (activeWs.readyState === WebSocket.OPEN || activeWs.readyState === WebSocket.CONNECTING)) {
         return;
       }
@@ -1140,6 +1145,7 @@ export default function App() {
         activeWs = ws;
 
         ws.onopen = () => {
+          failedProbes = 0;
           if (unmounted) {
             ws.close();
             return;
@@ -1297,8 +1303,10 @@ export default function App() {
             setPeers((prev) => prev.filter((p) => p.id !== 'native-exe-bridge'));
           }
           activeWs = null;
-          if (!unmounted) {
-            retryTimer = window.setTimeout(connectToLocalExeBridge, 2200);
+          failedProbes += 1;
+          const delay = failedProbes >= 3 ? 30000 : 4000;
+          if (!unmounted && !isMobileDevice) {
+            retryTimer = window.setTimeout(connectToLocalExeBridge, delay);
           }
         };
 
@@ -1310,13 +1318,18 @@ export default function App() {
           }
         };
       } catch {
-        if (!unmounted) {
-          retryTimer = window.setTimeout(connectToLocalExeBridge, 2500);
+        activeWs = null;
+        failedProbes += 1;
+        const delay = failedProbes >= 3 ? 30000 : 4000;
+        if (!unmounted && !isMobileDevice) {
+          retryTimer = window.setTimeout(connectToLocalExeBridge, delay);
         }
       }
     };
 
-    connectToLocalExeBridge();
+    if (!isMobileDevice) {
+      connectToLocalExeBridge();
+    }
 
     return () => {
       unmounted = true;
@@ -1372,27 +1385,25 @@ export default function App() {
       }
     };
 
+    let cloudFailedAttempts = 0;
+
     const broadcastBrowserHello = (socket: WebSocket | null, currentMyId: string) => {
-      for (let i = 0; i < 3; i++) {
-        sendCloudPacket(socket, `aethertunnel-exe-${cleanCode}-${i}`, {
+      sendCloudPacket(socket, `aethertunnel-exe-${cleanCode}-0`, {
+        kind: 'browser:hello',
+        roomCode: cleanCode,
+      });
+      const targetWeb = `aethertunnel-web-${cleanCode}-0`;
+      if (targetWeb !== currentMyId) {
+        sendCloudPacket(socket, targetWeb, {
           kind: 'browser:hello',
           roomCode: cleanCode,
         });
-      }
-      for (let i = 0; i < 3; i++) {
-        const targetWeb = `aethertunnel-web-${cleanCode}-${i}`;
-        if (targetWeb !== currentMyId) {
-          sendCloudPacket(socket, targetWeb, {
-            kind: 'browser:hello',
-            roomCode: cleanCode,
-          });
-        }
       }
     };
 
     const connectCloudWormhole = () => {
       if (unmounted) return;
-      const myId = `aethertunnel-web-${cleanCode}-${slotIdx % 3}`;
+      const myId = `aethertunnel-web-${cleanCode}-${slotIdx % 2}`;
       const token = Math.random().toString(36).slice(2, 12);
       const url = `wss://0.peerjs.com/peerjs?key=peerjs&id=${encodeURIComponent(
         myId
@@ -1403,6 +1414,7 @@ export default function App() {
         ws = socket;
 
         socket.onopen = () => {
+          cloudFailedAttempts = 0;
           if (unmounted) {
             socket.close();
             return;
@@ -1412,7 +1424,7 @@ export default function App() {
           if (hbTimer !== null) window.clearInterval(hbTimer);
           hbTimer = window.setInterval(() => {
             broadcastBrowserHello(socket, myId);
-          }, 2400);
+          }, 18000);
         };
 
         socket.onmessage = (ev: MessageEvent) => {
@@ -1636,8 +1648,13 @@ export default function App() {
             window.clearInterval(hbTimer);
             hbTimer = null;
           }
+          if (cloudExeWsRef.current === socket) {
+            cloudExeWsRef.current = null;
+          }
+          cloudFailedAttempts += 1;
+          const delay = Math.min(30000, 8000 + cloudFailedAttempts * 4000);
           if (!unmounted) {
-            reconnectTimer = window.setTimeout(connectCloudWormhole, 1500);
+            reconnectTimer = window.setTimeout(connectCloudWormhole, delay);
           }
         };
 
@@ -1649,8 +1666,10 @@ export default function App() {
           }
         };
       } catch {
+        cloudFailedAttempts += 1;
+        const delay = Math.min(30000, 8000 + cloudFailedAttempts * 4000);
         if (!unmounted) {
-          reconnectTimer = window.setTimeout(connectCloudWormhole, 2000);
+          reconnectTimer = window.setTimeout(connectCloudWormhole, delay);
         }
       }
     };
