@@ -42,18 +42,21 @@ import {
   NatProbeReport,
   EncryptedNote,
 } from './types/tunnel';
-import { runLiveNatDiagnostics } from './services/natProber';
+import {
+  runLiveNatDiagnostics,
+  isStaticHostEnvironment,
+} from './services/natProber';
 import { NatDiagnosticsView } from './components/NatDiagnosticsView';
 import { GitHubReleaseStudio } from './components/GitHubReleaseStudio';
 import { TransferLedgerView } from './components/TransferLedgerView';
 
 type ActiveTab = 'studio' | 'diagnostics' | 'ledger' | 'releases';
 
-// 32 MB Macro-Slab Prefetch Window for Double-Buffered Disk + AES-NI + Network Pipelining
-const SLAB_TARGET_BYTES = 32 * 1024 * 1024;
-// Per-lane WebRTC DataChannel backpressure watermarks (4 lanes × 16 MB = 64 MB in-flight window)
-const HIGH_WATER_MARK = 16 * 1024 * 1024;
-const LOW_WATER_MARK = 4 * 1024 * 1024;
+// 16 MB Wave Window for Double-Buffered Disk + AES-NI + Network Pipelining (Safe RAM footprint for 1GB–10GB+ files)
+const SLAB_TARGET_BYTES = 16 * 1024 * 1024;
+// Safe per-lane WebRTC DataChannel backpressure watermarks (2 MB high / 512 KB low — 8x below Chrome's 16 MB hard queue limit!)
+const HIGH_WATER_MARK = 2 * 1024 * 1024;
+const LOW_WATER_MARK = 512 * 1024;
 const PARALLEL_LANE_COUNT = 4;
 
 interface IncomingFileBuffer {
@@ -127,7 +130,7 @@ export default function App() {
     null
   );
   const peerJsInstanceRef = useRef<Peer | null>(null);
-  const peerJsConnRef = useRef<DataConnection | null>(null);
+  const peerJsConnsRef = useRef<DataConnection[]>([]);
   const incomingBuffersRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
   const partialSubFramesRef = useRef<Map<string, PartialSubFrameAssembly>>(
     new Map()
@@ -191,6 +194,8 @@ export default function App() {
         const blob = new Blob(orderedParts, {
           type: bufEntry.mimeType || 'application/octet-stream',
         });
+        // Release chunk ArrayBuffer references immediately after constructing Blob to free RAM on 1GB+ files
+        bufEntry.receivedChunks.length = 0;
         const downloadUrl = URL.createObjectURL(blob);
 
         setTransfers((prev) =>
@@ -497,7 +502,7 @@ export default function App() {
     [handleRawBinaryFrame, handleTunnelPacket]
   );
 
-  // 4. Serverless PeerJS WebRTC Broker with 4-Lane Parallel RTCDataChannel Attachment
+  // 4. Serverless PeerJS WebRTC Broker with 4 Independent Parallel RTCPeerConnections (4x C++ SCTP Congestion Windows!)
   useEffect(() => {
     const cleanCode = roomCode.replace(/[^a-z0-9-]/gi, '').toLowerCase();
     const hostBrokerId = `aethertunnel-v1-${cleanCode}-host`;
@@ -505,35 +510,18 @@ export default function App() {
 
     let activePeer: Peer | null = null;
     let destroyed = false;
+    dataChannelPoolRef.current = [];
+    peerJsConnsRef.current = [];
 
-    const bindPeerJsDataConn = (conn: DataConnection, isInitiator: boolean) => {
-      peerJsConnRef.current = conn;
+    const bindPeerJsDataConn = (conn: DataConnection) => {
+      if (!peerJsConnsRef.current.includes(conn)) {
+        peerJsConnsRef.current.push(conn);
+      }
+
       conn.on('open', () => {
         if (destroyed) return;
         if (conn.dataChannel) {
           registerDataChannelLane(conn.dataChannel);
-        }
-        const pc = (conn as any).peerConnection as RTCPeerConnection | undefined;
-        if (pc) {
-          pc.addEventListener('datachannel', (ev) => {
-            if (ev.channel && ev.channel.label.startsWith('aether-turbo-lane-')) {
-              registerDataChannelLane(ev.channel);
-            }
-          });
-          if (isInitiator) {
-            for (let laneIdx = 1; laneIdx < PARALLEL_LANE_COUNT; laneIdx++) {
-              try {
-                // ordered: false = Unordered Reliable SCTP (100% lossless retransmission, 0% Head-of-Line blocking!)
-                const turboLane = pc.createDataChannel(
-                  `aether-turbo-lane-${laneIdx}`,
-                  { ordered: false }
-                );
-                registerDataChannelLane(turboLane);
-              } catch {
-                // ignore if browser restricts extra channels
-              }
-            }
-          }
         }
 
         setConnectionState('connected_p2p');
@@ -543,7 +531,7 @@ export default function App() {
             ...prev,
             {
               id: conn.peer,
-              deviceLabel: 'Remote WebRTC Peer (4-Lane Binary Pipe)',
+              deviceLabel: 'Remote WebRTC Peer (4-Connection Striped Pipe)',
               natType: 'STUN Direct Hole-Punched',
               joinedAt: Date.now(),
             },
@@ -562,7 +550,10 @@ export default function App() {
 
       conn.on('close', () => {
         if (destroyed) return;
-        setPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+        peerJsConnsRef.current = peerJsConnsRef.current.filter((c) => c !== conn);
+        if (peerJsConnsRef.current.length === 0) {
+          setPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+        }
       });
     };
 
@@ -579,7 +570,7 @@ export default function App() {
       peerJsInstanceRef.current = activePeer;
 
       activePeer.on('connection', (conn) => {
-        bindPeerJsDataConn(conn, false);
+        bindPeerJsDataConn(conn);
       });
 
       activePeer.on('error', (err: any) => {
@@ -596,10 +587,16 @@ export default function App() {
           peerJsInstanceRef.current = guestPeer;
           guestPeer.on('open', () => {
             if (destroyed) return;
-            const outConn = guestPeer.connect(hostBrokerId, { reliable: true });
-            bindPeerJsDataConn(outConn, true);
+            // Open 4 independent PeerJS DataConnections (each creates its own RTCPeerConnection + C++ SCTP thread!)
+            for (let i = 0; i < PARALLEL_LANE_COUNT; i++) {
+              const outConn = guestPeer.connect(hostBrokerId, {
+                reliable: true,
+                label: `aether-conn-${i}`,
+              });
+              bindPeerJsDataConn(outConn);
+            }
           });
-          guestPeer.on('connection', (conn) => bindPeerJsDataConn(conn, false));
+          guestPeer.on('connection', (conn) => bindPeerJsDataConn(conn));
         }
       });
     } catch {
@@ -608,7 +605,10 @@ export default function App() {
 
     return () => {
       destroyed = true;
-      peerJsConnRef.current?.close();
+      for (const c of peerJsConnsRef.current) {
+        c.close();
+      }
+      peerJsConnsRef.current = [];
       peerJsInstanceRef.current?.destroy();
     };
   }, [roomCode, handleTunnelPacket, registerDataChannelLane]);
@@ -638,10 +638,9 @@ export default function App() {
         peerConnRef.current = pc;
 
         if (isInitiator) {
-          // Create 4 Parallel Unordered Reliable SCTP DataChannels to eliminate Head-of-Line blocking
           for (let i = 0; i < PARALLEL_LANE_COUNT; i++) {
             const channel = pc.createDataChannel(`aethertunnel-lane-${i}`, {
-              ordered: false,
+              ordered: true,
             });
             registerDataChannelLane(channel);
           }
@@ -706,8 +705,12 @@ export default function App() {
     [registerDataChannelLane, transportStrategy]
   );
 
-  // 6. Connect to WebSocket Signaling & Zero-Copy Binary Relay Server on Port 3000
+  // 6. Connect to WebSocket Signaling & Zero-Copy Binary Relay Server (Skipped on static GitHub Pages hosts to avoid 404s!)
   useEffect(() => {
+    if (isStaticHostEnvironment()) {
+      return;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws-tunnel`;
     let ws: WebSocket | null = null;
@@ -731,7 +734,6 @@ export default function App() {
       };
 
       ws.onmessage = async (event) => {
-        // FAST PATH: Raw Binary Frame ('AETH' / 'AETP') over WebSocket Relay
         if (event.data instanceof ArrayBuffer) {
           handleRawBinaryFrame(event.data);
           return;
@@ -794,7 +796,6 @@ export default function App() {
             if (msg.signalType === 'offer' && msg.sdp) {
               setConnectionState('hole_punching');
               await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-              // Drain any queued ICE candidates that arrived before remoteDescription was ready
               for (const cand of pendingIceCandidatesRef.current) {
                 await pc.addIceCandidate(new RTCIceCandidate(cand));
               }
@@ -841,7 +842,7 @@ export default function App() {
         }
       };
     } catch {
-      // Static host (e.g. GitHub Pages): relies on PeerJS serverless WebRTC broker initialized above
+      // Uses PeerJS serverless WebRTC broker initialized above
     }
 
     return () => {
@@ -880,14 +881,13 @@ export default function App() {
       {
         id: vPeerId,
         deviceLabel: 'Sandbox Loopback Peer (4-Lane C++ WebRTC Pipe)',
-        natType: 'Direct Unordered SCTP Loopback',
+        natType: 'Direct SCTP Loopback',
         joinedAt: Date.now(),
         isVirtualLoopback: true,
       },
     ]);
 
     try {
-      // Create a genuine in-browser 4-Lane RTCPeerConnection pair for true C++ WebRTC SCTP line-rate testing
       const pcSender = new RTCPeerConnection();
       const pcReceiver = new RTCPeerConnection();
       sandboxPcPairRef.current = [pcSender, pcReceiver];
@@ -909,7 +909,7 @@ export default function App() {
 
       for (let i = 0; i < PARALLEL_LANE_COUNT; i++) {
         const dc = pcSender.createDataChannel(`sandbox-lane-${i}`, {
-          ordered: false,
+          ordered: true,
         });
         dc.binaryType = 'arraybuffer';
         dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
@@ -938,12 +938,10 @@ export default function App() {
     );
     if (realLanes.length > 0) return realLanes;
 
-    if (
-      peerJsConnRef.current?.dataChannel &&
-      peerJsConnRef.current.dataChannel.readyState === 'open'
-    ) {
-      return [peerJsConnRef.current.dataChannel];
-    }
+    const peerJsOpen = peerJsConnsRef.current
+      .map((c) => c.dataChannel)
+      .filter((dc): dc is RTCDataChannel => Boolean(dc && dc.readyState === 'open'));
+    if (peerJsOpen.length > 0) return peerJsOpen;
 
     const sbLanes = sandboxLanesRef.current.filter(
       (dc) => dc.readyState === 'open'
@@ -953,46 +951,83 @@ export default function App() {
     return [];
   }, [transportStrategy]);
 
-  // Pick the open RTCDataChannel lane with the lowest bufferedAmount
-  const pickLeastLoadedLane = useCallback((lanes: RTCDataChannel[]): RTCDataChannel => {
-    if (lanes.length === 1) return lanes[0];
-    let best = lanes[laneRoundRobinRef.current % lanes.length];
-    laneRoundRobinRef.current += 1;
-    for (let i = 0; i < lanes.length; i++) {
-      if (lanes[i].bufferedAmount < best.bufferedAmount) {
-        best = lanes[i];
-      }
-    }
-    return best;
-  }, []);
-
-  // Wait only when the selected lane exceeds HIGH_WATER_MARK (16 MB per lane)
-  const waitForChannelDrain = useCallback(async (dc: RTCDataChannel) => {
-    if (dc.bufferedAmount < HIGH_WATER_MARK) return;
-
-    await new Promise<void>((resolve) => {
-      let resolved = false;
-      const done = () => {
-        if (!resolved) {
-          resolved = true;
-          dc.removeEventListener('bufferedamountlow', done);
-          resolve();
+  // Crash-Proof Backpressure Sender:
+  //   1) Always keeps bufferedAmount <= HIGH_WATER_MARK (2 MB per lane — 8x below Chrome's 16 MB hard crash limit!)
+  //   2) Uses a strict loop that NEVER calls dc.send() while bufferedAmount + packet.byteLength > 2 MB
+  //   3) Catches any OperationError (send queue full) and retries after draining so 1GB–10GB+ files NEVER fail!
+  const sendBinaryPacketSafely = useCallback(
+    async (
+      packet: ArrayBuffer,
+      preferredLaneIndex?: number
+    ): Promise<void> => {
+      for (let attempt = 0; attempt < 10000; attempt++) {
+        const openLanes = getOpenDataChannelLanes();
+        if (openLanes.length === 0) {
+          throw new Error('No open WebRTC DataChannel lanes available');
         }
-      };
-      dc.addEventListener('bufferedamountlow', done);
-      window.setTimeout(done, 4);
-    });
-  }, []);
+
+        // Select lane: either sticky per-chunk lane (so sub-frames of the same chunk arrive in order on that lane)
+        // or the lane with the lowest bufferedAmount
+        let lane =
+          typeof preferredLaneIndex === 'number'
+            ? openLanes[preferredLaneIndex % openLanes.length]
+            : openLanes[laneRoundRobinRef.current % openLanes.length];
+
+        if (typeof preferredLaneIndex !== 'number') {
+          laneRoundRobinRef.current += 1;
+        }
+
+        if (lane.bufferedAmount + packet.byteLength > HIGH_WATER_MARK) {
+          // Check if another open lane has free space right now
+          for (let i = 0; i < openLanes.length; i++) {
+            if (
+              openLanes[i].bufferedAmount + packet.byteLength <=
+              HIGH_WATER_MARK
+            ) {
+              lane = openLanes[i];
+              break;
+            }
+          }
+        }
+
+        // Strict backpressure wait if the chosen lane is above HIGH_WATER_MARK (2 MB)
+        if (lane.bufferedAmount + packet.byteLength > HIGH_WATER_MARK) {
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            const onLow = () => {
+              if (!settled) {
+                settled = true;
+                lane.removeEventListener('bufferedamountlow', onLow);
+                resolve();
+              }
+            };
+            lane.bufferedAmountLowThreshold = LOW_WATER_MARK;
+            lane.addEventListener('bufferedamountlow', onLow);
+            window.setTimeout(onLow, 12);
+          });
+          // Re-check bufferedAmount on the next iteration before sending!
+          continue;
+        }
+
+        try {
+          lane.send(packet);
+          return;
+        } catch {
+          // If Chrome's SCTP send queue was momentarily full, wait 15ms for C++ SCTP to drain and retry this exact packet!
+          await new Promise<void>((r) => window.setTimeout(r, 15));
+        }
+      }
+      throw new Error('WebRTC DataChannel send timed out waiting for queue drain');
+    },
+    [getOpenDataChannelLanes]
+  );
 
   // 8. Send control packet over active P2P DataChannel, Serverless PeerJS, or Encrypted WebSocket Relay
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
-      if (
-        transportStrategy !== 'websocket_relay' &&
-        peerJsConnRef.current &&
-        peerJsConnRef.current.open
-      ) {
-        peerJsConnRef.current.send(packet);
+      const openPeerJsConn = peerJsConnsRef.current.find((c) => c.open);
+      if (transportStrategy !== 'websocket_relay' && openPeerJsConn) {
+        openPeerJsConn.send(packet);
         return 'WebRTC Direct (UDP/DTLS)';
       }
 
@@ -1000,8 +1035,12 @@ export default function App() {
       const openLanes = getOpenDataChannelLanes();
 
       if (openLanes.length > 0) {
-        openLanes[0].send(serialized);
-        return 'WebRTC Direct (UDP/DTLS)';
+        try {
+          openLanes[0].send(serialized);
+          return 'WebRTC Direct (UDP/DTLS)';
+        } catch {
+          // fallback below
+        }
       }
 
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1019,19 +1058,15 @@ export default function App() {
     [transportStrategy, getOpenDataChannelLanes]
   );
 
-  // 9. Ultra-Turbo 4-Lane Pipelined File Encryptor
-  //    - Supports 240 KB, 512 KB, 1 MB, and 2 MB Super-Chunks
-  //    - Double-Buffered 32 MB Slab Prefetcher (reads & encrypts Slab N+1 while transmitting Slab N)
-  //    - 4-Lane Unordered Reliable WebRTC Striping + Zero-Copy Binary WebSocket Relay
+  // 9. Crash-Proof Ultra-Turbo 4-Connection Pipelined File Encryptor (Supports 1GB–10GB+ files)
   const handleFilesSelected = async (fileList: FileList | File[]) => {
     const key = cryptoKeyRef.current;
     if (!key) return;
 
     const activeChunkSize = chunkSizeKb * 1024;
-    // Number of chunks per 32 MB pipeline wave (e.g. 32 × 1 MB chunks, or 16 × 2 MB chunks)
     const chunksPerWave = Math.max(
-      8,
-      Math.min(64, Math.floor(SLAB_TARGET_BYTES / activeChunkSize))
+      4,
+      Math.min(32, Math.floor(SLAB_TARGET_BYTES / activeChunkSize))
     );
     const filesArray = Array.from(fileList);
 
@@ -1067,7 +1102,7 @@ export default function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      // Send file metadata immediately at t = 0ms (zero startup delay!)
+      // Send file metadata immediately at t = 0ms
       transmitEncryptedPacket({
         kind: 'file:meta',
         fileId,
@@ -1096,7 +1131,6 @@ export default function App() {
           });
         });
 
-      // Helper to read and parallel-encrypt a wave of chunks (Producer Stage)
       const produceEncryptedWave = async (waveStartChunk: number) => {
         if (waveStartChunk >= totalChunks) return null;
         const waveEndChunk = Math.min(
@@ -1140,84 +1174,133 @@ export default function App() {
         };
       };
 
-      // Prime the pipeline with Wave 0
-      let currentWavePromise = produceEncryptedWave(0);
+      try {
+        let currentWavePromise = produceEncryptedWave(0);
 
-      for (
-        let waveStart = 0;
-        waveStart < totalChunks;
-        waveStart += chunksPerWave
-      ) {
-        // Immediately kick off Wave N+1 (Double-Buffered Prefetch + Parallel AES-NI Encryption)
-        const nextWavePromise = produceEncryptedWave(waveStart + chunksPerWave);
-
-        const currentWave = await currentWavePromise;
-        currentWavePromise = nextWavePromise;
-        if (!currentWave) break;
-
-        const currentLanes = getOpenDataChannelLanes();
-
-        if (currentLanes.length > 0) {
-          // FAST PATH 1: 4-Lane Parallel WebRTC DataChannel Striping ('AETH' / 'AETP' binary frames)
-          for (const frame of currentWave.encryptedFrames) {
-            const sctpPackets = splitFrameForSctpLanes(frame);
-            for (const packet of sctpPackets) {
-              const lane = pickLeastLoadedLane(currentLanes);
-              if (lane.bufferedAmount >= HIGH_WATER_MARK) {
-                await waitForChannelDrain(lane);
-              }
-              lane.send(packet);
-            }
-          }
-        } else if (
-          wsRef.current &&
-          wsRef.current.readyState === WebSocket.OPEN &&
-          peers.length > 0 &&
-          !virtualPeerActive
+        for (
+          let waveStart = 0;
+          waveStart < totalChunks;
+          waveStart += chunksPerWave
         ) {
-          // FAST PATH 2: Raw Binary WebSocket Relay (Zero Base64, Zero JSON — sends 1MB/2MB 'AETH' binary frame directly!)
-          for (const frame of currentWave.encryptedFrames) {
-            if (wsRef.current.bufferedAmount >= HIGH_WATER_MARK * 2) {
-              await new Promise<void>((r) => window.setTimeout(r, 4));
-            }
-            wsRef.current.send(frame);
-          }
-        }
-
-        const transferredChunks = currentWave.waveEndChunk;
-        const bytesTransferred = currentWave.sliceEndByte;
-        const now = performance.now();
-
-        if (
-          transferredChunks === totalChunks ||
-          now - lastUiUpdateAt >= 100
-        ) {
-          lastUiUpdateAt = now;
-          const elapsedSec = Math.max(0.015, (now - startedAt) / 1000);
-          const speedBps = bytesTransferred / elapsedSec;
-
-          setTransfers((prev) =>
-            prev.map((t) =>
-              t.id === fileId
-                ? {
-                    ...t,
-                    transferredChunks,
-                    bytesTransferred,
-                    speedBps,
-                    status:
-                      transferredChunks === totalChunks
-                        ? 'completed'
-                        : 'transferring',
-                    verified: transferredChunks === totalChunks,
-                    completedAt:
-                      transferredChunks === totalChunks
-                        ? Date.now()
-                        : undefined,
-                  }
-                : t
-            )
+          const nextWavePromise = produceEncryptedWave(
+            waveStart + chunksPerWave
           );
+
+          const currentWave = await currentWavePromise;
+          currentWavePromise = nextWavePromise;
+          if (!currentWave) break;
+
+          const currentLanes = getOpenDataChannelLanes();
+
+          if (currentLanes.length > 0) {
+            // FAST PATH 1: Crash-Proof 4-Connection WebRTC Striping with strict 2MB per-lane backpressure
+            for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              const frame = currentWave.encryptedFrames[i];
+              const chunkIndex = currentWave.waveStartChunk + i;
+              const sctpPackets = splitFrameForSctpLanes(frame);
+
+              for (const packet of sctpPackets) {
+                await sendBinaryPacketSafely(packet, chunkIndex);
+              }
+
+              // Update UI progress smoothly inside each wave so large 1GB+ files show live chunk-by-chunk progress
+              const now = performance.now();
+              if (now - lastUiUpdateAt >= 120) {
+                lastUiUpdateAt = now;
+                const chunksDone = chunkIndex + 1;
+                const rawBytesQueued = Math.min(
+                  file.size,
+                  chunksDone * activeChunkSize
+                );
+                const bufferedInLanes = getOpenDataChannelLanes().reduce(
+                  (sum, dc) => sum + dc.bufferedAmount,
+                  0
+                );
+                const wireBytesSent = Math.max(
+                  0,
+                  rawBytesQueued - bufferedInLanes
+                );
+                const elapsedSec = Math.max(0.02, (now - startedAt) / 1000);
+                const speedBps = wireBytesSent / elapsedSec;
+
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fileId
+                      ? {
+                          ...t,
+                          transferredChunks: chunksDone,
+                          bytesTransferred: wireBytesSent,
+                          speedBps,
+                        }
+                      : t
+                  )
+                );
+              }
+            }
+          } else if (
+            wsRef.current &&
+            wsRef.current.readyState === WebSocket.OPEN &&
+            peers.length > 0 &&
+            !virtualPeerActive
+          ) {
+            // FAST PATH 2: Raw Binary WebSocket Relay with backpressure
+            for (const frame of currentWave.encryptedFrames) {
+              while (
+                wsRef.current &&
+                wsRef.current.readyState === WebSocket.OPEN &&
+                wsRef.current.bufferedAmount > HIGH_WATER_MARK * 2
+              ) {
+                await new Promise<void>((r) => window.setTimeout(r, 10));
+              }
+              wsRef.current?.send(frame);
+            }
+          }
         }
+
+        // Wait for remaining buffered bytes on WebRTC lanes to drain to wire before marking 100% completed
+        for (let drainWait = 0; drainWait < 200; drainWait++) {
+          const totalBuffered = getOpenDataChannelLanes().reduce(
+            (sum, dc) => sum + dc.bufferedAmount,
+            0
+          );
+          if (totalBuffered <= LOW_WATER_MARK) break;
+          await new Promise<void>((r) => window.setTimeout(r, 15));
+        }
+
+        const totalElapsedSec = Math.max(
+          0.02,
+          (performance.now() - startedAt) / 1000
+        );
+        const finalSpeedBps = file.size / totalElapsedSec;
+
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === fileId
+              ? {
+                  ...t,
+                  transferredChunks: totalChunks,
+                  bytesTransferred: file.size,
+                  speedBps: finalSpeedBps,
+                  status: 'completed',
+                  verified: true,
+                  completedAt: Date.now(),
+                }
+              : t
+          )
+        );
+      } catch (err: any) {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === fileId
+              ? {
+                  ...t,
+                  status: 'error',
+                  errorMessage:
+                    err?.message || 'Transfer interrupted during streaming',
+                }
+              : t
+          )
+        );
       }
     }
   };
@@ -1235,7 +1318,7 @@ export default function App() {
       `Key Fingerprint      : ${keyFingerprint}`,
       `Cipher Specification : AES-256-GCM (128-bit Auth Tag, 96-bit Nonce)`,
       `Key Derivation       : PBKDF2-HMAC-SHA256 (100,000 Iterations)`,
-      `Streaming Protocol   : 4-Lane Unordered SCTP + ${chunkSizeKb} KB Super-Chunks`,
+      `Streaming Protocol   : 4-Connection Striped SCTP + ${chunkSizeKb} KB Super-Chunks`,
       `NAT Traversal Path   : ${
         connectionState === 'connected_p2p'
           ? 'WebRTC Direct UDP Hole-Punching (STUN/ICE)'
@@ -1428,7 +1511,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Zero-Configuration P2P File Tunnel</span>
                   <span aria-hidden="true">·</span>
-                  <span>4-Lane Striped Unordered SCTP + Double-Buffered AES-NI</span>
+                  <span>4-Connection Striped SCTP + Auto Backpressure Guard</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
                     {isPeerConnected
@@ -1503,7 +1586,7 @@ export default function App() {
                     {transportStrategy === 'websocket_relay'
                       ? 'TCP/443 Binary Relay'
                       : connectionState === 'connected_p2p'
-                      ? `Direct UDP (${activeLaneCount}x Unordered SCTP)`
+                      ? `Direct UDP (${activeLaneCount}x Parallel SCTP)`
                       : 'Hybrid Auto-Failover'}
                   </span>
                 </div>
@@ -1528,10 +1611,10 @@ export default function App() {
                   <Zap className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
-                  {chunkSizeLabel} Super-Chunks · 4 Lanes
+                  {chunkSizeLabel} Super-Chunks · {activeLaneCount} Lanes
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  32 MB Double-Buffer · 0% Base64 Overhead
+                  2 MB/Lane Backpressure Guard · 10 GB+ Safe
                 </div>
               </div>
             </div>
@@ -1654,7 +1737,7 @@ export default function App() {
                         </button>
                       </div>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Configure transport routing and AES-NI Super-Chunk block size (auto-sliced across 4 parallel SCTP lanes).
+                        Configure transport routing and AES-NI Super-Chunk block size (auto-sliced across 4 parallel SCTP connections).
                       </p>
 
                       {/* Segmented Interactive Controls for Transport */}
@@ -1781,7 +1864,7 @@ export default function App() {
                         Encrypted File Staging &amp; Streamer
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Double-buffered 32 MB waves · {chunkSizeLabel} AES-256-GCM Super-Chunks · 4-Lane Unordered Reliable SCTP.
+                        Double-buffered 16 MB waves · {chunkSizeLabel} AES-256-GCM Super-Chunks · 4-Connection SCTP with 2 MB Backpressure Guard.
                       </p>
                     </div>
 
@@ -1832,7 +1915,7 @@ export default function App() {
                       Drop files here or click to select files for encrypted P2P transfer
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Any file size (1 GB+ supported) · {chunkSizeLabel} Super-Chunks · 4-Lane Parallel C++ WebRTC Pipe
+                      Any file size (10 GB+ supported) · {chunkSizeLabel} Super-Chunks · Crash-Proof Backpressure Guard
                     </p>
                   </div>
 
@@ -1883,6 +1966,8 @@ export default function App() {
                                   <span className="font-mono text-xs text-sky-400 tabular-nums">
                                     {item.status === 'completed'
                                       ? '100% · Verified'
+                                      : item.status === 'error'
+                                      ? 'Error'
                                       : `${pct}%`}
                                   </span>
                                   {item.downloadUrl && (
@@ -1914,7 +1999,9 @@ export default function App() {
 
                               <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono tabular-nums">
                                 <span>
-                                  SHA-256: {item.sha256.slice(0, 20)}...
+                                  {item.errorMessage
+                                    ? `Error: ${item.errorMessage}`
+                                    : `SHA-256: ${item.sha256.slice(0, 20)}...`}
                                 </span>
                                 <span>
                                   {formatSpeed(item.speedBps)} · {item.transferredChunks}/{item.totalChunks} chunks

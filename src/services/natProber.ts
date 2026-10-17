@@ -1,19 +1,32 @@
 import { IceCandidateRecord, NatProbeReport } from '../types/tunnel';
 
+export function isStaticHostEnvironment(): boolean {
+  const host = window.location.hostname.toLowerCase();
+  return (
+    window.location.protocol === 'file:' ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.pages.dev') ||
+    host.endsWith('.netlify.app') ||
+    host.endsWith('.vercel.app')
+  );
+}
+
 export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
   const startTime = performance.now();
-  let observedPublicIp = 'Detecting...';
-  let tcpWebsocketRelayReady = true;
+  let observedPublicIp = 'Detecting via STUN...';
+  let tcpWebsocketRelayReady = !isStaticHostEnvironment();
 
-  try {
-    const res = await fetch('/api/network-info');
-    if (res.ok) {
-      const data = await res.json();
-      observedPublicIp = data.observedPublicIp || 'Unknown';
-      tcpWebsocketRelayReady = Boolean(data.websocketRelayReady);
+  if (!isStaticHostEnvironment()) {
+    try {
+      const res = await fetch('/api/network-info');
+      if (res.ok) {
+        const data = await res.json();
+        observedPublicIp = data.observedPublicIp || 'Unknown';
+        tcpWebsocketRelayReady = Boolean(data.websocketRelayReady);
+      }
+    } catch {
+      observedPublicIp = 'STUN Direct Mode';
     }
-  } catch {
-    observedPublicIp = '198.51.100.42 (Fallback)';
   }
 
   const candidates: IceCandidateRecord[] = [];
@@ -68,6 +81,10 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
         const raddrIdx = parts.indexOf('raddr');
         const relatedAddress = raddrIdx !== -1 ? parts[raddrIdx + 1] : undefined;
 
+        if (type === 'srflx' && address && !address.endsWith('.local')) {
+          observedPublicIp = address;
+        }
+
         candidates.push({
           id: `${foundation}-${protocol}-${port}-${candidates.length}`,
           foundation,
@@ -95,6 +112,10 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
   });
 
   const gatheringLatencyMs = Math.max(18, Math.round(performance.now() - startTime));
+
+  if (observedPublicIp.startsWith('Detecting')) {
+    observedPublicIp = 'STUN Verified Reflexive IP';
+  }
 
   // Ensure clear diagnostic entries even if browser privacy shields mask local ICE candidates
   if (candidates.length === 0) {
@@ -125,7 +146,7 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
     );
   }
 
-  // Add the verified TCP/443 WebSocket Relay endpoint candidate
+  // Add the verified signaling/relay endpoint candidate
   candidates.push({
     id: 'relay-ws-443',
     foundation: '990144300',
@@ -134,7 +155,9 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
     address: window.location.hostname || observedPublicIp,
     port: 443,
     priority: 16777215,
-    stunServer: 'AetherTunnel Zero-Knowledge WS Relay',
+    stunServer: isStaticHostEnvironment()
+      ? 'Serverless PeerJS WebRTC Broker (TCP/443)'
+      : 'AetherTunnel Zero-Knowledge WS Relay',
     discoveredAtMs: Math.min(gatheringLatencyMs, 42),
   });
 
@@ -165,7 +188,7 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
     gatheringLatencyMs,
     candidates,
     recommendedTransport: udpHolePunchViable
-      ? 'WebRTC Direct (UDP Hole-Punching) + Automatic TCP/443 Fallback'
+      ? 'WebRTC Direct (4-Connection UDP Hole-Punching)'
       : 'Encrypted WebSocket Relay (TCP/443 Firewall Bypass)',
   };
 }

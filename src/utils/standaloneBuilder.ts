@@ -75,8 +75,8 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     const MAGIC_AETH = 0x41455448;
     const MAGIC_AETP = 0x41455450;
     const MAX_SCTP_SLICE = 240 * 1024;
-    const HIGH_WATER = 16 * 1024 * 1024;
-    const LOW_WATER = 4 * 1024 * 1024;
+    const HIGH_WATER = 2 * 1024 * 1024;
+    const LOW_WATER = 512 * 1024;
 
     let currentKey = null;
     let peer = null;
@@ -319,16 +319,29 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
           for (const packet of slices) {
             if (openLanes.length > 0) {
-              let dc = openLanes[laneCursor % openLanes.length];
-              laneCursor++;
-              if (dc.bufferedAmount >= HIGH_WATER) {
-                await new Promise(r => {
-                  const done = () => { dc.removeEventListener('bufferedamountlow', done); r(); };
-                  dc.addEventListener('bufferedamountlow', done);
-                  setTimeout(done, 4);
-                });
+              for (let attempt = 0; attempt < 10000; attempt++) {
+                let dc = openLanes[laneCursor % openLanes.length];
+                laneCursor++;
+                for (let k = 0; k < openLanes.length; k++) {
+                  if (openLanes[k].bufferedAmount < dc.bufferedAmount) dc = openLanes[k];
+                }
+                if (dc.bufferedAmount + packet.byteLength > HIGH_WATER) {
+                  await new Promise(r => {
+                    let doneFlag = false;
+                    const done = () => { if (!doneFlag) { doneFlag = true; dc.removeEventListener('bufferedamountlow', done); r(); } };
+                    dc.bufferedAmountLowThreshold = LOW_WATER;
+                    dc.addEventListener('bufferedamountlow', done);
+                    setTimeout(done, 12);
+                  });
+                  continue;
+                }
+                try {
+                  dc.send(packet);
+                  break;
+                } catch {
+                  await new Promise(r => setTimeout(r, 15));
+                }
               }
-              dc.send(packet);
             } else {
               activeConn.send(packet);
             }

@@ -135,8 +135,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     const MAGIC_AETH = 0x41455448;
     const MAGIC_AETP = 0x41455450;
     const MAX_SCTP_SLICE = 240 * 1024;
-    const HIGH_WATER = 16 * 1024 * 1024;
-    const LOW_WATER = 4 * 1024 * 1024;
+    const HIGH_WATER = 2 * 1024 * 1024;
+    const LOW_WATER = 512 * 1024;
 
     let currentKey = null;
     let peer = null;

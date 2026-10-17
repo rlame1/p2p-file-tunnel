@@ -138,6 +138,12 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
   const githubReleasesUrl = `https://github.com/${repoOwner}/${repoName}/releases/latest`;
 
   const fetchWorkflowStatus = useCallback(async () => {
+    if (
+      window.location.protocol === 'file:' ||
+      window.location.hostname.toLowerCase().endsWith('.github.io')
+    ) {
+      return;
+    }
     try {
       const res = await fetch('./api/workflow-status');
       if (res.ok) {
