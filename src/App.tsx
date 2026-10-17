@@ -832,9 +832,15 @@ export default function App() {
         });
       });
 
-      conn.on('data', (raw: any) => {
-        if (raw instanceof ArrayBuffer && handleRawBinaryFrame(raw)) return;
-        void handleTunnelPacket(raw, 'WebRTC Direct (UDP/DTLS)');
+      conn.on('data', async (raw: any) => {
+        let data = raw;
+        if (data instanceof Blob) {
+          try {
+            data = await data.arrayBuffer();
+          } catch {}
+        }
+        if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) return;
+        void handleTunnelPacket(data, 'WebRTC Direct (UDP/DTLS)');
       });
 
       conn.on('close', () => {
@@ -2567,7 +2573,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.2</span>
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.1</span>
         </a>
 
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}

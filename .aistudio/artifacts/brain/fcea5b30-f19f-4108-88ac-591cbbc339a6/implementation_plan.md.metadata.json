@@ -1,6 +1,6 @@
 {
-  "summary": "Comprehensive implementation plan for AetherTunnel, an English-language encrypted P2P file transfer application with multi-strategy NAT/firewall traversal (WebRTC ICE/STUN/TURN + WebSocket encrypted chunk relay fallback), end-to-end AES-256-GCM encryption via Web Crypto API, live NAT diagnostics, and a standalone GitHub Releases portable executable generator/packager.",
-  "updatedAt": "2026-10-17T07:33:11.345272322Z",
+  "summary": "Fix PeerJS Blob binary frame handling so file transfers between separate browsers/devices successfully receive and save chunks.",
+  "updatedAt": "2026-10-17T19:03:26.088995271Z",
   "requestFeedback": true,
   "userFacing": true
 }
