@@ -52,7 +52,6 @@ import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 
 type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
-// Optimal 240 KB native WebRTC SCTP wire frame
 const WIRE_CHUNK_BYTES = 240 * 1024;
 const MAX_PARALLEL_LANES = 1; 
 const CHUNKS_PER_WAVE = 32;
@@ -189,6 +188,8 @@ export default function App() {
   const peersRef = useRef<PeerSummary[]>([]);
   peersRef.current = peers;
 
+  const pendingFileAcceptResolversRef = useRef<Map<string, { resolve: () => void, reject: (reason?: any) => void }>>(new Map());
+
   const displayedLaneCount = 1;
 
   useEffect(() => {
@@ -300,50 +301,70 @@ export default function App() {
         const writable = await handle.createWritable();
         bufEntry.writableStream = writable;
         setPendingIncomingFile(null); 
+        
+        transmitEncryptedPacket({ kind: 'file:accept', fileId });
         void flushChunksToDisk(bufEntry); 
       } catch (err: any) {
+        console.warn("Save picker failed or cancelled:", err);
+        setPendingIncomingFile(null);
+        
         if (err.name === 'AbortError') {
-           setPendingIncomingFile(null);
-           // If they cancel, fallback to memory download so they don't lose the file
-           if (bufEntry.receivedCount === bufEntry.totalChunks) {
-                const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
-                const speedBps = bufEntry.size / elapsedSec;
-                const orderedParts: ArrayBuffer[] = [];
-                for (let i = 0; i < bufEntry.totalChunks; i++) {
-                  orderedParts.push(bufEntry.receivedChunks[i]!);
-                }
-                const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
-                const combinedFileArray = new Uint8Array(totalByteLength);
-                let offset = 0;
-                for (const part of orderedParts) {
-                  combinedFileArray.set(new Uint8Array(part), offset);
-                  offset += part.byteLength;
-                }
-                void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
-                  setTransfers((prev) =>
-                    prev.map((item) =>
-                      item.id === fileId && item.direction === 'incoming'
-                        ? { 
-                            ...item, 
-                            status: 'completed', 
-                            downloadUrl, 
-                            speedBps, 
-                            verified: true, 
-                            completedAt: Date.now() 
-                          }
-                        : item
-                    )
-                  );
-                });
-                incomingBuffersRef.current.delete(fileId);
-           }
+             incomingBuffersRef.current.delete(fileId);
+             setTransfers((prev) =>
+                prev.map((item) =>
+                  item.id === fileId && item.direction === 'incoming'
+                    ? { ...item, status: 'error', errorMessage: 'Cancelled by user' }
+                    : item
+                )
+             );
+             transmitEncryptedPacket({ kind: 'file:reject', fileId });
+             return;
+        }
+        
+        // Fallback to memory for other errors (like iframe block)
+        transmitEncryptedPacket({ kind: 'file:accept', fileId });
+        
+        if (bufEntry.receivedCount >= bufEntry.totalChunks) {
+             const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
+             const speedBps = bufEntry.size / elapsedSec;
+             const orderedParts: ArrayBuffer[] = [];
+             for (let i = 0; i < bufEntry.totalChunks; i++) {
+               orderedParts.push(bufEntry.receivedChunks[i]!);
+             }
+             const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
+             const combinedFileArray = new Uint8Array(totalByteLength);
+             let offset = 0;
+             for (const part of orderedParts) {
+               combinedFileArray.set(new Uint8Array(part), offset);
+               offset += part.byteLength;
+             }
+             void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
+               setTransfers((prev) =>
+                 prev.map((item) =>
+                   item.id === fileId && item.direction === 'incoming'
+                     ? { 
+                         ...item, 
+                         status: 'completed', 
+                         downloadUrl, 
+                         speedBps, 
+                         verified: true, 
+                         completedAt: Date.now() 
+                       }
+                     : item
+                 )
+               );
+             });
+             incomingBuffersRef.current.delete(fileId);
+        } else {
+             bufEntry.writableStream = null;
         }
       }
     } else {
         // Fallback for mobile browsers (no showSaveFilePicker)
         setPendingIncomingFile(null);
-        if (bufEntry.receivedCount === bufEntry.totalChunks) {
-            // trigger memory download immediately
+        transmitEncryptedPacket({ kind: 'file:accept', fileId });
+        
+        if (bufEntry.receivedCount >= bufEntry.totalChunks) {
             const orderedParts: ArrayBuffer[] = [];
             for (let i = 0; i < bufEntry.totalChunks; i++) {
               orderedParts.push(bufEntry.receivedChunks[i]!);
@@ -376,10 +397,10 @@ export default function App() {
 
       void flushChunksToDisk(bufEntry);
 
-      let filledCount = 0;
-      for (let i = 0; i < bufEntry.totalChunks; i++) {
+      let downloadedCount = bufEntry.nextChunkToWrite;
+      for (let i = bufEntry.nextChunkToWrite; i < bufEntry.totalChunks; i++) {
         if (bufEntry.receivedChunks[i] !== undefined) {
-          filledCount++;
+          downloadedCount++;
         }
       }
 
@@ -387,9 +408,8 @@ export default function App() {
       const fileId = bufEntry.id;
       const canStreamToDisk = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 
-      if (filledCount >= bufEntry.totalChunks && !bufEntry.writableStream && bufEntry.nextChunkToWrite === 0) {
+      if (downloadedCount >= bufEntry.totalChunks && !bufEntry.writableStream && bufEntry.nextChunkToWrite === 0) {
         if (!canStreamToDisk) {
-            // Fallback for mobile: auto download
             const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
             const speedBps = bufEntry.size / elapsedSec;
             const orderedParts: ArrayBuffer[] = [];
@@ -424,7 +444,6 @@ export default function App() {
             incomingBuffersRef.current.delete(fileId);
             numIdToFileIdRef.current.delete(bufEntry.transferNumId);
         } else {
-            // Desktop: wait for user to click button. Just update UI.
             setTransfers((prev) =>
               prev.map((item) =>
                 item.id === fileId && item.direction === 'incoming'
@@ -432,7 +451,7 @@ export default function App() {
                       ...item,
                       transferredChunks: bufEntry.totalChunks,
                       bytesTransferred: bufEntry.size,
-                      status: 'transferring', // Will show 100% but not completed yet
+                      status: 'transferring', 
                     }
                   : item
               )
@@ -442,7 +461,7 @@ export default function App() {
         bufEntry.lastUiUpdateAt = now;
         const bytesSoFar = Math.min(
           bufEntry.size,
-          filledCount * bufEntry.chunkSize
+          downloadedCount * bufEntry.chunkSize
         );
         const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
         const speedBps = bytesSoFar / elapsedSec;
@@ -452,7 +471,7 @@ export default function App() {
             item.id === fileId && item.direction === 'incoming'
               ? {
                   ...item,
-                  transferredChunks: filledCount,
+                  transferredChunks: downloadedCount,
                   bytesTransferred: bytesSoFar,
                   speedBps,
                 }
@@ -592,6 +611,26 @@ export default function App() {
       }
 
       if (!packet || typeof packet !== 'object') return;
+
+      if (packet.kind === 'file:accept') {
+        const { fileId } = packet;
+        const resolverObj = pendingFileAcceptResolversRef.current.get(fileId);
+        if (resolverObj) {
+          resolverObj.resolve();
+          pendingFileAcceptResolversRef.current.delete(fileId);
+        }
+        return;
+      }
+
+      if (packet.kind === 'file:reject') {
+        const { fileId } = packet;
+        const resolverObj = pendingFileAcceptResolversRef.current.get(fileId);
+        if (resolverObj) {
+          resolverObj.reject(new Error('Vastaanottaja peruutti tiedoston vastaanoton.'));
+          pendingFileAcceptResolversRef.current.delete(fileId);
+        }
+        return;
+      }
 
       if (packet.kind === 'file:meta') {
         const {
@@ -1858,13 +1897,39 @@ export default function App() {
         sha256: 'streaming-aes-256-gcm',
       };
 
+      const acceptPromise = new Promise<void>((resolve, reject) => {
+        pendingFileAcceptResolversRef.current.set(fileId, { resolve, reject });
+        setTimeout(() => {
+          if (pendingFileAcceptResolversRef.current.has(fileId)) {
+            pendingFileAcceptResolversRef.current.get(fileId)?.reject(new Error('Vastaanottaja ei hyväksynyt tiedostoa ajoissa.'));
+            pendingFileAcceptResolversRef.current.delete(fileId);
+          }
+        }, 120000); 
+      });
+
       transmitEncryptedPacket(metaPayload);
       await new Promise((r) => window.setTimeout(r, 150));
       transmitEncryptedPacket(metaPayload);
       await new Promise((r) => window.setTimeout(r, 150));
       transmitEncryptedPacket(metaPayload);
 
-      await new Promise((r) => window.setTimeout(r, 450));
+      try {
+        await acceptPromise;
+      } catch (err: any) {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === fileId
+              ? {
+                  ...t,
+                  status: 'error',
+                  errorMessage: err.message || 'Transfer rejected by receiver',
+                }
+              : t
+          )
+        );
+        pendingFileAcceptResolversRef.current.delete(fileId);
+        continue;
+      }
 
       void file
         .slice(0, Math.min(file.size, 4 * 1024 * 1024))
