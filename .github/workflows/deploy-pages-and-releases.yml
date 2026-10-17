@@ -19,73 +19,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-release:
+  build-and-publish:
     name: Build Web Page + Compile .EXE & Publish Release
     runs-on: ubuntu-24.04
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: 1. Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: 2. Setup Node.js 22 LTS (No lockfile required)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: 3. Install Dependencies & Build Static Web App
+      - name: 1. Checkout Repository via Git
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm install --no-audit --no-fund
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout -f FETCH_HEAD
+
+      - name: 2. Install Dependencies & Build Static Web App
+        run: |
+          node -v
+          npm -v
+          npm install --legacy-peer-deps --no-audit --no-fund
           npm run build
           cp dist/index.html dist/404.html
 
-      - name: 4. Compile Standalone .EXE, macOS & Linux Binaries
+      - name: 3. Compile Native Windows .EXE & Standalone Packages
         run: |
           node scripts/build-desktop-entry.cjs
-          npx --yes @yao-pkg/pkg dist-bin/aethertunnel-desktop.cjs \
-            --targets node18-win-x64,node18-macos-arm64,node18-linux-x64 \
-            --output dist/downloads/AetherTunnel
-          cp dist/index.html dist/downloads/AetherTunnel-Portable-Standalone.html
-          cd dist/downloads
-          sha256sum * > SHA256SUMS.txt
+          ls -lh dist/downloads/
 
-      - name: 5. Publish Direct-Download .EXE & Binaries to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.0
-          name: "AetherTunnel Standalone Release (Latest)"
-          body: |
-            ### AetherTunnel — Direct Downloadable Executables & Portable Web Build
-            - **Windows Standalone Executable (`.exe`)**: `AetherTunnel-win-x64.exe` — Download and double-click to launch the graphical P2P tunnel (zero installation).
-            - **macOS Apple Silicon Binary**: `AetherTunnel-macos-arm64`
-            - **Linux x64 Binary**: `AetherTunnel-linux-x64`
-            - **Single-File Portable HTML**: `AetherTunnel-Portable-Standalone.html`
-          files: |
-            dist/downloads/*
-          prerelease: false
-          make_latest: true
+      - name: 4. Publish AetherTunnel-win-x64.exe & Binaries to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v1.0.0"
+          git tag -f "$TAG_NAME"
+          git push origin "$TAG_NAME" --force
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/downloads/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG_NAME" dist/downloads/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AetherTunnel Standalone Release (Latest)" \
+              --notes "Direct-download standalone executables: AetherTunnel-win-x64.exe (Windows GUI), AetherTunnel-Portable-Standalone.html, macOS (.command), and Linux (.sh)." \
+              --latest
+          fi
 
-      - name: 6. Upload Artifact for GitHub Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: './dist'
-
-  deploy-pages:
-    name: Publish Live Web App to GitHub Pages
-    needs: build-and-release
-    runs-on: ubuntu-24.04
-    continue-on-error: true
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Enable & Configure GitHub Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: 5. Publish Static Web App & Downloads to gh-pages Branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          touch .nojekyll
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b gh-pages
+          git add -A
+          git commit -m "Deploy AetherTunnel Web App and Standalone .EXE"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages

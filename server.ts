@@ -349,39 +349,31 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
     steps[1].durationMs = Math.max(18, Date.now() - t1);
     steps[1].detail = `Bundled server.ts via esbuild (${cjsBuf.byteLength} bytes)`;
 
-    // Step 3: Compile Windows Native-Window Standalone Executable (.cmd with embedded WebView2/Edge --app mode)
+    // Step 3: Compile Native Windows GUI Executable (AetherTunnel-win-x64.exe)
     steps[2].status = 'running';
     const t2 = Date.now();
-    const b64Html = htmlBuf.toString('base64');
-    const winCmdContent = [
-      '@echo off',
-      'setlocal',
-      'title AetherTunnel Standalone P2P Client (Windows x64)',
-      'echo ====================================================================',
-      'echo   AetherTunnel - Zero-Install Encrypted P2P File Transfer Application',
-      'echo   Starting Native Standalone Desktop Window...',
-      'echo ====================================================================',
-      `powershell -NoProfile -ExecutionPolicy Bypass -Command "$html = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Html}')); $target = Join-Path $env:TEMP 'AetherTunnel-App.html'; Set-Content -Path $target -Value $html -Encoding UTF8; if (Get-Command msedge -ErrorAction SilentlyContinue) { Start-Process msedge -ArgumentList ('--app=file:///' + $target.Replace('\\','/'), '--window-size=1280,820') } else { Start-Process $target }"`,
-      'exit /b 0',
-    ].join('\r\n');
-    const winPath = path.join(releaseDir, 'AetherTunnel-Standalone-win-x64.cmd');
-    fs.writeFileSync(winPath, winCmdContent, 'utf8');
-    const winBuf = Buffer.from(winCmdContent, 'utf8');
+    const { createRequire } = await import('module');
+    const requireCjs = createRequire(import.meta.url);
+    const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
+    const winExeBuf: Buffer = buildWindowsGuiExe(standaloneHtml);
+    const winExePath = path.join(releaseDir, 'AetherTunnel-win-x64.exe');
+    fs.writeFileSync(winExePath, winExeBuf);
     artifacts.push({
-      filename: 'AetherTunnel-Standalone-win-x64.cmd',
-      label: 'Windows Standalone Desktop App (Native Window)',
+      filename: 'AetherTunnel-win-x64.exe',
+      label: 'Windows Native GUI Executable (.exe)',
       platform: 'Windows 10 / 11 (x64)',
-      sizeBytes: winBuf.byteLength,
-      sha256: computeFileSha256(winBuf),
-      downloadUrl: '/downloads/AetherTunnel-Standalone-win-x64.cmd',
+      sizeBytes: winExeBuf.byteLength,
+      sha256: computeFileSha256(winExeBuf),
+      downloadUrl: '/downloads/AetherTunnel-win-x64.exe',
     });
     steps[2].status = 'completed';
     steps[2].durationMs = Math.max(14, Date.now() - t2);
-    steps[2].detail = `Compiled Windows Native-Window Launcher (${winBuf.byteLength} bytes)`;
+    steps[2].detail = `Compiled AetherTunnel-win-x64.exe (${winExeBuf.byteLength} bytes)`;
 
     // Step 4: Compile macOS (.command) and Linux (.sh) Standalone Executables
     steps[3].status = 'running';
     const t3 = Date.now();
+    const b64Html = htmlBuf.toString('base64');
     const unixScriptContent = [
       '#!/usr/bin/env bash',
       'set -e',
