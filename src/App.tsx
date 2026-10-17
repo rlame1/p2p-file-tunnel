@@ -46,11 +46,10 @@ import {
   isStaticHostEnvironment,
 } from './services/natProber';
 import { NatDiagnosticsView } from './components/NatDiagnosticsView';
-import { GitHubReleaseStudio } from './components/GitHubReleaseStudio';
 import { TransferLedgerView } from './components/TransferLedgerView';
 import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 
-type ActiveTab = 'studio' | 'diagnostics' | 'ledger' | 'releases';
+type ActiveTab = 'studio' | 'diagnostics' | 'ledger';
 
 // Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
 const WIRE_CHUNK_BYTES = 240 * 1024;
@@ -1083,240 +1082,7 @@ export default function App() {
     }
   }, [roomCode]);
 
-  // 6c. Automatic Direct Kernel WebSocket Bridge to Local Windows .EXE (ws://127.0.0.1:45889)
-  useEffect(() => {
-    let unmounted = false;
-    let activeWs: WebSocket | null = null;
-    let retryTimer: number | null = null;
-    let portIdx = 0;
-    const candidatePorts = [45889, 45890, 45891];
 
-    let rxFileId = '';
-    let rxFileName = '';
-    let rxFileSize = 0;
-    let rxChunkSize = 1024 * 1024;
-    let rxTotalChunks = 1;
-    let rxChunks: ArrayBuffer[] = [];
-    let rxBytes = 0;
-    let rxStartedAt = 0;
-    let rxLastUiAt = 0;
-
-    let failedProbes = 0;
-    const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
-      typeof navigator !== 'undefined' ? navigator.userAgent : ''
-    );
-
-    const connectToLocalExeBridge = () => {
-      if (unmounted || isMobileDevice) return;
-      if (activeWs && (activeWs.readyState === WebSocket.OPEN || activeWs.readyState === WebSocket.CONNECTING)) {
-        return;
-      }
-
-      const port = candidatePorts[portIdx % candidatePorts.length];
-      portIdx += 1;
-
-      try {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-        ws.binaryType = 'arraybuffer';
-        activeWs = ws;
-
-        ws.onopen = () => {
-          failedProbes = 0;
-          if (unmounted) {
-            ws.close();
-            return;
-          }
-          exeWsRef.current = ws;
-          setExeBridgeConnected(true);
-          setConnectionState('connected_p2p');
-          setPeers((prev) => {
-            const withoutOld = prev.filter((p) => p.id !== 'native-exe-bridge');
-            return [
-              {
-                id: 'native-exe-bridge',
-                deviceLabel: `Windows Native Kernel .EXE (127.0.0.1:${port})`,
-                natType: 'Direct Kernel WebSocket Bridge',
-                joinedAt: Date.now(),
-              },
-              ...withoutOld,
-            ];
-          });
-
-          try {
-            ws.send(
-              JSON.stringify({
-                kind: 'browser:hello',
-                roomCode: roomCodeRef.current,
-              })
-            );
-          } catch {
-            // ignore
-          }
-        };
-
-        ws.onmessage = (ev: MessageEvent) => {
-          if (typeof ev.data === 'string') {
-            try {
-              const msg = JSON.parse(ev.data);
-              if (msg.kind === 'exe:hello' && typeof msg.roomCode === 'string' && msg.roomCode.trim()) {
-                const incomingCode = msg.roomCode.trim().toLowerCase();
-                if (incomingCode !== roomCodeRef.current && incomingCode !== '742-cobalt-falcon') {
-                  setRoomCode(incomingCode);
-                } else if (roomCodeRef.current !== incomingCode) {
-                  ws.send(
-                    JSON.stringify({
-                      kind: 'browser:room',
-                      roomCode: roomCodeRef.current,
-                    })
-                  );
-                }
-              } else if (msg.kind === 'exe:file-start') {
-                rxFileId = msg.fileId || `exe-rx-${Date.now()}`;
-                rxFileName = msg.name || 'transfer.bin';
-                rxFileSize = Number(msg.size) || 0;
-                rxChunkSize = Number(msg.chunkSize) || 1024 * 1024;
-                rxTotalChunks = Math.max(1, Number(msg.totalChunks) || Math.ceil(rxFileSize / rxChunkSize));
-                rxChunks = [];
-                rxBytes = 0;
-                rxStartedAt = performance.now();
-                rxLastUiAt = 0;
-
-                const fid = rxFileId;
-                const fname = rxFileName;
-                const fsize = rxFileSize;
-                const fchunks = rxTotalChunks;
-
-                setTransfers((prev) => [
-                  {
-                    id: fid,
-                    name: fname,
-                    size: fsize,
-                    mimeType: 'application/octet-stream',
-                    totalChunks: fchunks,
-                    transferredChunks: 0,
-                    bytesTransferred: 0,
-                    speedBps: 0,
-                    status: 'transferring',
-                    sha256: 'kernel-bridge-verified',
-                    verified: false,
-                    direction: 'incoming',
-                    transportUsed: 'WebRTC Direct (UDP/DTLS)',
-                    startedAt: Date.now(),
-                  },
-                  ...prev,
-                ]);
-              } else if (msg.kind === 'exe:file-end' && rxFileId) {
-                const fid = rxFileId;
-                const fname = rxFileName;
-                const fsize = rxFileSize;
-                const fchunks = rxTotalChunks;
-                const elapsedSec = Math.max(0.008, (performance.now() - rxStartedAt) / 1000);
-                const finalSpeed = fsize / elapsedSec;
-                const blob = new Blob(rxChunks, { type: 'application/octet-stream' });
-                const downloadUrl = URL.createObjectURL(blob);
-                rxChunks = [];
-                rxFileId = '';
-
-                setTransfers((prev) =>
-                  prev.map((t) =>
-                    t.id === fid
-                      ? {
-                          ...t,
-                          transferredChunks: fchunks,
-                          bytesTransferred: fsize,
-                          speedBps: finalSpeed,
-                          status: 'completed',
-                          verified: true,
-                          downloadUrl,
-                          completedAt: Date.now(),
-                        }
-                      : t
-                  )
-                );
-
-                // If a remote WebRTC Browser peer is ALSO connected in the tunnel, automatically relay the file from .EXE to the remote Browser!
-                if (getOpenDataChannelLanes().length > 0) {
-                  const fileObj = new File([blob], fname, {
-                    type: 'application/octet-stream',
-                  });
-                  void handleFilesSelected([fileObj], true);
-                }
-              }
-            } catch {
-              // ignore invalid JSON
-            }
-          } else if (ev.data instanceof ArrayBuffer && rxFileId) {
-            rxChunks.push(ev.data);
-            rxBytes += ev.data.byteLength;
-            const now = performance.now();
-            if (now - rxLastUiAt >= 100) {
-              rxLastUiAt = now;
-              const fid = rxFileId;
-              const bytesNow = rxBytes;
-              const chunksNow = rxChunks.length;
-              const elapsedSec = Math.max(0.008, (now - rxStartedAt) / 1000);
-              const speedBps = bytesNow / elapsedSec;
-              setTransfers((prev) =>
-                prev.map((t) =>
-                  t.id === fid
-                    ? {
-                        ...t,
-                        transferredChunks: chunksNow,
-                        bytesTransferred: bytesNow,
-                        speedBps,
-                      }
-                    : t
-                )
-              );
-            }
-          }
-        };
-
-        ws.onclose = () => {
-          if (exeWsRef.current === ws) {
-            exeWsRef.current = null;
-            setExeBridgeConnected(false);
-            setPeers((prev) => prev.filter((p) => p.id !== 'native-exe-bridge'));
-          }
-          activeWs = null;
-          failedProbes += 1;
-          const delay = failedProbes >= 3 ? 30000 : 4000;
-          if (!unmounted && !isMobileDevice) {
-            retryTimer = window.setTimeout(connectToLocalExeBridge, delay);
-          }
-        };
-
-        ws.onerror = () => {
-          try {
-            ws.close();
-          } catch {
-            // ignore
-          }
-        };
-      } catch {
-        activeWs = null;
-        failedProbes += 1;
-        const delay = failedProbes >= 3 ? 30000 : 4000;
-        if (!unmounted && !isMobileDevice) {
-          retryTimer = window.setTimeout(connectToLocalExeBridge, delay);
-        }
-      }
-    };
-
-    if (!isMobileDevice) {
-      connectToLocalExeBridge();
-    }
-
-    return () => {
-      unmounted = true;
-      if (retryTimer !== null) window.clearTimeout(retryTimer);
-      try {
-        activeWs?.close();
-      } catch {
-        // ignore
-      }
-    };
-  }, []);
 
   // 6d. Universal WSS Cloud Wormhole Bridge to Windows .EXE (wss://0.peerjs.com/peerjs)
   // Bypasses Chrome HTTPS Cross-Origin Iframe Mixed-Content / Private Network Access (127.0.0.1) blocks 100% automatically!
@@ -2701,16 +2467,6 @@ export default function App() {
           >
             Transfer Ledger ({transfers.length})
           </button>
-          <button
-            onClick={() => setActiveTab('releases')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
-              activeTab === 'releases'
-                ? 'text-slate-100 border-sky-400'
-                : 'border-transparent hover:text-slate-200'
-            }`}
-          >
-            GitHub Releases &amp; Downloads
-          </button>
         </nav>
 
         {/* Zone 3: 1 Primary Action Button */}
@@ -3291,9 +3047,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'releases' && (
-          <GitHubReleaseStudio currentRoomCode={roomCode} />
-        )}
+
       </main>
 
       {/* Clean Utilitarian Footer */}
@@ -3308,13 +3062,6 @@ export default function App() {
               className="hover:text-slate-200 transition-colors cursor-pointer"
             >
               ICE / STUN Diagnostics
-            </button>
-            <span aria-hidden="true">·</span>
-            <button
-              onClick={() => setActiveTab('releases')}
-              className="hover:text-slate-200 transition-colors cursor-pointer"
-            >
-              Standalone GitHub Executables
             </button>
           </div>
         </div>

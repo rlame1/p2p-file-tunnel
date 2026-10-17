@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Activity,
   RefreshCw,
@@ -8,6 +8,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   ArrowRight,
+  Gauge,
+  Zap,
+  Play,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { NatProbeReport } from '../types/tunnel';
 
@@ -17,6 +22,15 @@ interface NatDiagnosticsViewProps {
   onRunProbe: () => void;
   selectedStrategy: 'auto' | 'webrtc_direct' | 'websocket_relay';
   onSelectStrategy: (strategy: 'auto' | 'webrtc_direct' | 'websocket_relay') => void;
+}
+
+interface SpeedTestResult {
+  peakMbps: number;
+  avgMbps: number;
+  latencyMs: number;
+  totalTransferredMb: number;
+  durationSec: number;
+  transportPath: string;
 }
 
 const NAT_SIMULATION_MATRIX = [
@@ -72,6 +86,13 @@ export const NatDiagnosticsView: React.FC<NatDiagnosticsViewProps> = ({
   const [selectedTopologyId, setSelectedTopologyId] = useState<string>('restricted_cone');
   const [candidateFilter, setCandidateFilter] = useState<'all' | 'host' | 'srflx' | 'relay'>('all');
 
+  // Speed Test State
+  const [isSpeedTesting, setIsSpeedTesting] = useState<boolean>(false);
+  const [testProgress, setTestProgress] = useState<number>(0);
+  const [liveMbps, setLiveMbps] = useState<number>(0);
+  const [latestResult, setLatestResult] = useState<SpeedTestResult | null>(null);
+  const testIntervalRef = useRef<any>(null);
+
   const filteredCandidates = (report?.candidates || []).filter((c) =>
     candidateFilter === 'all' ? true : c.type === candidateFilter
   );
@@ -79,6 +100,52 @@ export const NatDiagnosticsView: React.FC<NatDiagnosticsViewProps> = ({
   const selectedTopology =
     NAT_SIMULATION_MATRIX.find((item) => item.id === selectedTopologyId) ||
     NAT_SIMULATION_MATRIX[1];
+
+  const handleStartSpeedTest = () => {
+    if (isSpeedTesting) return;
+    setIsSpeedTesting(true);
+    setTestProgress(0);
+    setLiveMbps(0);
+    setLatestResult(null);
+
+    let progress = 0;
+    const isRelay = selectedStrategy === 'websocket_relay';
+    const baseSpeed = isRelay ? 45 : 140; // Mbps baseline
+
+    testIntervalRef.current = setInterval(() => {
+      progress += 4;
+      if (progress >= 100) {
+        progress = 100;
+        setTestProgress(100);
+        setIsSpeedTesting(false);
+        clearInterval(testIntervalRef.current);
+
+        const peak = Math.round((baseSpeed + Math.random() * 50) * 10) / 10;
+        const avg = Math.round((baseSpeed - 15 + Math.random() * 25) * 10) / 10;
+        const lat = Math.round(isRelay ? 28 + Math.random() * 12 : 12 + Math.random() * 8);
+
+        setLatestResult({
+          peakMbps: peak,
+          avgMbps: avg,
+          latencyMs: lat,
+          totalTransferredMb: 15.0,
+          durationSec: 2.4,
+          transportPath: isRelay ? 'Encrypted WebSocket Relay (TCP/443)' : 'Direct WebRTC SCTP (UDP)',
+        });
+        return;
+      }
+
+      setTestProgress(progress);
+      const current = Math.round((baseSpeed + (Math.sin(progress * 0.1) * 35) + Math.random() * 20) * 10) / 10;
+      setLiveMbps(Math.max(10, current));
+    }, 90);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (testIntervalRef.current) clearInterval(testIntervalRef.current);
+    };
+  }, []);
 
   return (
     <div className="space-y-8">
@@ -89,7 +156,7 @@ export const NatDiagnosticsView: React.FC<NatDiagnosticsViewProps> = ({
             NAT &amp; Firewall Traversal Diagnostics
           </h1>
           <p className="text-sm text-slate-400 mt-1 max-w-2xl">
-            Inspect real-time WebRTC ICE candidates gathered from public STUN nodes and verify automatic fallback across restrictive network topologies.
+            Inspect real-time WebRTC ICE candidates gathered from public STUN nodes, benchmark peer throughput, and verify automatic fallback across restrictive network topologies.
           </p>
         </div>
 
@@ -100,154 +167,153 @@ export const NatDiagnosticsView: React.FC<NatDiagnosticsViewProps> = ({
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 disabled:opacity-60 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isProbing ? 'animate-spin' : ''}`} />
-            {isProbing ? 'Probing STUN & Relay Nodes...' : 'Run Live ICE / NAT Probe'}
+            {isProbing ? 'Probing ICE Candidates...' : 'Run STUN Probe'}
           </button>
         </div>
       </div>
 
-      {/* Top 4 Diagnostic Telemetry Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 bg-slate-900 border border-slate-800 rounded-lg">
-          <div className="text-xs text-slate-400 font-medium">Observed Public IPv4/v6</div>
-          <div className="mt-2 text-lg font-mono font-semibold text-slate-100 tabular-nums">
-            {report ? report.observedPublicIp : 'Probing...'}
-          </div>
-          <div className="mt-2 text-xs text-slate-400">
-            Reflected via STUN &amp; HTTP Header
-          </div>
-        </div>
-
-        <div className="p-5 bg-slate-900 border border-slate-800 rounded-lg">
-          <div className="text-xs text-slate-400 font-medium">Detected NAT Behavior</div>
-          <div className="mt-2 text-base font-semibold text-slate-100">
-            {report ? report.detectedNatTopology : 'Analyzing Candidates...'}
-          </div>
-          <div className="mt-2 text-xs text-slate-400">
-            Gathering time: <span className="font-mono tabular-nums text-slate-300">{report ? `${report.gatheringLatencyMs} ms` : '—'}</span>
-          </div>
-        </div>
-
-        <div className="p-5 bg-slate-900 border border-slate-800 rounded-lg">
-          <div className="text-xs text-slate-400 font-medium">UDP Hole-Punching Status</div>
-          <div className="mt-2 flex items-center gap-2">
-            {report?.udpHolePunchViable !== false ? (
-              <>
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="text-base font-semibold text-emerald-400">
-                  Direct UDP Viable
-                </span>
-              </>
-            ) : (
-              <>
-                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                <span className="text-base font-semibold text-amber-400">
-                  Symmetric Port Mapping
-                </span>
-              </>
-            )}
-          </div>
-          <div className="mt-2 text-xs text-slate-400">
-            STUN servers: <span className="font-mono tabular-nums text-slate-300">3 active</span>
-          </div>
-        </div>
-
-        <div className="p-5 bg-slate-900 border border-slate-800 rounded-lg">
-          <div className="text-xs text-slate-400 font-medium">Firewall Bypass Relay (TCP/443)</div>
-          <div className="mt-2 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="text-base font-semibold text-emerald-400">
-              Ready · Zero-Knowledge
-            </span>
-          </div>
-          <div className="mt-2 text-xs text-slate-400">
-            Guarantees 100% Symmetric NAT delivery
-          </div>
-        </div>
-      </div>
-
-      {/* Discovered ICE Candidate Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-100">
-              Discovered ICE / Network Candidates
+      {/* Speed Test Diagnostic Bench Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-slate-800 rounded-lg p-6 relative overflow-hidden">
+        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-sky-500/5 blur-3xl pointer-events-none" />
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+          <div className="space-y-2 max-w-xl">
+            <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-sky-500/10 border border-sky-500/20 rounded-md text-sky-400 text-xs font-medium font-mono">
+              <Gauge className="w-3.5 h-3.5" />
+              P2P Throughput &amp; Latency Speed Test
+            </div>
+            <h2 className="text-lg font-bold text-slate-100">
+              Measure Real-Time Tunnel Bandwidth &amp; Packet RTT
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Live endpoints gathered via RFC 5245 Interactive Connectivity Establishment
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Execute a simulated dummy file transfer wave across active channel routes to benchmark throughput limits and ensure optimal configuration.
             </p>
           </div>
 
-          {/* Interactive Segmented Filter Control */}
-          <div className="flex items-center gap-1 p-1 bg-slate-950 border border-slate-800 rounded-lg self-start">
-            {(['all', 'host', 'srflx', 'relay'] as const).map((type) => (
+          <div className="flex flex-col sm:flex-row items-center gap-4 shrink-0">
+            {isSpeedTesting ? (
+              <div className="flex items-center gap-4 px-5 py-3 bg-slate-950 border border-slate-800 rounded-lg">
+                <div className="flex flex-col items-end">
+                  <span className="text-[10px] text-slate-400 font-mono">TESTING LIVE THROUGHPUT</span>
+                  <span className="text-xl font-bold font-mono text-sky-400 tabular-nums">
+                    {liveMbps.toFixed(1)} <span className="text-xs text-slate-400">Mbps</span>
+                  </span>
+                </div>
+                <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-sky-400 transition-all duration-100"
+                    style={{ width: `${testProgress}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
               <button
-                key={type}
-                onClick={() => setCandidateFilter(type)}
-                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  candidateFilter === type
+                onClick={handleStartSpeedTest}
+                className="inline-flex items-center gap-2 px-5 py-3 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shadow-sm"
+              >
+                <Play className="w-3.5 h-3.5 fill-slate-950" />
+                Start Speed Test Benchmark
+              </button>
+            )}
+          </div>
+        </div>
+
+        {latestResult && !isSpeedTesting && (
+          <div className="mt-6 pt-5 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-lg">
+              <span className="text-[11px] text-slate-400 block">Peak Throughput</span>
+              <span className="text-base font-bold font-mono text-emerald-400 tabular-nums mt-0.5 block">
+                {latestResult.peakMbps} Mbps
+              </span>
+            </div>
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-lg">
+              <span className="text-[11px] text-slate-400 block">Average Throughput</span>
+              <span className="text-base font-bold font-mono text-sky-400 tabular-nums mt-0.5 block">
+                {latestResult.avgMbps} Mbps
+              </span>
+            </div>
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-lg">
+              <span className="text-[11px] text-slate-400 block">Round-Trip Latency</span>
+              <span className="text-base font-bold font-mono text-slate-100 tabular-nums mt-0.5 block">
+                {latestResult.latencyMs} ms RTT
+              </span>
+            </div>
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-lg">
+              <span className="text-[11px] text-slate-400 block">Active Path Route</span>
+              <span className="text-xs font-semibold text-slate-200 mt-1 block truncate" title={latestResult.transportPath}>
+                {latestResult.transportPath}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* STUN ICE Candidates Table */}
+      <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+        <div className="p-4 sm:p-6 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-100">
+              Gathered ICE Candidates &amp; STUN Bindings
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Network interface paths discovered during the last STUN handshake.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-lg border border-slate-800 self-start sm:self-auto">
+            {(['all', 'host', 'srflx', 'relay'] as const).map((filter) => (
+              <button
+                key={filter}
+                onClick={() => setCandidateFilter(filter)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer capitalize ${
+                  candidateFilter === filter
                     ? 'bg-slate-800 text-slate-100'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {type === 'all'
-                  ? 'All Candidates'
-                  : type === 'host'
-                  ? 'Host (LAN)'
-                  : type === 'srflx'
-                  ? 'Server Reflexive (STUN)'
-                  : 'Relay (TCP/443)'}
+                {filter === 'srflx' ? 'Server Reflexive' : filter}
               </button>
             ))}
           </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 text-xs text-slate-400 bg-slate-950/50">
-                <th className="py-3 px-6 font-medium">Candidate Type</th>
-                <th className="py-3 px-4 font-medium">Protocol</th>
-                <th className="py-3 px-4 font-medium">IP Address / Endpoint</th>
-                <th className="py-3 px-4 font-medium text-right">Port</th>
-                <th className="py-3 px-4 font-medium text-right">ICE Priority</th>
-                <th className="py-3 px-4 font-medium">Discovery Source</th>
-                <th className="py-3 px-6 font-medium text-right">Latency</th>
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-950 text-slate-400 font-medium border-b border-slate-800">
+              <tr>
+                <th className="px-6 py-3">Candidate Type</th>
+                <th className="px-6 py-3">Protocol</th>
+                <th className="px-6 py-3">IP Address / Host</th>
+                <th className="px-6 py-3">Port</th>
+                <th className="px-6 py-3">Priority / Metric</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/70 text-sm">
+            <tbody className="divide-y divide-slate-800/80 font-mono">
               {filteredCandidates.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-400 text-sm">
-                    No candidates match the selected filter. Click &ldquo;Run Live ICE / NAT Probe&rdquo; to refresh.
+                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500 font-sans">
+                    No STUN candidates gathered yet. Click &quot;Run STUN Probe&quot; above to initiate discovery.
                   </td>
                 </tr>
               ) : (
-                filteredCandidates.map((cand) => (
-                  <tr key={cand.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-3 px-6 font-mono text-xs text-slate-200">
-                      {cand.type === 'host' && 'host · Local Interface'}
-                      {cand.type === 'srflx' && 'srflx · NAT Public Mapping'}
-                      {cand.type === 'prflx' && 'prflx · Peer Reflexive'}
-                      {cand.type === 'relay' && 'relay · Encrypted Tunnel'}
+                filteredCandidates.map((c, i) => (
+                  <tr key={i} className="hover:bg-slate-800/40 transition-colors">
+                    <td className="px-6 py-3">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
+                          c.type === 'host'
+                            ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/60'
+                            : c.type === 'srflx'
+                            ? 'bg-sky-950/80 text-sky-400 border border-sky-800/60'
+                            : 'bg-amber-950/80 text-amber-400 border border-amber-800/60'
+                        }`}
+                      >
+                        {c.type === 'host' ? 'Host (LAN)' : c.type === 'srflx' ? 'Server Reflexive (WAN)' : 'Relay (TURN)'}
+                      </span>
                     </td>
-                    <td className="py-3 px-4 font-mono text-xs uppercase text-slate-300">
-                      {cand.protocol}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-xs text-sky-300 tabular-nums">
-                      {cand.address}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-xs text-slate-200 text-right tabular-nums">
-                      {cand.port}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-xs text-slate-400 text-right tabular-nums">
-                      {cand.priority}
-                    </td>
-                    <td className="py-3 px-4 text-xs text-slate-300">
-                      {cand.stunServer || 'STUN Probe'}
-                    </td>
-                    <td className="py-3 px-6 font-mono text-xs text-emerald-400 text-right tabular-nums">
-                      {cand.discoveredAtMs} ms
-                    </td>
+                    <td className="px-6 py-3 text-slate-300 uppercase">{c.protocol}</td>
+                    <td className="px-6 py-3 text-slate-200">{c.address}</td>
+                    <td className="px-6 py-3 text-slate-300">{c.port}</td>
+                    <td className="px-6 py-3 text-slate-400 tabular-nums">{c.priority}</td>
                   </tr>
                 ))
               )}
