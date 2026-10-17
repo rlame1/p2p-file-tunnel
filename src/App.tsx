@@ -62,6 +62,21 @@ const CHUNKS_PER_WAVE = 32;
 const HIGH_WATER_MARK = 8 * 1024 * 1024;
 const LOW_WATER_MARK = 4 * 1024 * 1024;
 
+export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
 interface IncomingFileBuffer {
   id: string;
   transferNumId: number;
@@ -739,11 +754,7 @@ export default function App() {
     try {
       activePeer = new Peer(hostBrokerId, {
         config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun.cloudflare.com:3478' },
-          ],
+          iceServers: GLOBAL_ICE_SERVERS,
         },
       });
       peerJsInstanceRef.current = activePeer;
@@ -757,11 +768,7 @@ export default function App() {
         if (err?.type === 'unavailable-id') {
           const guestPeer = new Peer(clientBrokerId, {
             config: {
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun.cloudflare.com:3478' },
-              ],
+              iceServers: GLOBAL_ICE_SERVERS,
             },
           });
           peerJsInstanceRef.current = guestPeer;
@@ -817,15 +824,7 @@ export default function App() {
           pendingIceCandidatesRef.current.set(laneIdx, []);
 
           const pc = new RTCPeerConnection({
-            iceServers: [
-              {
-                urls: [
-                  'stun:stun.l.google.com:19302',
-                  'stun:stun1.l.google.com:19302',
-                  'stun:stun.cloudflare.com:3478',
-                ],
-              },
-            ],
+            iceServers: GLOBAL_ICE_SERVERS,
           });
           peerConnPoolRef.current.set(laneIdx, pc);
 

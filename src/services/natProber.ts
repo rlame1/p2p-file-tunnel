@@ -30,10 +30,19 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
   }
 
   const candidates: IceCandidateRecord[] = [];
-  const stunServers = [
-    'stun:stun.l.google.com:19302',
-    'stun:stun1.l.google.com:19302',
-    'stun:stun.cloudflare.com:3478',
+  const iceServers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ];
 
   await new Promise<void>((resolve) => {
@@ -49,7 +58,7 @@ export async function runLiveNatDiagnostics(): Promise<NatProbeReport> {
 
     try {
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: stunServers }],
+        iceServers,
       });
 
       pc.createDataChannel('nat-probe');
