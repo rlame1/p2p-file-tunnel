@@ -1505,7 +1505,17 @@ export default function App() {
   const trySendBinaryPacketSync = useCallback(
     (packet: ArrayBuffer): boolean => {
       const openLanes = getOpenDataChannelLanes();
-      if (openLanes.length === 0) return false;
+      if (openLanes.length === 0) {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(packet);
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      }
 
       let bestLane = openLanes[laneRoundRobinRef.current % openLanes.length];
       laneRoundRobinRef.current += 1;
@@ -1536,7 +1546,13 @@ export default function App() {
       for (let attempt = 0; attempt < 20000; attempt++) {
         const openLanes = getOpenDataChannelLanes();
         if (openLanes.length === 0) {
-          throw new Error('No open WebRTC DataChannel lanes available');
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              wsRef.current.send(packet);
+              return;
+            } catch {}
+          }
+          throw new Error('No open WebRTC DataChannel lanes or WebSocket relay available');
         }
 
         if (trySendBinaryPacketSync(packet)) return;
