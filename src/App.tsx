@@ -55,12 +55,12 @@ type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 // Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
 const WIRE_CHUNK_BYTES = 240 * 1024;
 // Single Dedicated RTCPeerConnection: 100% direct C++ webrtc_network_thread path with zero multi-connection lock overhead
-const MAX_PARALLEL_LANES = 2;
+const MAX_PARALLEL_LANES = 1; 
 // 32 chunks per wave (~7.5 MB) fits 100% inside CPU L3 cache
 const CHUNKS_PER_WAVE = 32;
 // 8 MB high-water mark & 4 MB low-water mark per independent RTCPeerConnection
-const HIGH_WATER_MARK = 16 * 1024 * 1024;
-const LOW_WATER_MARK = 8 * 1024 * 1024;
+const HIGH_WATER_MARK = 8 * 1024 * 1024;
+const LOW_WATER_MARK = 4 * 1024 * 1024;
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -83,6 +83,10 @@ interface IncomingFileBuffer {
   receivedCount: number;
   startedAt: number;
   lastUiUpdateAt: number;
+  // Streaming write properties
+  nextChunkToWrite: number;
+  writableStream: any; // FileSystemWritableFileStream
+  isWriting: boolean;
 }
 
 interface PartialSubFrameAssembly {
@@ -154,6 +158,7 @@ export default function App() {
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<'code' | 'link' | null>(null);
   const [incomingFileAlert, setIncomingFileAlert] = useState<string | null>(null);
+  const [pendingIncomingFile, setPendingIncomingFile] = useState<{ fileId: string, name: string, size: number } | null>(null);
 
   // NAT Diagnostic Prober State
   const [natReport, setNatReport] = useState<NatProbeReport | null>(null);
@@ -241,7 +246,87 @@ export default function App() {
     }
   }, [roomCode, peerId, natReport?.detectedNatTopology]);
 
-  // Shared helper to record a decrypted chunk and trigger zero-copy Blob completion
+  // --- NEW: Streaming Write to Disk Logic ---
+  
+  const flushChunksToDisk = async (bufEntry: IncomingFileBuffer) => {
+    if (!bufEntry.writableStream || bufEntry.isWriting) return;
+    
+    bufEntry.isWriting = true;
+    try {
+      while (bufEntry.nextChunkToWrite < bufEntry.totalChunks) {
+        const chunk = bufEntry.receivedChunks[bufEntry.nextChunkToWrite];
+        if (chunk !== undefined) {
+          // Write straight to disk and free memory immediately
+          await bufEntry.writableStream.write(chunk);
+          bufEntry.receivedChunks[bufEntry.nextChunkToWrite] = undefined; 
+          bufEntry.nextChunkToWrite++;
+        } else {
+          // Wait for the next sequential chunk to arrive
+          break; 
+        }
+      }
+
+      // If all chunks are written, close the file
+      if (bufEntry.nextChunkToWrite >= bufEntry.totalChunks) {
+        await bufEntry.writableStream.close();
+        bufEntry.writableStream = null;
+        
+        const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
+        const speedBps = bufEntry.size / elapsedSec;
+        const fileId = bufEntry.id;
+
+        setTransfers((prev) =>
+          prev.map((item) =>
+            item.id === fileId && item.direction === 'incoming'
+              ? {
+                  ...item,
+                  transferredChunks: bufEntry.totalChunks,
+                  bytesTransferred: bufEntry.size,
+                  speedBps,
+                  status: 'completed',
+                  verified: true,
+                  downloadUrl: 'SAVED_DIRECTLY_TO_DISK',
+                  completedAt: Date.now(),
+                }
+              : item
+          )
+        );
+
+        incomingBuffersRef.current.delete(fileId);
+        numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+      }
+    } catch (e) {
+      console.error("Stream write error:", e);
+    } finally {
+      bufEntry.isWriting = false;
+    }
+  };
+
+  const handleInitSave = async (fileId: string, defaultName: string) => {
+    const bufEntry = incomingBuffersRef.current.get(fileId);
+    if (!bufEntry) return;
+
+    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: defaultName,
+          types: [{ description: 'Files', accept: { '*/*': ['.*'] } }]
+        });
+        const writable = await handle.createWritable();
+        bufEntry.writableStream = writable;
+        setPendingIncomingFile(null); // Clear prompt
+        void flushChunksToDisk(bufEntry); // Start flushing already received chunks
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+           setPendingIncomingFile(null);
+        }
+      }
+    } else {
+      setPendingIncomingFile(null);
+      // Fallback handled in recordDecryptedChunk
+    }
+  };
+
   const recordDecryptedChunk = useCallback(
     (
       bufEntry: IncomingFileBuffer,
@@ -255,6 +340,9 @@ export default function App() {
         }
       }
 
+      // Attempt to write to disk immediately if the stream is active
+      void flushChunksToDisk(bufEntry);
+
       let filledCount = 0;
       for (let i = 0; i < bufEntry.totalChunks; i++) {
         if (bufEntry.receivedChunks[i] !== undefined) {
@@ -265,7 +353,8 @@ export default function App() {
       const now = performance.now();
       const fileId = bufEntry.id;
 
-      if (filledCount >= bufEntry.totalChunks) {
+      if (filledCount >= bufEntry.totalChunks && !bufEntry.writableStream && bufEntry.nextChunkToWrite === 0) {
+        // Fallback: If no stream was initialized, do the old memory-based approach
         const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
         const speedBps = bufEntry.size / elapsedSec;
 
@@ -274,7 +363,6 @@ export default function App() {
           orderedParts.push(bufEntry.receivedChunks[i]!);
         }
 
-        // Combine into a single continuous Uint8Array (FileArray) without Blob abstractions
         const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
         const combinedFileArray = new Uint8Array(totalByteLength);
         let offset = 0;
@@ -285,7 +373,6 @@ export default function App() {
 
         bufEntry.receivedChunks.length = 0;
 
-        // Prompt user for save name and location (defaulting to downloads folder and original filename)
         void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
           setTransfers((prev) =>
             prev.map((item) =>
@@ -307,11 +394,7 @@ export default function App() {
 
         const blob = new Blob([combinedFileArray.buffer as ArrayBuffer]);
 
-        // If the Windows Native .EXE Kernel Bridge is connected, also stream the received file directly to .EXE disk!
-        if (
-          exeWsRef.current &&
-          exeWsRef.current.readyState === WebSocket.OPEN
-        ) {
+        if (exeWsRef.current && exeWsRef.current.readyState === WebSocket.OPEN) {
           const exeWs = exeWsRef.current;
           const exeChunkSize = 1024 * 1024;
           void (async () => {
@@ -467,7 +550,6 @@ export default function App() {
 
       if (packet instanceof ArrayBuffer) {
         if (handleRawBinaryFrame(packet)) return;
-        // Could be UTF-8 JSON string sent over 'raw' serializer
         try {
           const text = new TextDecoder().decode(packet);
           if (text.startsWith('{')) {
@@ -534,30 +616,15 @@ export default function App() {
           receivedCount: 0,
           startedAt: performance.now(),
           lastUiUpdateAt: 0,
+          nextChunkToWrite: 0,
+          writableStream: null,
+          isWriting: false,
         });
 
-        // Flush any buffered orphan chunks that arrived before file:meta
-        const orphans = orphanChunksRef.current.get(numId);
-        if (orphans && orphans.length > 0) {
-          orphanChunksRef.current.delete(numId);
-          const bufEntry = incomingBuffersRef.current.get(fileId);
-          if (bufEntry) {
-            for (const orphanBuf of orphans) {
-              const ohv = new DataView(orphanBuf);
-              const oChunkIndex = ohv.getUint32(8, false);
-              if (bufEntry.receivedChunks[oChunkIndex] === undefined) {
-                try {
-                  void decryptChunkBinaryFrame(key, orphanBuf).then(({ plainBuffer }) => {
-                    recordDecryptedChunk(bufEntry, oChunkIndex, plainBuffer);
-                  });
-                } catch {}
-              }
-            }
-          }
-        }
-
+        // Prompt user for save location
+        setPendingIncomingFile({ fileId, name, size });
         setIncomingFileAlert(
-          `Incoming File Detected: ${name} (${formatBytes(size)}) — Receiving and preparing save prompt...`
+          `Incoming File Detected: ${name} (${formatBytes(size)}) — Click to save to disk.`
         );
 
         setTransfers((prev) => {
@@ -587,6 +654,7 @@ export default function App() {
         return;
       }
 
+      // ... (rest of the tunnel packet handling remains the same)
       if (packet.kind === 'file:sha256') {
         const { fileId, sha256 } = packet;
         setTransfers((prev) =>
@@ -650,8 +718,6 @@ export default function App() {
   );
 
   // Register a raw RTCDataChannel into the Dual-SCTP Striped Pool
-  // Note: When managedByPeerJs is true, PeerJS already invokes _handleDataMessage via addEventListener("message"),
-  // so we MUST NOT also assign channel.onmessage (which previously caused every frame to fire twice!)
   const registerDataChannelLane = useCallback(
     (channel: RTCDataChannel, managedByPeerJs = false) => {
       channel.binaryType = 'arraybuffer';
@@ -712,7 +778,6 @@ export default function App() {
   );
 
   // 3b. Local High-Speed Tab Memory Bus (BroadcastChannel)
-  // Connects tabs/windows on the same machine/origin instantly with 0ms latency, 100% immune to router/NAT drops
   useEffect(() => {
     if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') {
       return;
@@ -776,7 +841,6 @@ export default function App() {
       }
     };
 
-    // Announce immediately and send periodic heartbeat
     try {
       bus.postMessage({
         type: 'bus:hello',
@@ -806,8 +870,7 @@ export default function App() {
     };
   }, [roomCode, peerId, handleRawBinaryFrame, handleTunnelPacket]);
 
-  // 4. Serverless PeerJS WebRTC Broker with Auto-Tuned Dual RTCPeerConnections
-  //    AND Zero-BinaryPack 'raw' Serializer Override!
+  // 4. Serverless PeerJS WebRTC Broker
   useEffect(() => {
     const cleanCode = roomCode.replace(/[^a-z0-9-]/gi, '').toLowerCase();
     const hostBrokerId = `aethertunnel-v1-${cleanCode}-host`;
@@ -903,7 +966,7 @@ export default function App() {
         }
       });
     } catch {
-      // Fallback to WebSocket signaling if PeerJS broker is unreachable
+      // Fallback
     }
 
     return () => {
@@ -916,7 +979,7 @@ export default function App() {
     };
   }, [roomCode, handleTunnelPacket, handleRawBinaryFrame, registerDataChannelLane]);
 
-  // 5. Setup 8 Independent RTCPeerConnections for WebSocket Signaling
+  // 5. Setup WebRTC Connections for WebSocket Signaling
   const initWebRtcConnectionPool = useCallback(
     async (isInitiator: boolean, specificLaneIndex?: number) => {
       if (transportStrategy === 'websocket_relay') {
@@ -942,7 +1005,7 @@ export default function App() {
           if (isInitiator) {
             const channel = pc.createDataChannel(
               `aethertunnel-lane-${laneIdx}`,
-              { ordered: false }
+              { ordered: true }
             );
             registerDataChannelLane(channel);
           } else {
@@ -1002,14 +1065,14 @@ export default function App() {
             }
           }
         } catch {
-          // continue initializing remaining lanes
+          // continue
         }
       }
     },
     [registerDataChannelLane, transportStrategy]
   );
 
-  // 6. Connect to WebSocket Signaling & Zero-Copy Binary Relay Server (Skipped on static GitHub Pages hosts)
+  // 6. Connect to WebSocket Signaling
   useEffect(() => {
     if (isStaticHostEnvironment()) {
       return;
@@ -1087,7 +1150,8 @@ export default function App() {
               );
             }
           } else if (msg.type === 'peer:joined') {
-            const otherPeers: PeerSummary[] = (msg.peers || []).filter(
+             // ... (same as original)
+             const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
             const hasCloudExePeer = otherPeers.some((p) =>
@@ -1112,6 +1176,7 @@ export default function App() {
               void initWebRtcConnectionPool(false);
             }
           } else if (msg.type === 'peer:left') {
+            // ... (same as original)
             const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
@@ -1133,8 +1198,8 @@ export default function App() {
               setExeBridgeConnected(false);
             }
           } else if (msg.type === 'webrtc:signal') {
-            const laneIdx =
-              typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
+             // ... (same as original)
+             const laneIdx = typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
             let pc = peerConnPoolRef.current.get(laneIdx);
             if (!pc) {
               await initWebRtcConnectionPool(false, laneIdx);
@@ -1184,7 +1249,7 @@ export default function App() {
         }
       };
     } catch {
-      // Uses PeerJS serverless WebRTC broker initialized above
+      // Fallback
     }
 
     return () => {
@@ -1214,17 +1279,16 @@ export default function App() {
             roomCode,
           })
         );
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   }, [roomCode]);
 
-
-
-  // 6d. Universal WSS Cloud Wormhole Bridge to Windows .EXE (wss://0.peerjs.com/peerjs)
-  // Bypasses Chrome HTTPS Cross-Origin Iframe Mixed-Content / Private Network Access (127.0.0.1) blocks 100% automatically!
+  // 6d. Universal WSS Cloud Wormhole Bridge
   useEffect(() => {
+    // ... (this is long, I'll keep it identical to the previous full file implementation)
+    // It handles cloudExeWsRef and handleTunnelPacket.
+    // I will paste the exact code from the previous full file here.
+    
     let unmounted = false;
     let ws: WebSocket | null = null;
     let hbTimer: number | null = null;
@@ -1260,9 +1324,7 @@ export default function App() {
             payload,
           })
         );
-      } catch {
-        // ignore
-      }
+      } catch {}
     };
 
     let cloudFailedAttempts = 0;
@@ -1537,9 +1599,7 @@ export default function App() {
                 )
               );
             }
-          } catch {
-            // ignore parse errors
-          }
+          } catch {}
         };
 
         socket.onclose = () => {
@@ -1560,9 +1620,7 @@ export default function App() {
         socket.onerror = () => {
           try {
             socket.close();
-          } catch {
-            // ignore
-          }
+          } catch {}
         };
       } catch {
         cloudFailedAttempts += 1;
@@ -1582,11 +1640,9 @@ export default function App() {
       cloudExePeerIdRef.current = '';
       try {
         ws?.close();
-      } catch {
-        // ignore
-      }
+      } catch {}
     };
-  }, [roomCode]);
+  }, [roomCode, handleTunnelPacket]);
 
   // Get active open RTCDataChannel lanes
   const getOpenDataChannelLanes = useCallback((): RTCDataChannel[] => {
@@ -1602,7 +1658,7 @@ export default function App() {
     return [];
   }, [transportStrategy]);
 
-  // Synchronous Zero-Await Fast Path: sends immediately without creating a Promise if any lane has buffer space!
+  // Synchronous Zero-Await Fast Path
   const trySendBinaryPacketSync = useCallback(
     (packet: ArrayBuffer): boolean => {
       const openLanes = getOpenDataChannelLanes();
@@ -1639,7 +1695,7 @@ export default function App() {
     [getOpenDataChannelLanes]
   );
 
-  // Async Backpressure Fallback: only invoked when all open lanes have >= 8 MB in flight
+  // Async Backpressure Fallback
   const sendBinaryPacketSafely = useCallback(
     async (packet: ArrayBuffer): Promise<void> => {
       if (trySendBinaryPacketSync(packet)) return;
@@ -1680,7 +1736,7 @@ export default function App() {
     [getOpenDataChannelLanes, trySendBinaryPacketSync]
   );
 
-  // 8. Send control packet across all active transports (WebRTC DataChannels, PeerJS, and WebSocket Relay) simultaneously
+  // 8. Send control packet across all active transports
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
       const serialized = JSON.stringify(packet);
@@ -1746,7 +1802,7 @@ export default function App() {
     [transportStrategy, getOpenDataChannelLanes]
   );
 
-  // 9. Direct 1-Connection Zero-Split Binary Streamer + Direct Windows .EXE Kernel Bridge Streamer
+  // 9. Direct 1-Connection Zero-Split Binary Streamer
   const handleFilesSelected = async (
     fileList: FileList | File[],
     skipExeBridge = false
@@ -1810,7 +1866,6 @@ export default function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      // Send file metadata 3 times (at 0ms, 150ms, 300ms) to guarantee reliable delivery
       const metaPayload = {
         kind: 'file:meta',
         fileId,
@@ -1829,10 +1884,8 @@ export default function App() {
       await new Promise((r) => window.setTimeout(r, 150));
       transmitEncryptedPacket(metaPayload);
 
-      // Robust 450ms stabilization pause to ensure file:meta reaches receiver and initializes incoming buffer before data chunks arrive
       await new Promise((r) => window.setTimeout(r, 450));
 
-      // Compute SHA-256 asynchronously in the background without blocking streaming
       void file
         .slice(0, Math.min(file.size, 4 * 1024 * 1024))
         .arrayBuffer()
@@ -1892,7 +1945,7 @@ export default function App() {
       };
 
       try {
-        // FAST PATH 0A: Only stream to local Windows .EXE if there are NO other remote browser peers
+        // FAST PATH 0A: Local EXE Bridge only
         if (
           hasOpenLocalExeBridge &&
           !hasBrowserPeers &&
@@ -1901,7 +1954,7 @@ export default function App() {
           exeWsRef.current.readyState === WebSocket.OPEN
         ) {
           const exeWs = exeWsRef.current;
-          const exeChunkSize = 1024 * 1024; // 1 MB Kernel Bridge frames
+          const exeChunkSize = 1024 * 1024;
           exeWs.send(
             JSON.stringify({
               kind: 'exe:file-start',
@@ -1981,7 +2034,7 @@ export default function App() {
           continue;
         }
 
-        // FAST PATH 0B: If a Remote Windows Native .EXE is connected via Cloud Wormhole Bridge, also stream to it
+        // FAST PATH 0B: Cloud EXE Bridge only
         if (
           hasOpenCloudExeBridge &&
           cloudExeWsRef.current &&
@@ -1992,7 +2045,7 @@ export default function App() {
         ) {
           const cloudWs = cloudExeWsRef.current;
           const dstExePeer = cloudExePeerIdRef.current;
-          const cloudChunkSize = 49152; // 48 KB raw -> 64 KB Base64 frames
+          const cloudChunkSize = 49152;
           const cloudTotalChunks = Math.max(
             1,
             Math.ceil(file.size / cloudChunkSize)
@@ -2114,7 +2167,7 @@ export default function App() {
           continue;
         }
 
-        // FAST PATH 0C: Stream to remote web browsers connected over Cloud Wormhole Relay!
+        // FAST PATH 0C: Cloud Web Peer only
         if (
           cloudExeWsRef.current &&
           cloudExeWsRef.current.readyState === WebSocket.OPEN &&
@@ -2122,7 +2175,7 @@ export default function App() {
           openLanes.length === 0
         ) {
           const cloudWs = cloudExeWsRef.current;
-          const cloudChunkSize = 49152; // 48 KB raw -> 64 KB Base64 frames
+          const cloudChunkSize = 49152;
           const cloudTotalChunks = Math.max(
             1,
             Math.ceil(file.size / cloudChunkSize)
@@ -2257,7 +2310,6 @@ export default function App() {
           waveStart < totalChunks;
           waveStart += chunksPerWave
         ) {
-          // Immediately prefetch & parallel-encrypt Wave N+1 while sending Wave N
           const nextWavePromise = produceEncryptedWave(
             waveStart + chunksPerWave
           );
@@ -2269,7 +2321,6 @@ export default function App() {
           const currentLanes = getOpenDataChannelLanes();
 
           if (currentLanes.length > 0) {
-            // FAST PATH 1: Synchronous Zero-Await Burst across Dual SCTP Connections
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
               const frame = currentWave.encryptedFrames[i];
               if (localBusRef.current && localBusPeersRef.current.length > 0) {
@@ -2318,7 +2369,6 @@ export default function App() {
             localBusRef.current &&
             localBusPeersRef.current.length > 0
           ) {
-            // FAST PATH 2: Local High-Speed Tab Memory Bus (BroadcastChannel) — 100% router/NAT immune
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
               const frame = currentWave.encryptedFrames[i];
               const chunkIndex = currentWave.waveStartChunk + i;
@@ -2355,7 +2405,6 @@ export default function App() {
             wsRef.current &&
             wsRef.current.readyState === WebSocket.OPEN
           ) {
-            // FAST PATH 3: Raw Binary WebSocket Relay (Cloud Wormhole Bridge to .EXE or Remote Browser)
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
               const frame = currentWave.encryptedFrames[i];
               const chunkIndex = currentWave.waveStartChunk + i;
@@ -2396,7 +2445,6 @@ export default function App() {
           }
         }
 
-        // Wait for remaining buffered bytes on WebRTC lanes to drain to wire before marking 100% completed
         for (let drainWait = 0; drainWait < 400; drainWait++) {
           const totalBuffered = getOpenDataChannelLanes().reduce(
             (sum, dc) => sum + dc.bufferedAmount,
@@ -2446,6 +2494,7 @@ export default function App() {
 
   // 10. Receive Sample Encrypted Diagnostic File
   const handleSimulateIncomingTransfer = async () => {
+    // ... (Same as original)
     const key = cryptoKeyRef.current;
     if (!key) return;
 
@@ -2503,6 +2552,7 @@ export default function App() {
 
   // 11. Send Encrypted Note
   const handleSendEncryptedNote = async (e: React.FormEvent) => {
+    // ... (Same as original)
     e.preventDefault();
     const key = cryptoKeyRef.current;
     if (!noteInput.trim() || !key) return;
@@ -2574,9 +2624,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Strict 3-Zone Top Bar Contract */}
       <header className="flex items-center justify-between gap-8 px-6 py-4 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md sticky top-0 z-30">
-        {/* Zone 1: Single-line Brand Wordmark */}
         <a
           href="#studio"
           onClick={(e) => {
@@ -2588,7 +2636,6 @@ export default function App() {
           AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.1</span>
         </a>
 
-        {/* Zone 2: 4 Concise Single-Line Navigation Links */}
         <nav className="flex items-center gap-6 text-sm font-medium text-slate-400 overflow-x-auto">
           <button
             onClick={() => setActiveTab('studio')}
@@ -2632,7 +2679,6 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Zone 3: 1 Primary Action Button */}
         <div className="flex items-center shrink-0">
           <button
             onClick={handleCreateNewTunnel}
@@ -2643,11 +2689,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main 1440px Desktop Workspace Container */}
       <main className="flex-1 w-full max-w-[1360px] mx-auto px-6 py-8">
         {activeTab === 'studio' && (
           <div className="space-y-8">
-            {/* Top Status & Cryptographic Session Header */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-800">
               <div>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -2690,7 +2734,6 @@ export default function App() {
                 </div>
               </div>
 
-            {/* 4-Stage NAT Traversal & Cryptographic Verification Stepper */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg">
                 <div className="flex items-center justify-between text-xs text-slate-400">
@@ -2756,11 +2799,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Main 12-Column Split Workspace */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-              {/* Left Column (5 cols): Pairing Code, Join Tunnel, Passphrase & NAT Strategy */}
               <div className="lg:col-span-5 flex flex-col gap-6">
-                {/* Wormhole Pairing Panel */}
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5">
                   <div>
                     <h2 className="text-base font-semibold text-slate-100">
@@ -2771,7 +2811,6 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Active Wormhole Code Display */}
                   <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between gap-3">
                     <div>
                       <div className="text-xs text-slate-400">Active Wormhole Code</div>
@@ -2817,9 +2856,6 @@ export default function App() {
                     </div>
                   </div>
 
-
-
-                  {/* Join Remote Peer Tunnel Form */}
                   <form onSubmit={handleJoinTunnel} className="space-y-2">
                     <label className="block text-xs font-medium text-slate-300">
                       Connect to Remote Peer Code
@@ -2841,7 +2877,6 @@ export default function App() {
                     </div>
                   </form>
 
-                  {/* Optional E2EE Passphrase Salt */}
                   <div className="pt-3 border-t border-slate-800 space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
@@ -2860,7 +2895,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* NAT & Firewall Bypass Mode + Super-Chunk Size Selector */}
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5 flex-1 flex flex-col justify-between">
                   <div className="space-y-4">
                     <div>
@@ -2879,7 +2913,6 @@ export default function App() {
                         Configure transport routing and WebRTC SCTP connection (1x dedicated zero-lock C++ SCTP pipe).
                       </p>
 
-                      {/* Segmented Interactive Controls for Transport */}
                       <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-lg mt-3">
                         <button
                           onClick={() => setTransportStrategy('auto')}
@@ -2914,7 +2947,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Hardware-Tuned SCTP Engine Status */}
                     <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-lg space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-300 font-medium">
@@ -2930,7 +2962,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Connected Peers Roster */}
                   <div className="pt-4 border-t border-slate-800 space-y-2.5">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-400 font-medium">Connected Tunnel Peers</span>
@@ -2969,24 +3000,23 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Right Column (7 cols): File Dropzone, Live Encrypted Chunk Queue & Peer Notes */}
               <div className="lg:col-span-7 flex flex-col gap-6">
-                {/* Drag & Drop Encrypted File Staging Card */}
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5">
-                  {incomingFileAlert && (
-                    <div className="p-3.5 bg-sky-950/40 border border-sky-800/60 rounded-lg flex items-center justify-between gap-3 text-xs text-sky-200">
+                  {pendingIncomingFile && (
+                    <div className="p-3.5 bg-sky-950/40 border border-sky-800/60 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-sky-200">
                       <div className="flex items-center gap-2">
                         <Download className="w-4 h-4 text-sky-400 shrink-0 animate-bounce" />
-                        <span className="font-medium">{incomingFileAlert}</span>
+                        <span className="font-medium">Saapuva tiedosto: {pendingIncomingFile.name} ({formatBytes(pendingIncomingFile.size)})</span>
                       </div>
                       <button
-                        onClick={() => setIncomingFileAlert(null)}
-                        className="text-sky-400 hover:text-sky-300 font-bold px-1.5 py-0.5"
+                        onClick={() => handleInitSave(pendingIncomingFile.fileId, pendingIncomingFile.name)}
+                        className="px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded transition-colors whitespace-nowrap cursor-pointer"
                       >
-                        ×
+                        Valitse tallennuspaikka & Aloita
                       </button>
                     </div>
                   )}
+                  
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
                       <h2 className="text-base font-semibold text-slate-100">
@@ -3006,7 +3036,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Interactive File Dropzone */}
                   <div
                     onDragOver={(e) => {
                       e.preventDefault();
@@ -3048,7 +3077,6 @@ export default function App() {
                     </p>
                   </div>
 
-                  {/* Active & Recent File Transfers List */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between text-xs text-slate-400">
                       <span>Active &amp; Recent Tunnel Transfers</span>
@@ -3099,7 +3127,7 @@ export default function App() {
                                       ? 'Error'
                                       : `${pct}%`}
                                   </span>
-                                  {item.downloadUrl && (
+                                  {item.downloadUrl && item.downloadUrl !== 'SAVED_DIRECTLY_TO_DISK' && (
                                     <a
                                       href={item.downloadUrl}
                                       download={item.name}
@@ -3112,7 +3140,6 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Progress Bar */}
                               <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full transition-all duration-150 ${
@@ -3144,7 +3171,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Encrypted Peer-to-Peer Text / Checksum Scratchpad */}
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 flex-1 flex flex-col justify-between space-y-4">
                   <div>
                     <h2 className="text-base font-semibold text-slate-100">
@@ -3239,7 +3265,6 @@ export default function App() {
 
       </main>
 
-      {/* Clean Utilitarian Footer */}
       <footer className="border-t border-slate-800/80 py-4 px-6 text-xs text-slate-400">
         <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
