@@ -264,11 +264,16 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => downloadNativeWindowsKernelExe(currentRoomCode)}
+              onClick={() =>
+                downloadNativeWindowsKernelExe(
+                  currentRoomCode,
+                  `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
+                )
+              }
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
-              Download Native Kernel-Socket .EXE (Windows)
+              Download Native Kernel-Socket .EXE (v7 High-DPI)
             </button>
             <button
               onClick={handleDownloadStandaloneHtml}
@@ -310,11 +315,16 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
                   <td className="py-3.5 px-6 text-right">
                     {art.filename.endsWith('.exe') ? (
                       <button
-                        onClick={() => downloadNativeWindowsKernelExe(currentRoomCode)}
+                        onClick={() =>
+                          downloadNativeWindowsKernelExe(
+                            currentRoomCode,
+                            `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
+                          )
+                        }
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors whitespace-nowrap cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Download Kernel .EXE
+                        Download Kernel .EXE (v7)
                       </button>
                     ) : (
                       <a

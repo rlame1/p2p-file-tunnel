@@ -22,7 +22,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     <header class="flex items-center justify-between pb-4 border-b border-slate-800">
       <div>
         <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel Portable</span>
-        <span class="ml-3 text-xs text-emerald-400 font-mono">4-Lane Ultra-Turbo Binary WebRTC + AES-256-GCM</span>
+        <span class="ml-3 text-xs text-emerald-400 font-mono">1-Lane Ultra-Turbo Binary WebRTC + AES-256-GCM</span>
       </div>
       <div id="status-badge" class="text-xs font-mono text-sky-400">Initializing P2P Node...</div>
     </header>
@@ -45,15 +45,14 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         <div>
           <label class="block text-xs text-slate-400 mb-1">Crypto Super-Chunk Size</label>
           <select id="chunk-select" class="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400">
-            <option value="256">256 KB (Standard Direct Frame)</option>
+            <option value="240" selected>240 KB (Zero-Split SCTP — Recommended)</option>
             <option value="512">512 KB (Turbo 2x)</option>
-            <option value="1024" selected>1 MB (Ultra-Turbo 4x — Recommended)</option>
-            <option value="2048">2 MB (Extreme 8x Super-Block)</option>
+            <option value="1024">1 MB (Ultra-Turbo 4x)</option>
           </select>
         </div>
         <div class="pt-3 border-t border-slate-800 text-xs space-y-1">
           <div class="flex justify-between"><span class="text-slate-400">AES-256-GCM Key Fingerprint:</span><span id="fp-label" class="font-mono text-emerald-400">Computing...</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">4-Lane Unordered SCTP + Zero-Base64</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">1x Direct SCTP + Zero-Base64</span></div>
         </div>
       </div>
 
@@ -62,7 +61,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
-          <div class="text-xs text-slate-400 mt-1">8x Parallel RTCPeerConnections · 240 KB Atomic Zero-Copy Frames · Raw Serializer</div>
+          <div class="text-xs text-slate-400 mt-1">1x Dedicated RTCPeerConnection · 240 KB Atomic Zero-Copy Frames · Raw Serializer</div>
         </label>
         <div id="transfer-list" class="space-y-2 max-h-64 overflow-y-auto text-xs">
           <div class="text-slate-500 text-center py-4">No transfers yet. Connect with a peer and select a file.</div>
@@ -88,11 +87,14 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
     async function deriveKey(code, pass) {
       const enc = new TextEncoder();
-      const baseKey = await crypto.subtle.importKey('raw', enc.encode(code.trim().toLowerCase() + '::' + pass.trim()), 'PBKDF2', false, ['deriveKey', 'deriveBits']);
-      currentKey = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-E2EE-v1-Salt-2026'), iterations: 100000, hash: 'SHA-256' }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-Fingerprint-Salt'), iterations: 1000, hash: 'SHA-256' }, baseKey, 64);
-      const hex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0').toUpperCase());
-      document.getElementById('fp-label').textContent = hex[0]+hex[1]+' · '+hex[2]+hex[3]+' · '+hex[4]+hex[5];
+      const clean = code.trim().toLowerCase();
+      const secret = clean + (pass ? '::' + pass : '');
+      const baseKey = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
+      currentKey = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-v1-ZeroKnowledge-Salt::' + clean), iterations: 100000, hash: 'SHA-256' }, baseKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+      const rawBytes = await crypto.subtle.exportKey('raw', currentKey);
+      const digest = await crypto.subtle.digest('SHA-256', rawBytes);
+      const hex = Array.from(new Uint8Array(digest).slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+      document.getElementById('fp-label').textContent = hex;
     }
 
     async function handleCompleteAethFrame(buf) {
@@ -120,7 +122,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         const pct = Math.round((incomingFile.receivedCount / incomingFile.totalChunks) * 100);
         const elapsed = Math.max(0.02, (now - incomingFile.startedAt) / 1000);
         const mbps = ((incomingFile.receivedCount * incomingFile.chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
-        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s · ' + rawLanes.filter(d => d.readyState === 'open').length + 'x Lanes)');
+        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s)');
       }
     }
 
@@ -181,7 +183,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         rawLanes = [];
       }
       if (conn.dataChannel) registerRawLane(conn.dataChannel, conn);
-      document.getElementById('status-badge').textContent = 'Connected ' + rawLanes.length + 'x-Lane P2P (' + conn.peer + ')';
+      document.getElementById('status-badge').textContent = 'Connected P2P (' + conn.peer + ')';
       document.getElementById('status-badge').className = 'text-xs font-mono text-emerald-400';
 
       conn.on('data', async (data) => {
@@ -234,17 +236,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           });
           peer.on('open', () => {
             const conn = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: 0 } });
-            conn.on('open', () => {
-              setupConnection(conn, true);
-              for (let i = 1; i < PARALLEL_LANES; i++) {
-                setTimeout(() => {
-                  try {
-                    const extra = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: i } });
-                    extra.on('open', () => setupConnection(extra, false));
-                  } catch {}
-                }, i * 35);
-              }
-            });
+            conn.on('open', () => setupConnection(conn, true));
           });
           peer.on('connection', (conn) => {
             const isPrimary = !conn.metadata || !conn.metadata.laneIndex;
@@ -261,7 +253,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         renderStatus('Wait for a remote peer to connect to room "' + document.getElementById('room-input').value + '" first.');
         return;
       }
-      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 1024;
+      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
       const chunkSize = chunkKb * 1024;
       const file = files[0];
       const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
@@ -270,7 +262,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
       activeConn.send(JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' }));
 
-      const batchSize = Math.max(4, Math.min(32, Math.floor((16 * 1024 * 1024) / chunkSize)));
+      const batchSize = 32;
       let laneCursor = 0;
 
       for (let bStart = 0; bStart < totalChunks; bStart += batchSize) {
@@ -297,61 +289,14 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
         const openLanes = rawLanes.filter(d => d.readyState === 'open');
         for (const frame of frames) {
-          const totalBytes = frame.byteLength;
-          const slices = [];
-          if (totalBytes <= MAX_SCTP_SLICE + 24) {
-            slices.push(frame);
+          if (openLanes.length > 0) {
+            let dc = openLanes[0];
+            while (dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
+              await new Promise(r => setTimeout(r, 6));
+            }
+            dc.send(frame);
           } else {
-            const mh = new DataView(frame);
-            const tId = mh.getUint32(4, false);
-            const cIdx = mh.getUint32(8, false);
-            const parts = Math.ceil(totalBytes / MAX_SCTP_SLICE);
-            const src = new Uint8Array(frame);
-            for (let p = 0; p < parts; p++) {
-              const off = p * MAX_SCTP_SLICE;
-              const len = Math.min(MAX_SCTP_SLICE, totalBytes - off);
-              const sf = new Uint8Array(24 + len);
-              const sv = new DataView(sf.buffer);
-              sv.setUint32(0, MAGIC_AETP, false);
-              sv.setUint32(4, tId, false);
-              sv.setUint32(8, cIdx, false);
-              sv.setUint32(12, totalBytes, false);
-              sv.setUint32(16, off, false);
-              sv.setUint16(20, p, false);
-              sv.setUint16(22, parts, false);
-              sf.set(src.subarray(off, off + len), 24);
-              slices.push(sf.buffer);
-            }
-          }
-
-          for (const packet of slices) {
-            if (openLanes.length > 0) {
-              for (let attempt = 0; attempt < 10000; attempt++) {
-                let dc = openLanes[laneCursor % openLanes.length];
-                laneCursor++;
-                for (let k = 0; k < openLanes.length; k++) {
-                  if (openLanes[k].bufferedAmount < dc.bufferedAmount) dc = openLanes[k];
-                }
-                if (dc.bufferedAmount + packet.byteLength > HIGH_WATER) {
-                  await new Promise(r => {
-                    let doneFlag = false;
-                    const done = () => { if (!doneFlag) { doneFlag = true; dc.removeEventListener('bufferedamountlow', done); r(); } };
-                    dc.bufferedAmountLowThreshold = LOW_WATER;
-                    dc.addEventListener('bufferedamountlow', done);
-                    setTimeout(done, 12);
-                  });
-                  continue;
-                }
-                try {
-                  dc.send(packet);
-                  break;
-                } catch {
-                  await new Promise(r => setTimeout(r, 15));
-                }
-              }
-            } else {
-              activeConn.send(packet);
-            }
+            activeConn.send(frame);
           }
         }
 
@@ -475,31 +420,62 @@ export function triggerBrowserDownload(
 }
 
 // Client-side PE32 builder for the Native Windows 64-bit Kernel-Socket Desktop Application (.exe)
-// Uses Windows Winsock2 Direct TCP (16 MB Kernel Socket Buffers) + 4x Parallel Hardware AES-NI + Direct NVMe FileStream (0% WebRTC)
-export function downloadNativeWindowsKernelExe(defaultRoomCode: string = '742-cobalt-falcon') {
-  const safeRoom = (defaultRoomCode || '742-cobalt-falcon').replace(/[^a-z0-9-]/gi, '').toLowerCase();
+// Features:
+// - Per-Monitor V2 High-DPI Awareness (razor-sharp native resolution on Windows 11 125%/150%/200% displays)
+// - Exact RFC 2898 PBKDF2-HMAC-SHA256 Key & Fingerprint parity with WebCrypto
+// - Dual Browser Bridge: Localhost Kernel WebSocket (127.0.0.1:45889) + Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
+// - Direct Winsock2 Kernel TCP (.EXE <-> .EXE, 4 MB blocks, 4x Parallel AES-NI)
+export function downloadNativeWindowsKernelExe(
+  defaultRoomCode: string = '742-cobalt-falcon',
+  _cloudWsUrl?: string
+) {
+  const safeRoom = (defaultRoomCode || '742-cobalt-falcon').replace(/[^a-z0-9-]/gi, '').toLowerCase() || '742-cobalt-falcon';
 
   const csharpKernelSource = `
 using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Security.Cryptography;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace AetherTunnelNative
 {
     static class Program
     {
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiFlag);
+
+        [DllImport("shcore.dll")]
+        private static extern int SetProcessDpiAwareness(int value);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [STAThread]
         static void Main()
         {
+            // Enable Per-Monitor V2 High-DPI rendering on Windows 10/11 so text and controls are 100% razor-sharp
+            try { SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch { }
+            try { SetProcessDpiAwareness(2); } catch { }
+            try { SetProcessDPIAware(); } catch { }
+
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
+            }
+            catch { }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
@@ -509,9 +485,15 @@ namespace AetherTunnelNative
     public class MainForm : Form
     {
         private const uint MAGIC_HEADER = 0x4145544B; // "AETK" (AetherTunnel Kernel Frame)
-        private const int CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB Direct Kernel Socket Macro-Block
-        private const int PARALLEL_WORKERS = 4; // 4x Parallel Hardware AES-NI Workers per Wave (16 MB Wave)
+        private const int CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB Direct Kernel Socket Macro-Block (.EXE <-> .EXE)
+        private const int WS_CHUNK_SIZE = 1024 * 1024; // 1 MB Localhost WebSocket Frame (.EXE <-> Local Browser)
+        private const int CLOUD_CHUNK_SIZE = 49152; // 48 KB Binary / 64 KB Base64 Frame for WSS Cloud Bridge
+        private const int PARALLEL_WORKERS = 4; // 4x Parallel Hardware AES-NI Workers per Wave
         private const int UDP_DISCOVERY_PORT = 45888;
+
+        private readonly string instanceId = Guid.NewGuid().ToString("N").Substring(0, 12);
+        private bool suppressRoomBroadcast = false;
+        private float dpiScale = 1.0f;
 
         private TextBox txtRoomCode;
         private TextBox txtPassphrase;
@@ -533,24 +515,52 @@ namespace AetherTunnelNative
         private int listenPort = 45889;
         private volatile bool isRunning = true;
 
+        // 1. Native .EXE <-> .EXE Kernel TCP Peer
         private TcpClient activePeerClient;
         private NetworkStream activePeerStream;
         private readonly object streamWriteLock = new object();
+
+        // 2. Native .EXE <-> Local Browser Kernel WebSocket Bridge (ws://127.0.0.1:45889)
+        private TcpClient activeBrowserWsClient;
+        private NetworkStream activeBrowserWsStream;
+        private readonly object wsWriteLock = new object();
+
+        // 3. Native .EXE <-> Chrome Browser Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
+        private ClientWebSocket activeCloudWs;
+        private string activeCloudMyId = "";
+        private string activeCloudBrowserPeerId = "";
+        private DateTime lastCloudBrowserSeen = DateTime.MinValue;
+        private volatile bool cloudReconnectRequested = false;
+        private readonly object cloudSendLock = new object();
+        private readonly AutoResetEvent cloudAckEvent = new AutoResetEvent(false);
 
         private byte[] aesKey = new byte[32];
         private string currentFingerprint = "Deriving...";
         private string downloadDirectory;
 
+        private int S(int px)
+        {
+            return (int)Math.Round(px * dpiScale);
+        }
+
         public MainForm()
         {
-            this.Text = "AetherTunnel Native Kernel-Socket Edition (Winsock2 Direct TCP + Hardware AES-256)";
-            this.Size = new Size(980, 700);
-            this.MinimumSize = new Size(880, 640);
+            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
+            {
+                dpiScale = g.DpiX / 96.0f;
+                if (dpiScale < 1.0f) dpiScale = 1.0f;
+            }
+
+            this.AutoScaleMode = AutoScaleMode.None;
+            this.Text = "AetherTunnel Native Kernel-Socket Edition v7 (High-DPI · .EXE <-> Chrome Browser & .EXE <-> .EXE)";
+            this.ClientSize = new Size(S(980), S(660));
+            this.MinimumSize = new Size(S(880), S(620));
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(9, 13, 22);
             this.ForeColor = Color.FromArgb(241, 245, 249);
             this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
             this.AllowDrop = true;
+            this.DoubleBuffered = true;
 
             downloadDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -570,6 +580,18 @@ namespace AetherTunnelNative
             this.FormClosing += OnFormClosing;
         }
 
+        private Label CreateCleanLabel(string text, Font font, Color color, Point location, bool autoSize)
+        {
+            Label lbl = new Label();
+            lbl.UseMnemonic = false;
+            lbl.Text = text;
+            if (font != null) lbl.Font = font;
+            lbl.ForeColor = color;
+            lbl.Location = location;
+            lbl.AutoSize = autoSize;
+            return lbl;
+        }
+
         private void BuildUserInterface()
         {
             Color bgCard = Color.FromArgb(15, 23, 42);
@@ -580,32 +602,34 @@ namespace AetherTunnelNative
 
             Panel headerPanel = new Panel();
             headerPanel.Dock = DockStyle.Top;
-            headerPanel.Height = 76;
+            headerPanel.Height = S(78);
             headerPanel.BackColor = Color.FromArgb(12, 18, 30);
-            headerPanel.Padding = new Padding(24, 14, 24, 14);
 
-            Label lblTitle = new Label();
-            lblTitle.Text = "AetherTunnel — Native Kernel-Socket Engine (.EXE)";
-            lblTitle.Font = new Font("Segoe UI Semibold", 15f, FontStyle.Bold);
-            lblTitle.ForeColor = Color.FromArgb(248, 250, 252);
-            lblTitle.Location = new Point(24, 12);
-            lblTitle.AutoSize = true;
+            Label lblTitle = CreateCleanLabel(
+                "AetherTunnel — Native Kernel-Socket Engine (.EXE v7)",
+                new Font("Segoe UI Semibold", 14.5f, FontStyle.Bold),
+                Color.FromArgb(248, 250, 252),
+                new Point(S(24), S(12)),
+                true
+            );
             headerPanel.Controls.Add(lblTitle);
 
-            Label lblSubtitle = new Label();
-            lblSubtitle.Text = "0% WebRTC · 0% 1200B SCTP Fragmentation · 4 MB Kernel Winsock2 TCP Frames · Direct NVMe FileStream I/O";
-            lblSubtitle.Font = new Font("Consolas", 9f, FontStyle.Regular);
-            lblSubtitle.ForeColor = accentSky;
-            lblSubtitle.Location = new Point(26, 44);
-            lblSubtitle.AutoSize = true;
+            Label lblSubtitle = CreateCleanLabel(
+                "Per-Monitor V2 High-DPI · Chrome Browser Wormhole Bridge (WSS + Local 45889) · Direct Winsock2 TCP (.EXE <-> .EXE)",
+                new Font("Consolas", 8.8f, FontStyle.Regular),
+                accentSky,
+                new Point(S(26), S(46)),
+                true
+            );
             headerPanel.Controls.Add(lblSubtitle);
 
-            lblStatusBadge = new Label();
-            lblStatusBadge.Text = "LISTENING (KERNEL TCP)";
-            lblStatusBadge.Font = new Font("Consolas", 9.5f, FontStyle.Bold);
-            lblStatusBadge.ForeColor = accentEmerald;
-            lblStatusBadge.AutoSize = true;
-            lblStatusBadge.Location = new Point(700, 26);
+            lblStatusBadge = CreateCleanLabel(
+                "CONNECTING WORMHOLE BRIDGE...",
+                new Font("Consolas", 9.5f, FontStyle.Bold),
+                accentEmerald,
+                new Point(S(610), S(16)),
+                true
+            );
             lblStatusBadge.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             headerPanel.Controls.Add(lblStatusBadge);
 
@@ -613,22 +637,26 @@ namespace AetherTunnelNative
 
             Panel leftCard = new Panel();
             leftCard.BackColor = bgCard;
-            leftCard.Location = new Point(24, 92);
-            leftCard.Size = new Size(430, 540);
+            leftCard.Location = new Point(S(24), S(94));
+            leftCard.Size = new Size(S(436), S(544));
             leftCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
 
-            Label lblSec1 = new Label();
-            lblSec1.Text = "1. Wormhole Pairing & Kernel TCP Endpoint";
-            lblSec1.Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
-            lblSec1.Location = new Point(20, 18);
-            lblSec1.AutoSize = true;
+            Label lblSec1 = CreateCleanLabel(
+                "1. Wormhole Pairing & Kernel TCP Endpoint",
+                new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
+                Color.White,
+                new Point(S(20), S(16)),
+                true
+            );
             leftCard.Controls.Add(lblSec1);
 
-            Label lblCodeTitle = new Label();
-            lblCodeTitle.Text = "Shared Wormhole Code (Auto-discovers peer on LAN & WAN):";
-            lblCodeTitle.ForeColor = fgMuted;
-            lblCodeTitle.Location = new Point(20, 52);
-            lblCodeTitle.AutoSize = true;
+            Label lblCodeTitle = CreateCleanLabel(
+                "Shared Wormhole Code (Pairs with Chrome Browser & LAN .EXE):",
+                null,
+                fgMuted,
+                new Point(S(20), S(48)),
+                true
+            );
             leftCard.Controls.Add(lblCodeTitle);
 
             txtRoomCode = new TextBox();
@@ -637,18 +665,24 @@ namespace AetherTunnelNative
             txtRoomCode.BackColor = bgInput;
             txtRoomCode.ForeColor = accentSky;
             txtRoomCode.BorderStyle = BorderStyle.FixedSingle;
-            txtRoomCode.Location = new Point(20, 76);
-            txtRoomCode.Size = new Size(275, 28);
-            txtRoomCode.TextChanged += delegate { DeriveCryptographicKey(); BroadcastUdpPresence(); };
+            txtRoomCode.Location = new Point(S(20), S(72));
+            txtRoomCode.Size = new Size(S(285), S(28));
+            txtRoomCode.TextChanged += delegate {
+                DeriveCryptographicKey();
+                BroadcastUdpPresence();
+                if (!suppressRoomBroadcast) NotifyBrowserRoomCode();
+                cloudReconnectRequested = true;
+            };
             leftCard.Controls.Add(txtRoomCode);
 
             Button btnNewCode = new Button();
+            btnNewCode.UseMnemonic = false;
             btnNewCode.Text = "New Code";
             btnNewCode.FlatStyle = FlatStyle.Flat;
             btnNewCode.BackColor = Color.FromArgb(30, 41, 59);
             btnNewCode.ForeColor = Color.White;
-            btnNewCode.Location = new Point(305, 75);
-            btnNewCode.Size = new Size(105, 28);
+            btnNewCode.Location = new Point(S(313), S(71));
+            btnNewCode.Size = new Size(S(103), S(29));
             btnNewCode.Click += delegate {
                 string[] words = new string[] { "cobalt", "falcon", "nebula", "quartz", "vortex", "cipher", "zenith", "aurora", "photon", "obsidian" };
                 Random r = new Random();
@@ -656,11 +690,13 @@ namespace AetherTunnelNative
             };
             leftCard.Controls.Add(btnNewCode);
 
-            Label lblPassTitle = new Label();
-            lblPassTitle.Text = "Optional E2EE Passphrase (PBKDF2-SHA256 Salt):";
-            lblPassTitle.ForeColor = fgMuted;
-            lblPassTitle.Location = new Point(20, 118);
-            lblPassTitle.AutoSize = true;
+            Label lblPassTitle = CreateCleanLabel(
+                "Optional E2EE Passphrase (PBKDF2-HMAC-SHA256 Salt):",
+                null,
+                fgMuted,
+                new Point(S(20), S(112)),
+                true
+            );
             leftCard.Controls.Add(lblPassTitle);
 
             txtPassphrase = new TextBox();
@@ -669,161 +705,202 @@ namespace AetherTunnelNative
             txtPassphrase.BackColor = bgInput;
             txtPassphrase.ForeColor = Color.White;
             txtPassphrase.BorderStyle = BorderStyle.FixedSingle;
-            txtPassphrase.Location = new Point(20, 142);
-            txtPassphrase.Size = new Size(390, 26);
+            txtPassphrase.Location = new Point(S(20), S(136));
+            txtPassphrase.Size = new Size(S(396), S(26));
             txtPassphrase.TextChanged += delegate { DeriveCryptographicKey(); };
             leftCard.Controls.Add(txtPassphrase);
 
-            Label lblFpCaption = new Label();
-            lblFpCaption.Text = "AES-256 Hardware Key Fingerprint:";
-            lblFpCaption.ForeColor = fgMuted;
-            lblFpCaption.Location = new Point(20, 180);
-            lblFpCaption.AutoSize = true;
+            Label lblFpCaption = CreateCleanLabel(
+                "E2EE Key Fingerprint (Matches Chrome Browser 1:1):",
+                null,
+                fgMuted,
+                new Point(S(20), S(172)),
+                true
+            );
             leftCard.Controls.Add(lblFpCaption);
 
-            lblKeyFingerprint = new Label();
-            lblKeyFingerprint.Text = "Deriving...";
-            lblKeyFingerprint.Font = new Font("Consolas", 10.5f, FontStyle.Bold);
-            lblKeyFingerprint.ForeColor = accentEmerald;
-            lblKeyFingerprint.Location = new Point(20, 202);
-            lblKeyFingerprint.AutoSize = true;
+            lblKeyFingerprint = CreateCleanLabel(
+                "Deriving...",
+                new Font("Consolas", 11f, FontStyle.Bold),
+                accentEmerald,
+                new Point(S(20), S(194)),
+                true
+            );
             leftCard.Controls.Add(lblKeyFingerprint);
 
-            Label lblLocalCaption = new Label();
-            lblLocalCaption.Text = "Your Direct Kernel TCP Listener Address:";
-            lblLocalCaption.ForeColor = fgMuted;
-            lblLocalCaption.Location = new Point(20, 238);
-            lblLocalCaption.AutoSize = true;
+            Label lblLocalCaption = CreateCleanLabel(
+                "Your Direct Kernel TCP & Local Browser Bridge Address:",
+                null,
+                fgMuted,
+                new Point(S(20), S(228)),
+                true
+            );
             leftCard.Controls.Add(lblLocalCaption);
 
-            lblLocalEndpoint = new Label();
-            lblLocalEndpoint.Text = "Starting Winsock2 listener...";
-            lblLocalEndpoint.Font = new Font("Consolas", 9.5f, FontStyle.Bold);
-            lblLocalEndpoint.ForeColor = Color.FromArgb(226, 232, 240);
-            lblLocalEndpoint.Location = new Point(20, 260);
-            lblLocalEndpoint.Size = new Size(390, 38);
+            lblLocalEndpoint = CreateCleanLabel(
+                "Starting Winsock2 listener...",
+                new Font("Consolas", 9.2f, FontStyle.Bold),
+                Color.FromArgb(226, 232, 240),
+                new Point(S(20), S(250)),
+                false
+            );
+            lblLocalEndpoint.Size = new Size(S(396), S(38));
             leftCard.Controls.Add(lblLocalEndpoint);
 
-            Label lblPeerTitle = new Label();
-            lblPeerTitle.Text = "Remote Peer IP:Port (or leave for Auto LAN Discovery):";
-            lblPeerTitle.ForeColor = fgMuted;
-            lblPeerTitle.Location = new Point(20, 304);
-            lblPeerTitle.AutoSize = true;
+            Label lblPeerTitle = CreateCleanLabel(
+                "Direct LAN .EXE Connect (Optional Remote IP:Port):",
+                null,
+                fgMuted,
+                new Point(S(20), S(294)),
+                true
+            );
             leftCard.Controls.Add(lblPeerTitle);
 
             txtPeerEndpoint = new TextBox();
-            txtPeerEndpoint.Text = "127.0.0.1:45889";
-            txtPeerEndpoint.Font = new Font("Consolas", 10.5f);
+            txtPeerEndpoint.Text = "";
+            txtPeerEndpoint.Font = new Font("Consolas", 10f);
             txtPeerEndpoint.BackColor = bgInput;
             txtPeerEndpoint.ForeColor = Color.White;
             txtPeerEndpoint.BorderStyle = BorderStyle.FixedSingle;
-            txtPeerEndpoint.Location = new Point(20, 328);
-            txtPeerEndpoint.Size = new Size(255, 28);
+            txtPeerEndpoint.Location = new Point(S(20), S(318));
+            txtPeerEndpoint.Size = new Size(S(260), S(28));
             leftCard.Controls.Add(txtPeerEndpoint);
 
             btnConnectPeer = new Button();
-            btnConnectPeer.Text = "Connect TCP";
+            btnConnectPeer.UseMnemonic = false;
+            btnConnectPeer.Text = "Connect .EXE";
             btnConnectPeer.FlatStyle = FlatStyle.Flat;
             btnConnectPeer.BackColor = accentSky;
             btnConnectPeer.ForeColor = Color.FromArgb(9, 13, 22);
-            btnConnectPeer.Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
-            btnConnectPeer.Location = new Point(285, 327);
-            btnConnectPeer.Size = new Size(125, 29);
-            btnConnectPeer.Click += delegate { ConnectToPeerEndpoint(txtPeerEndpoint.Text.Trim()); };
+            btnConnectPeer.Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
+            btnConnectPeer.Location = new Point(S(288), S(317));
+            btnConnectPeer.Size = new Size(S(128), S(29));
+            btnConnectPeer.Click += delegate {
+                if (txtPeerEndpoint.Text.Trim().Length > 0)
+                    ConnectToPeerEndpoint(txtPeerEndpoint.Text.Trim());
+                else
+                    Log("Enter the other computer's IP:Port (or use the same Wormhole Code) to connect.");
+            };
             leftCard.Controls.Add(btnConnectPeer);
 
             btnLoopbackTest = new Button();
-            btnLoopbackTest.Text = "Connect Local Loopback Peer (Test 9800X3D Speed)";
+            btnLoopbackTest.UseMnemonic = false;
+            btnLoopbackTest.Text = "Run Local NVMe Loopback Benchmark (Test Hardware Speed)";
             btnLoopbackTest.FlatStyle = FlatStyle.Flat;
             btnLoopbackTest.BackColor = Color.FromArgb(16, 48, 42);
             btnLoopbackTest.ForeColor = accentEmerald;
-            btnLoopbackTest.Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
-            btnLoopbackTest.Location = new Point(20, 372);
-            btnLoopbackTest.Size = new Size(390, 36);
+            btnLoopbackTest.Font = new Font("Segoe UI Semibold", 8.8f, FontStyle.Bold);
+            btnLoopbackTest.Location = new Point(S(20), S(360));
+            btnLoopbackTest.Size = new Size(S(396), S(34));
             btnLoopbackTest.Click += delegate { ConnectToPeerEndpoint("127.0.0.1:" + listenPort.ToString()); };
             leftCard.Controls.Add(btnLoopbackTest);
 
-            Label lblSaveDir = new Label();
-            lblSaveDir.Text = "Incoming files stream directly to disk: " + downloadDirectory;
-            lblSaveDir.ForeColor = fgMuted;
-            lblSaveDir.Font = new Font("Segoe UI", 8.5f);
-            lblSaveDir.Location = new Point(20, 422);
-            lblSaveDir.Size = new Size(390, 36);
+            Label lblSaveDir = CreateCleanLabel(
+                "Incoming files save to: " + downloadDirectory,
+                new Font("Segoe UI", 8.5f),
+                fgMuted,
+                new Point(S(20), S(408)),
+                false
+            );
+            lblSaveDir.Size = new Size(S(396), S(36));
             leftCard.Controls.Add(lblSaveDir);
 
             Button btnChangeDir = new Button();
+            btnChangeDir.UseMnemonic = false;
             btnChangeDir.Text = "Change Save Folder...";
             btnChangeDir.FlatStyle = FlatStyle.Flat;
             btnChangeDir.BackColor = Color.FromArgb(30, 41, 59);
             btnChangeDir.ForeColor = Color.White;
-            btnChangeDir.Location = new Point(20, 464);
-            btnChangeDir.Size = new Size(180, 30);
+            btnChangeDir.Location = new Point(S(20), S(452));
+            btnChangeDir.Size = new Size(S(190), S(32));
             btnChangeDir.Click += delegate {
                 if (folderDialog == null) folderDialog = new FolderBrowserDialog();
                 folderDialog.SelectedPath = downloadDirectory;
                 if (folderDialog.ShowDialog() == DialogResult.OK)
                 {
                     downloadDirectory = folderDialog.SelectedPath;
-                    lblSaveDir.Text = "Incoming files stream directly to disk: " + downloadDirectory;
+                    lblSaveDir.Text = "Incoming files save to: " + downloadDirectory;
                 }
             };
             leftCard.Controls.Add(btnChangeDir);
+
+            Button btnOpenDir = new Button();
+            btnOpenDir.UseMnemonic = false;
+            btnOpenDir.Text = "Open Downloads Folder";
+            btnOpenDir.FlatStyle = FlatStyle.Flat;
+            btnOpenDir.BackColor = Color.FromArgb(30, 41, 59);
+            btnOpenDir.ForeColor = accentSky;
+            btnOpenDir.Location = new Point(S(222), S(452));
+            btnOpenDir.Size = new Size(S(194), S(32));
+            btnOpenDir.Click += delegate {
+                try { Process.Start("explorer.exe", downloadDirectory); } catch { }
+            };
+            leftCard.Controls.Add(btnOpenDir);
 
             this.Controls.Add(leftCard);
 
             Panel rightCard = new Panel();
             rightCard.BackColor = bgCard;
-            rightCard.Location = new Point(474, 92);
-            rightCard.Size = new Size(466, 540);
+            rightCard.Location = new Point(S(478), S(94));
+            rightCard.Size = new Size(S(478), S(544));
             rightCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
-            Label lblSec2 = new Label();
-            lblSec2.Text = "2. Direct Kernel-Socket File Streamer (4 MB Blocks)";
-            lblSec2.Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
-            lblSec2.Location = new Point(20, 18);
-            lblSec2.AutoSize = true;
+            Label lblSec2 = CreateCleanLabel(
+                "2. Direct File Streamer (.EXE <-> Browser & .EXE <-> .EXE)",
+                new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
+                Color.White,
+                new Point(S(20), S(16)),
+                true
+            );
             rightCard.Controls.Add(lblSec2);
 
             btnSendFile = new Button();
-            btnSendFile.Text = "SELECT FILE OR DRAG & DROP HERE TO STREAM\\n(4 MB Kernel TCP Blocks · 4x Parallel AES-NI · Unlimited File Size)";
+            btnSendFile.UseMnemonic = false;
+            btnSendFile.Text = "SELECT FILE OR DRAG & DROP HERE TO SEND\\n(Streams to Connected Chrome Browser or Remote .EXE Peer)";
             btnSendFile.FlatStyle = FlatStyle.Flat;
             btnSendFile.BackColor = Color.FromArgb(14, 28, 48);
             btnSendFile.ForeColor = accentSky;
-            btnSendFile.Font = new Font("Segoe UI Semibold", 10f, FontStyle.Bold);
-            btnSendFile.Location = new Point(20, 52);
-            btnSendFile.Size = new Size(426, 96);
+            btnSendFile.Font = new Font("Segoe UI Semibold", 9.8f, FontStyle.Bold);
+            btnSendFile.Location = new Point(S(20), S(50));
+            btnSendFile.Size = new Size(S(438), S(96));
             btnSendFile.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnSendFile.Click += OnSelectFilesClicked;
             rightCard.Controls.Add(btnSendFile);
 
-            lblSpeedMetric = new Label();
-            lblSpeedMetric.Text = "0.00 MB/s (0.00 Gbps)";
-            lblSpeedMetric.Font = new Font("Consolas", 16f, FontStyle.Bold);
-            lblSpeedMetric.ForeColor = accentEmerald;
-            lblSpeedMetric.Location = new Point(20, 164);
-            lblSpeedMetric.AutoSize = true;
+            lblSpeedMetric = CreateCleanLabel(
+                "0.00 MB/s (0.00 Gbps)",
+                new Font("Consolas", 15f, FontStyle.Bold),
+                accentEmerald,
+                new Point(S(20), S(160)),
+                true
+            );
             rightCard.Controls.Add(lblSpeedMetric);
 
-            lblProgressDetail = new Label();
-            lblProgressDetail.Text = "Ready — Connect a peer or click 'Connect Local Loopback Peer' to benchmark.";
-            lblProgressDetail.ForeColor = fgMuted;
-            lblProgressDetail.Location = new Point(20, 198);
-            lblProgressDetail.Size = new Size(426, 22);
+            lblProgressDetail = CreateCleanLabel(
+                "Enter the same Wormhole Code in Chrome Browser and this .EXE to pair automatically.",
+                null,
+                fgMuted,
+                new Point(S(20), S(194)),
+                false
+            );
+            lblProgressDetail.Size = new Size(S(438), S(24));
             lblProgressDetail.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lblProgressDetail);
 
             progressBar = new ProgressBar();
-            progressBar.Location = new Point(20, 226);
-            progressBar.Size = new Size(426, 18);
+            progressBar.Location = new Point(S(20), S(224));
+            progressBar.Size = new Size(S(438), S(18));
             progressBar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             progressBar.Maximum = 1000;
             rightCard.Controls.Add(progressBar);
 
-            Label lblLogCap = new Label();
-            lblLogCap.Text = "Live Kernel Socket & AES-NI Pipeline Log:";
-            lblLogCap.ForeColor = fgMuted;
-            lblLogCap.Location = new Point(20, 258);
-            lblLogCap.AutoSize = true;
+            Label lblLogCap = CreateCleanLabel(
+                "Live Kernel Socket & Chrome Browser Wormhole Log:",
+                null,
+                fgMuted,
+                new Point(S(20), S(254)),
+                true
+            );
             rightCard.Controls.Add(lblLogCap);
 
             lstLog = new ListBox();
@@ -831,8 +908,9 @@ namespace AetherTunnelNative
             lstLog.ForeColor = Color.FromArgb(203, 213, 225);
             lstLog.Font = new Font("Consolas", 9f);
             lstLog.BorderStyle = BorderStyle.FixedSingle;
-            lstLog.Location = new Point(20, 282);
-            lstLog.Size = new Size(426, 236);
+            lstLog.HorizontalScrollbar = true;
+            lstLog.Location = new Point(S(20), S(278));
+            lstLog.Size = new Size(S(438), S(244));
             lstLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lstLog);
 
@@ -848,26 +926,68 @@ namespace AetherTunnelNative
             }
             string line = "[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] " + msg;
             lstLog.Items.Insert(0, line);
-            if (lstLog.Items.Count > 200) lstLog.Items.RemoveAt(lstLog.Items.Count - 1);
+            if (lstLog.Items.Count > 250) lstLog.Items.RemoveAt(lstLog.Items.Count - 1);
+        }
+
+        private static byte[] Pbkdf2Sha256(byte[] password, byte[] salt, int iterations, int outputBytes)
+        {
+            using (HMACSHA256 hmac = new HMACSHA256(password))
+            {
+                int hashLen = 32;
+                int blockCount = (outputBytes + hashLen - 1) / hashLen;
+                byte[] result = new byte[outputBytes];
+                int outOffset = 0;
+
+                for (int block = 1; block <= blockCount; block++)
+                {
+                    byte[] saltBlock = new byte[salt.Length + 4];
+                    Buffer.BlockCopy(salt, 0, saltBlock, 0, salt.Length);
+                    saltBlock[salt.Length + 0] = (byte)((block >> 24) & 0xFF);
+                    saltBlock[salt.Length + 1] = (byte)((block >> 16) & 0xFF);
+                    saltBlock[salt.Length + 2] = (byte)((block >> 8) & 0xFF);
+                    saltBlock[salt.Length + 3] = (byte)(block & 0xFF);
+
+                    byte[] u = hmac.ComputeHash(saltBlock);
+                    byte[] t = (byte[])u.Clone();
+
+                    for (int iter = 1; iter < iterations; iter++)
+                    {
+                        u = hmac.ComputeHash(u);
+                        for (int k = 0; k < hashLen; k++)
+                        {
+                            t[k] ^= u[k];
+                        }
+                    }
+
+                    int copyLen = Math.Min(hashLen, outputBytes - outOffset);
+                    Buffer.BlockCopy(t, 0, result, outOffset, copyLen);
+                    outOffset += copyLen;
+                }
+                return result;
+            }
         }
 
         private void DeriveCryptographicKey()
         {
             try
             {
-                string material = txtRoomCode.Text.Trim().ToLowerInvariant() + "::" + txtPassphrase.Text.Trim();
-                byte[] salt = Encoding.UTF8.GetBytes("AetherTunnel-E2EE-v1-Salt-2026");
-                using (Rfc2898DeriveBytes pbkdf2 = new Rfc2898DeriveBytes(Encoding.UTF8.GetBytes(material), salt, 100000))
-                {
-                    aesKey = pbkdf2.GetBytes(32);
-                }
+                string cleanRoom = txtRoomCode.Text.Trim().ToLowerInvariant();
+                string pass = txtPassphrase.Text;
+                string normalizedSecret = cleanRoom + (pass.Length > 0 ? "::" + pass : "");
+                byte[] passwordBytes = Encoding.UTF8.GetBytes(normalizedSecret);
+                byte[] saltBytes = Encoding.UTF8.GetBytes("AetherTunnel-v1-ZeroKnowledge-Salt::" + cleanRoom);
+
+                aesKey = Pbkdf2Sha256(passwordBytes, saltBytes, 100000, 32);
+
                 using (SHA256 sha = SHA256.Create())
                 {
                     byte[] hash = sha.ComputeHash(aesKey);
-                    currentFingerprint = String.Format(
-                        "{0:X2}{1:X2} · {2:X2}{3:X2} · {4:X2}{5:X2} · {6:X2}{7:X2}",
-                        hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7]
-                    );
+                    StringBuilder sb = new StringBuilder(16);
+                    for (int i = 0; i < 8; i++)
+                    {
+                        sb.Append(hash[i].ToString("x2"));
+                    }
+                    currentFingerprint = sb.ToString();
                 }
                 if (lblKeyFingerprint != null) lblKeyFingerprint.Text = currentFingerprint;
             }
@@ -897,9 +1017,9 @@ namespace AetherTunnelNative
             }
 
             string localIps = GetLocalIpList();
-            lblLocalEndpoint.Text = localIps + " (Port " + listenPort.ToString() + ")";
-            txtPeerEndpoint.Text = "127.0.0.1:" + listenPort.ToString();
-            Log("Winsock2 Kernel TCP Listener active on port " + listenPort.ToString() + " (16 MB Socket Buffers)");
+            lblLocalEndpoint.Text = localIps;
+            Log("High-DPI Mode active (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). Listening on port " + listenPort.ToString());
+            Log("Connecting to Universal WSS Wormhole Cloud Bridge for room [" + txtRoomCode.Text.Trim() + "]...");
 
             Thread acceptThread = new Thread(AcceptLoop);
             acceptThread.IsBackground = true;
@@ -908,6 +1028,27 @@ namespace AetherTunnelNative
             Thread udpThread = new Thread(UdpDiscoveryLoop);
             udpThread.IsBackground = true;
             udpThread.Start();
+
+            Thread cloudThread = new Thread(CloudWormholeBridgeLoop);
+            cloudThread.IsBackground = true;
+            cloudThread.Start();
+        }
+
+        private string GetFirstLanEndpoint()
+        {
+            try
+            {
+                IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (IPAddress ip in host.AddressList)
+                {
+                    if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
+                    {
+                        return ip.ToString() + ":" + listenPort.ToString();
+                    }
+                }
+            }
+            catch { }
+            return "";
         }
 
         private string GetLocalIpList()
@@ -925,8 +1066,252 @@ namespace AetherTunnelNative
                 }
             }
             catch { }
-            if (ips.Count == 0) ips.Add("127.0.0.1:" + listenPort.ToString());
+            ips.Add("127.0.0.1:" + listenPort.ToString());
             return String.Join("  |  ", ips.ToArray());
+        }
+
+        private bool IsOwnLocalEndpoint(IPAddress addr, int port)
+        {
+            if (port != listenPort) return false;
+            if (IPAddress.IsLoopback(addr)) return true;
+            try
+            {
+                IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
+                foreach (IPAddress ip in host.AddressList)
+                {
+                    if (ip.Equals(addr)) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void CloudWormholeBridgeLoop()
+        {
+            int slotIndex = 0;
+            FileStream cloudOutFile = null;
+            string cloudFileName = "";
+            string cloudOutPath = "";
+            long cloudExpectedSize = 0;
+            long cloudReceivedBytes = 0;
+            Stopwatch cloudRxSw = null;
+
+            while (isRunning)
+            {
+                ClientWebSocket ws = null;
+                try
+                {
+                    string rawRoom = "";
+                    this.Invoke(new Action(delegate { rawRoom = txtRoomCode.Text.Trim().ToLowerInvariant(); }));
+                    StringBuilder cleanSb = new StringBuilder();
+                    foreach (char ch in rawRoom)
+                    {
+                        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')
+                            cleanSb.Append(ch);
+                    }
+                    string cleanCode = cleanSb.Length > 0 ? cleanSb.ToString() : "default";
+                    cloudReconnectRequested = false;
+
+                    string myPeerId = "aethertunnel-exe-" + cleanCode + "-" + (slotIndex % 3).ToString();
+                    string token = Guid.NewGuid().ToString("N").Substring(0, 10);
+                    string url = "wss://0.peerjs.com/peerjs?key=peerjs&id=" + myPeerId + "&token=" + token;
+
+                    ws = new ClientWebSocket();
+                    ws.ConnectAsync(new Uri(url), CancellationToken.None).Wait(7000);
+                    if (ws.State != WebSocketState.Open)
+                    {
+                        slotIndex++;
+                        Thread.Sleep(1000);
+                        continue;
+                    }
+
+                    activeCloudWs = ws;
+                    activeCloudMyId = myPeerId;
+
+                    ClientWebSocket capturedWs = ws;
+                    string capturedCode = cleanCode;
+                    Thread hbThread = new Thread(delegate()
+                    {
+                        while (isRunning && !cloudReconnectRequested && capturedWs.State == WebSocketState.Open)
+                        {
+                            try
+                            {
+                                SendCloudHelloToWebPeers(capturedWs, capturedCode);
+                            }
+                            catch { break; }
+                            for (int i = 0; i < 20; i++)
+                            {
+                                if (!isRunning || cloudReconnectRequested || capturedWs.State != WebSocketState.Open) break;
+                                Thread.Sleep(120);
+                            }
+                        }
+                    });
+                    hbThread.IsBackground = true;
+                    hbThread.Start();
+
+                    byte[] recvBuf = new byte[131072];
+                    MemoryStream msgMs = new MemoryStream();
+
+                    while (isRunning && !cloudReconnectRequested && ws.State == WebSocketState.Open)
+                    {
+                        WebSocketReceiveResult res = ws.ReceiveAsync(new ArraySegment<byte>(recvBuf), CancellationToken.None).GetAwaiter().GetResult();
+                        if (res.MessageType == WebSocketMessageType.Close) break;
+
+                        if (res.Count > 0)
+                        {
+                            msgMs.Write(recvBuf, 0, res.Count);
+                        }
+
+                        if (!res.EndOfMessage) continue;
+
+                        string text = Encoding.UTF8.GetString(msgMs.ToArray());
+                        msgMs.SetLength(0);
+
+                        if (text.Contains("\\"ID-TAKEN\\"") || text.Contains("is taken"))
+                        {
+                            slotIndex++;
+                            break;
+                        }
+
+                        if (text.Contains("\\"OPEN\\""))
+                        {
+                            SendCloudHelloToWebPeers(ws, cleanCode);
+                            continue;
+                        }
+
+                        string srcPeer = ExtractJsonString(text, "src");
+                        string kind = ExtractJsonString(text, "kind");
+
+                        if (kind == "browser:hello" || kind == "web:hello")
+                        {
+                            bool isNewPairing = (activeCloudBrowserPeerId != srcPeer) || ((DateTime.UtcNow - lastCloudBrowserSeen).TotalSeconds > 10);
+                            activeCloudBrowserPeerId = srcPeer;
+                            lastCloudBrowserSeen = DateTime.UtcNow;
+
+                            if (isNewPairing)
+                            {
+                                UpdateStatusBadge("CONNECTED: CHROME BROWSER [" + cleanCode + "]");
+                                Log("Paired with Chrome Browser App in Wormhole Room [" + cleanCode + "] (" + srcPeer + ")");
+                                SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\"}");
+                            }
+                        }
+                        else if (kind == "exe:hello" && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
+                        {
+                            string remoteLan = ExtractJsonString(text, "lanEndpoint");
+                            if (remoteLan.Length > 0 && (activePeerClient == null || !activePeerClient.Connected))
+                            {
+                                Log("Wormhole discovered LAN .EXE peer at " + remoteLan + " — opening Direct Kernel TCP...");
+                                ConnectToPeerEndpoint(remoteLan);
+                            }
+                        }
+                        else if (kind == "exe:chunk-ack")
+                        {
+                            cloudAckEvent.Set();
+                        }
+                        else if (kind == "exe:file-start")
+                        {
+                            activeCloudBrowserPeerId = srcPeer;
+                            lastCloudBrowserSeen = DateTime.UtcNow;
+                            cloudFileName = ExtractJsonString(text, "name");
+                            if (cloudFileName.Length == 0) cloudFileName = "transfer.bin";
+                            cloudExpectedSize = ExtractJsonLong(text, "size");
+                            cloudOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + cloudFileName);
+
+                            if (cloudOutFile != null) cloudOutFile.Close();
+                            cloudOutFile = new FileStream(cloudOutPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
+                            cloudReceivedBytes = 0;
+                            cloudRxSw = Stopwatch.StartNew();
+                            Log("Receiving file from Chrome Browser -> " + cloudOutPath + " (" + FormatBytes(cloudExpectedSize) + ")");
+                            UpdateTransferUi("Receiving from Chrome: " + cloudFileName, 0, cloudExpectedSize, 0, 0);
+                        }
+                        else if (kind == "exe:file-chunk" && cloudOutFile != null)
+                        {
+                            string b64 = ExtractJsonString(text, "data");
+                            long chunkIdx = ExtractJsonLong(text, "chunkIndex");
+                            if (b64.Length > 0)
+                            {
+                                byte[] raw = Convert.FromBase64String(b64);
+                                cloudOutFile.Write(raw, 0, raw.Length);
+                                cloudReceivedBytes += raw.Length;
+
+                                double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
+                                double mbps = (cloudReceivedBytes / (1024.0 * 1024.0)) / sec;
+                                int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
+                                UpdateTransferUi("Receiving from Chrome: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, permille);
+                            }
+                            if ((chunkIdx + 1) % 8 == 0)
+                            {
+                                SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":" + chunkIdx.ToString() + "}");
+                            }
+                        }
+                        else if (kind == "exe:file-end" && cloudOutFile != null)
+                        {
+                            cloudOutFile.Flush();
+                            cloudOutFile.Close();
+                            cloudOutFile = null;
+                            cloudRxSw.Stop();
+
+                            double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
+                            double mbps = (cloudExpectedSize / (1024.0 * 1024.0)) / sec;
+                            UpdateTransferUi("Saved to Downloads: " + cloudFileName, cloudExpectedSize, cloudExpectedSize, mbps, 1000);
+                            Log(String.Format("CHROME -> .EXE COMPLETE: Saved to {0} ({1:F2} MB/s)", cloudOutPath, mbps));
+                            SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":999999}");
+                        }
+                    }
+                }
+                catch
+                {
+                    // Reconnect after brief pause
+                }
+                finally
+                {
+                    if (cloudOutFile != null)
+                    {
+                        try { cloudOutFile.Close(); } catch { }
+                        cloudOutFile = null;
+                    }
+                    if (ws != null)
+                    {
+                        try { ws.Dispose(); } catch { }
+                    }
+                }
+
+                if (isRunning && !cloudReconnectRequested)
+                {
+                    Thread.Sleep(1200);
+                }
+            }
+        }
+
+        private void SendCloudHelloToWebPeers(ClientWebSocket ws, string cleanCode)
+        {
+            if (ws == null || ws.State != WebSocketState.Open) return;
+            string lanEp = GetFirstLanEndpoint();
+            string payload = "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\",\\"lanEndpoint\\":\\"" + lanEp + "\\"}";
+
+            for (int i = 0; i < 3; i++)
+            {
+                SendCloudPacket(ws, "aethertunnel-web-" + cleanCode + "-" + i.ToString(), payload);
+            }
+            for (int i = 0; i < 3; i++)
+            {
+                string targetExe = "aethertunnel-exe-" + cleanCode + "-" + i.ToString();
+                if (targetExe != activeCloudMyId)
+                {
+                    SendCloudPacket(ws, targetExe, payload);
+                }
+            }
+        }
+
+        private void SendCloudPacket(ClientWebSocket ws, string dstPeerId, string innerPayloadJson)
+        {
+            if (ws == null || ws.State != WebSocketState.Open || String.IsNullOrEmpty(dstPeerId)) return;
+            string envelope = "{\\"type\\":\\"CANDIDATE\\",\\"dst\\":\\"" + dstPeerId + "\\",\\"payload\\":" + innerPayloadJson + "}";
+            byte[] bytes = Encoding.UTF8.GetBytes(envelope);
+            lock (cloudSendLock)
+            {
+                ws.SendAsync(new ArraySegment<byte>(bytes, 0, bytes.Length), WebSocketMessageType.Text, true, CancellationToken.None).Wait(5000);
+            }
         }
 
         private void AcceptLoop()
@@ -937,24 +1322,344 @@ namespace AetherTunnelNative
                 {
                     TcpClient client = tcpListener.AcceptTcpClient();
                     ConfigureSocketForMaxThroughput(client);
-                    Log("Incoming Kernel TCP peer connected from " + client.Client.RemoteEndPoint.ToString());
-
-                    if (activePeerClient == null || !activePeerClient.Connected)
-                    {
-                        activePeerClient = client;
-                        activePeerStream = client.GetStream();
-                        UpdateStatusBadge("CONNECTED KERNEL P2P (" + client.Client.RemoteEndPoint.ToString() + ")");
-                    }
-
-                    Thread rxThread = new Thread(delegate() { ReceiveStreamLoop(client); });
-                    rxThread.IsBackground = true;
-                    rxThread.Start();
+                    Thread connThread = new Thread(delegate() { HandleIncomingConnection(client); });
+                    connThread.IsBackground = true;
+                    connThread.Start();
                 }
                 catch
                 {
                     if (!isRunning) break;
                 }
             }
+        }
+
+        private void HandleIncomingConnection(TcpClient client)
+        {
+            try
+            {
+                NetworkStream netStream = client.GetStream();
+                byte[] peek = new byte[3];
+                if (!ReadExactBytes(netStream, peek, 3))
+                {
+                    client.Close();
+                    return;
+                }
+
+                if (peek[0] == (byte)'G' && peek[1] == (byte)'E' && peek[2] == (byte)'T')
+                {
+                    HandleBrowserWebSocketConnection(client, netStream, peek);
+                }
+                else
+                {
+                    Log("Incoming Native .EXE Peer connected from " + client.Client.RemoteEndPoint.ToString());
+                    if (activePeerClient == null || !activePeerClient.Connected)
+                    {
+                        activePeerClient = client;
+                        activePeerStream = netStream;
+                        UpdateStatusBadge("CONNECTED .EXE PEER (" + client.Client.RemoteEndPoint.ToString() + ")");
+                    }
+                    ReceiveKernelTcpLoop(client, netStream, peek);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (isRunning) Log("Connection error: " + ex.Message);
+            }
+        }
+
+        private void HandleBrowserWebSocketConnection(TcpClient client, NetworkStream netStream, byte[] firstThreeBytes)
+        {
+            try
+            {
+                MemoryStream reqMs = new MemoryStream();
+                reqMs.Write(firstThreeBytes, 0, 3);
+                byte[] b = new byte[1];
+                int state = 0;
+                while (reqMs.Length < 16384 && netStream.Read(b, 0, 1) == 1)
+                {
+                    reqMs.WriteByte(b[0]);
+                    byte c = b[0];
+                    if ((state == 0 && c == (byte)'\\r') ||
+                        (state == 1 && c == (byte)'\\n') ||
+                        (state == 2 && c == (byte)'\\r') ||
+                        (state == 3 && c == (byte)'\\n'))
+                    {
+                        state++;
+                        if (state == 4) break;
+                    }
+                    else
+                    {
+                        state = (c == (byte)'\\r') ? 1 : 0;
+                    }
+                }
+
+                string headers = Encoding.ASCII.GetString(reqMs.ToArray());
+                string wsKey = "";
+                string[] lines = headers.Split(new string[] { "\\r\\n" }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in lines)
+                {
+                    if (line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        wsKey = line.Substring(18).Trim();
+                        break;
+                    }
+                }
+
+                if (wsKey.Length == 0)
+                {
+                    client.Close();
+                    return;
+                }
+
+                string acceptRaw = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+                string acceptBase64;
+                using (SHA1 sha1 = SHA1.Create())
+                {
+                    acceptBase64 = Convert.ToBase64String(sha1.ComputeHash(Encoding.ASCII.GetBytes(acceptRaw)));
+                }
+
+                string response =
+                    "HTTP/1.1 101 Switching Protocols\\r\\n" +
+                    "Upgrade: websocket\\r\\n" +
+                    "Connection: Upgrade\\r\\n" +
+                    "Access-Control-Allow-Origin: *\\r\\n" +
+                    "Access-Control-Allow-Private-Network: true\\r\\n" +
+                    "Sec-WebSocket-Accept: " + acceptBase64 + "\\r\\n\\r\\n";
+                byte[] respBytes = Encoding.ASCII.GetBytes(response);
+                netStream.Write(respBytes, 0, respBytes.Length);
+
+                activeBrowserWsClient = client;
+                activeBrowserWsStream = netStream;
+                UpdateStatusBadge("CONNECTED: CHROME BROWSER (LOCAL 127.0.0.1:" + listenPort.ToString() + ")");
+                Log("Chrome Browser connected via Direct Localhost Kernel WebSocket (127.0.0.1:" + listenPort.ToString() + ")");
+
+                NotifyBrowserRoomCode();
+                ReceiveBrowserWebSocketLoop(client, netStream);
+            }
+            catch (Exception ex)
+            {
+                if (isRunning) Log("Local Browser Bridge disconnected: " + ex.Message);
+            }
+        }
+
+        private void NotifyBrowserRoomCode()
+        {
+            try
+            {
+                if (activeBrowserWsClient == null || !activeBrowserWsClient.Connected || activeBrowserWsStream == null) return;
+                string code = "";
+                if (this.InvokeRequired)
+                    this.Invoke(new Action(delegate { code = txtRoomCode.Text.Trim().ToLowerInvariant(); }));
+                else
+                    code = txtRoomCode.Text.Trim().ToLowerInvariant();
+
+                string json = "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + code + "\\",\\"port\\":" + listenPort.ToString() + "}";
+                byte[] bytes = Encoding.UTF8.GetBytes(json);
+                SendWebSocketFrame(activeBrowserWsStream, 0x01, bytes, 0, bytes.Length);
+            }
+            catch { }
+        }
+
+        private void SendWebSocketFrame(NetworkStream wsStream, byte opcode, byte[] payload, int offset, int count)
+        {
+            byte[] header;
+            if (count < 126)
+            {
+                header = new byte[2];
+                header[0] = (byte)(0x80 | opcode);
+                header[1] = (byte)count;
+            }
+            else if (count <= 65535)
+            {
+                header = new byte[4];
+                header[0] = (byte)(0x80 | opcode);
+                header[1] = 126;
+                header[2] = (byte)((count >> 8) & 0xFF);
+                header[3] = (byte)(count & 0xFF);
+            }
+            else
+            {
+                header = new byte[10];
+                header[0] = (byte)(0x80 | opcode);
+                header[1] = 127;
+                long len64 = (long)count;
+                for (int i = 0; i < 8; i++)
+                {
+                    header[9 - i] = (byte)(len64 & 0xFF);
+                    len64 >>= 8;
+                }
+            }
+
+            lock (wsWriteLock)
+            {
+                wsStream.Write(header, 0, header.Length);
+                wsStream.Write(payload, offset, count);
+            }
+        }
+
+        private void ReceiveBrowserWebSocketLoop(TcpClient client, NetworkStream wsStream)
+        {
+            FileStream currentOutFile = null;
+            string currentFileName = "";
+            string currentOutPath = "";
+            long expectedFileSize = 0;
+            long receivedBytes = 0;
+            Stopwatch rxSw = null;
+
+            MemoryStream fragBuffer = new MemoryStream();
+            int fragOpcode = 0;
+
+            try
+            {
+                byte[] h2 = new byte[2];
+                while (isRunning && client.Connected)
+                {
+                    if (!ReadExactBytes(wsStream, h2, 2)) break;
+                    bool fin = (h2[0] & 0x80) != 0;
+                    int opcode = h2[0] & 0x0F;
+                    bool masked = (h2[1] & 0x80) != 0;
+                    long payloadLen = h2[1] & 0x7F;
+
+                    if (opcode == 0x08) break; // Close frame
+
+                    if (payloadLen == 126)
+                    {
+                        byte[] ext2 = new byte[2];
+                        if (!ReadExactBytes(wsStream, ext2, 2)) break;
+                        payloadLen = (ext2[0] << 8) | ext2[1];
+                    }
+                    else if (payloadLen == 127)
+                    {
+                        byte[] ext8 = new byte[8];
+                        if (!ReadExactBytes(wsStream, ext8, 8)) break;
+                        payloadLen = 0;
+                        for (int i = 0; i < 8; i++) payloadLen = (payloadLen << 8) | ext8[i];
+                    }
+
+                    byte[] maskKey = new byte[4];
+                    if (masked)
+                    {
+                        if (!ReadExactBytes(wsStream, maskKey, 4)) break;
+                    }
+
+                    if (payloadLen > 64 * 1024 * 1024) break;
+                    byte[] data = new byte[(int)payloadLen];
+                    if (payloadLen > 0 && !ReadExactBytes(wsStream, data, (int)payloadLen)) break;
+
+                    if (masked)
+                    {
+                        for (int i = 0; i < data.Length; i++)
+                        {
+                            data[i] = (byte)(data[i] ^ maskKey[i & 3]);
+                        }
+                    }
+
+                    if (opcode == 0x09) // Ping -> Pong
+                    {
+                        SendWebSocketFrame(wsStream, 0x0A, data, 0, data.Length);
+                        continue;
+                    }
+
+                    if (opcode != 0) fragOpcode = opcode;
+                    fragBuffer.Write(data, 0, data.Length);
+
+                    if (!fin) continue;
+
+                    byte[] message = fragBuffer.ToArray();
+                    fragBuffer.SetLength(0);
+
+                    if (fragOpcode == 0x01) // Text JSON frame from Browser
+                    {
+                        string text = Encoding.UTF8.GetString(message);
+                        if (text.Contains("\\"browser:hello\\"") || text.Contains("\\"browser:room\\""))
+                        {
+                            string browserRoom = ExtractJsonString(text, "roomCode");
+                            if (browserRoom.Length > 0)
+                            {
+                                this.BeginInvoke(new Action(delegate {
+                                    if (txtRoomCode.Text.Trim().ToLowerInvariant() != browserRoom.ToLowerInvariant())
+                                    {
+                                        suppressRoomBroadcast = true;
+                                        txtRoomCode.Text = browserRoom.ToLowerInvariant();
+                                        suppressRoomBroadcast = false;
+                                        Log("Synced Wormhole Code with Chrome Browser: " + browserRoom);
+                                    }
+                                }));
+                            }
+                        }
+                        else if (text.Contains("\\"exe:file-start\\""))
+                        {
+                            currentFileName = ExtractJsonString(text, "name");
+                            if (currentFileName.Length == 0) currentFileName = "transfer.bin";
+                            expectedFileSize = ExtractJsonLong(text, "size");
+                            currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
+
+                            if (currentOutFile != null) currentOutFile.Close();
+                            currentOutFile = new FileStream(currentOutPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
+                            receivedBytes = 0;
+                            rxSw = Stopwatch.StartNew();
+                            Log("Receiving from Chrome Browser -> " + currentOutPath + " (" + FormatBytes(expectedFileSize) + ")");
+                        }
+                        else if (text.Contains("\\"exe:file-end\\"") && currentOutFile != null)
+                        {
+                            currentOutFile.Flush();
+                            currentOutFile.Close();
+                            currentOutFile = null;
+                            rxSw.Stop();
+
+                            double sec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
+                            double mbps = (expectedFileSize / (1024.0 * 1024.0)) / sec;
+                            UpdateTransferUi("Saved from Browser: " + currentFileName, expectedFileSize, expectedFileSize, mbps, 1000);
+                            Log(String.Format("BROWSER -> .EXE COMPLETE: {0} ({1:F2} MB/s · {2:F2} Gbps)", currentOutPath, mbps, (mbps * 8.0) / 1000.0));
+                        }
+                    }
+                    else if (fragOpcode == 0x02 && currentOutFile != null) // Raw Binary chunk from Browser
+                    {
+                        currentOutFile.Write(message, 0, message.Length);
+                        receivedBytes += message.Length;
+
+                        double sec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
+                        double mbps = (receivedBytes / (1024.0 * 1024.0)) / sec;
+                        int permille = (int)((receivedBytes * 1000L) / Math.Max(1L, expectedFileSize));
+                        UpdateTransferUi("Receiving from Browser: " + currentFileName, receivedBytes, expectedFileSize, mbps, permille);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (isRunning) Log("Local Browser Bridge stream ended: " + ex.Message);
+            }
+            finally
+            {
+                if (currentOutFile != null)
+                {
+                    try { currentOutFile.Close(); } catch { }
+                }
+            }
+        }
+
+        private string ExtractJsonString(string json, string key)
+        {
+            string pattern = "\\"" + key + "\\":\\"";
+            int idx = json.IndexOf(pattern);
+            if (idx < 0) return "";
+            int start = idx + pattern.Length;
+            int end = json.IndexOf("\\"", start);
+            if (end < 0) return "";
+            return json.Substring(start, end - start);
+        }
+
+        private long ExtractJsonLong(string json, string key)
+        {
+            string pattern = "\\"" + key + "\\":";
+            int idx = json.IndexOf(pattern);
+            if (idx < 0) return 0;
+            int start = idx + pattern.Length;
+            int end = start;
+            while (end < json.Length && (Char.IsDigit(json[end]) || json[end] == ' ')) end++;
+            long val = 0;
+            Int64.TryParse(json.Substring(start, end - start).Trim(), out val);
+            return val;
         }
 
         private void ConfigureSocketForMaxThroughput(TcpClient client)
@@ -999,10 +1704,10 @@ namespace AetherTunnelNative
 
                     activePeerClient = client;
                     activePeerStream = client.GetStream();
-                    UpdateStatusBadge("CONNECTED KERNEL P2P (" + host + ":" + port.ToString() + ")");
+                    UpdateStatusBadge("CONNECTED .EXE PEER (" + host + ":" + port.ToString() + ")");
                     Log("Direct Kernel TCP Pipe established -> " + host + ":" + port.ToString() + " (NoDelay=true, 16MB Buffers)");
 
-                    Thread rxThread = new Thread(delegate() { ReceiveStreamLoop(client); });
+                    Thread rxThread = new Thread(delegate() { ReceiveKernelTcpLoop(client, activePeerStream, null); });
                     rxThread.IsBackground = true;
                     rxThread.Start();
                 }
@@ -1032,11 +1737,15 @@ namespace AetherTunnelNative
                     if (msg.StartsWith("AETHER_DISCOVER|"))
                     {
                         string[] parts = msg.Split('|');
-                        if (parts.Length >= 3)
+                        if (parts.Length >= 4)
                         {
                             string remoteRoom = parts[1];
                             int remotePort = 0;
                             Int32.TryParse(parts[2], out remotePort);
+                            string remoteInstanceId = parts[3];
+
+                            if (remoteInstanceId == instanceId) continue;
+                            if (IsOwnLocalEndpoint(remoteEp.Address, remotePort)) continue;
 
                             string myRoom = "";
                             this.Invoke(new Action(delegate { myRoom = txtRoomCode.Text.Trim().ToLowerInvariant(); }));
@@ -1044,10 +1753,9 @@ namespace AetherTunnelNative
                             if (remoteRoom == myRoom && remotePort > 0)
                             {
                                 string candidate = remoteEp.Address.ToString() + ":" + remotePort.ToString();
-                                bool isSelf = IPAddress.IsLoopback(remoteEp.Address) && remotePort == listenPort;
-                                if (!isSelf && (activePeerClient == null || !activePeerClient.Connected))
+                                if (activePeerClient == null || !activePeerClient.Connected)
                                 {
-                                    Log("LAN Auto-Discovery found Wormhole peer at " + candidate);
+                                    Log("LAN Auto-Discovery found remote .EXE peer at " + candidate);
                                     ConnectToPeerEndpoint(candidate);
                                 }
                             }
@@ -1064,7 +1772,7 @@ namespace AetherTunnelNative
             {
                 if (udpDiscovery == null) return;
                 string room = txtRoomCode.Text.Trim().ToLowerInvariant();
-                byte[] payload = Encoding.UTF8.GetBytes("AETHER_DISCOVER|" + room + "|" + listenPort.ToString());
+                byte[] payload = Encoding.UTF8.GetBytes("AETHER_DISCOVER|" + room + "|" + listenPort.ToString() + "|" + instanceId);
                 udpDiscovery.Send(payload, payload.Length, new IPEndPoint(IPAddress.Broadcast, UDP_DISCOVERY_PORT));
             }
             catch { }
@@ -1089,7 +1797,7 @@ namespace AetherTunnelNative
         {
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
-                ofd.Title = "Select File to Encrypt & Stream over Kernel TCP";
+                ofd.Title = "Select File to Stream to Connected Chrome Browser or .EXE Peer";
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
                     StartFileTransfer(ofd.FileName);
@@ -1099,28 +1807,166 @@ namespace AetherTunnelNative
 
         private void StartFileTransfer(string filePath)
         {
-            if (activePeerClient == null || !activePeerClient.Connected || activePeerStream == null)
+            bool hasExePeer = (activePeerClient != null && activePeerClient.Connected && activePeerStream != null);
+            bool hasLocalBrowserPeer = (activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null);
+            bool hasCloudBrowserPeer = (activeCloudWs != null && activeCloudWs.State == WebSocketState.Open && !String.IsNullOrEmpty(activeCloudBrowserPeerId));
+
+            if (hasExePeer)
             {
-                Log("No peer connected yet -> Auto-connecting Local Loopback Peer (127.0.0.1:" + listenPort.ToString() + ") for instant transfer...");
-                try
-                {
-                    TcpClient client = new TcpClient();
-                    ConfigureSocketForMaxThroughput(client);
-                    client.Connect("127.0.0.1", listenPort);
-                    activePeerClient = client;
-                    activePeerStream = client.GetStream();
-                    UpdateStatusBadge("CONNECTED KERNEL LOOPBACK (127.0.0.1:" + listenPort.ToString() + ")");
-                }
-                catch (Exception ex)
-                {
-                    Log("Could not connect socket: " + ex.Message);
-                    return;
-                }
+                Thread txThread = new Thread(delegate() { StreamFileOverKernelTcp(filePath); });
+                txThread.IsBackground = true;
+                txThread.Start();
+                return;
             }
 
-            Thread txThread = new Thread(delegate() { StreamFileOverKernelTcp(filePath); });
-            txThread.IsBackground = true;
-            txThread.Start();
+            if (hasLocalBrowserPeer)
+            {
+                Thread wsTxThread = new Thread(delegate() { StreamFileToBrowserOverWebSocket(filePath); });
+                wsTxThread.IsBackground = true;
+                wsTxThread.Start();
+                return;
+            }
+
+            if (hasCloudBrowserPeer)
+            {
+                Thread cloudTxThread = new Thread(delegate() { StreamFileToBrowserOverCloudBridge(filePath); });
+                cloudTxThread.IsBackground = true;
+                cloudTxThread.Start();
+                return;
+            }
+
+            Log("WAIT: Make sure the Chrome Browser App (or another .EXE) has the same Wormhole Code [" + txtRoomCode.Text.Trim() + "]!");
+            MessageBox.Show(
+                "No peer is paired in Wormhole Room [" + txtRoomCode.Text.Trim() + "] yet.\\n\\n" +
+                "1. Open the Chrome Browser App and enter the same Wormhole Code: " + txtRoomCode.Text.Trim() + "\\n" +
+                "2. Within 1-2 seconds, the top-right status will turn green: CONNECTED: CHROME BROWSER.\\n" +
+                "3. Or click 'Run Local NVMe Loopback Benchmark' on the left to test local disk speed.",
+                "AetherTunnel — Waiting for Wormhole Pairing",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+        }
+
+        private void StreamFileToBrowserOverCloudBridge(string filePath)
+        {
+            try
+            {
+                FileInfo fi = new FileInfo(filePath);
+                long fileSize = fi.Length;
+                string fileName = fi.Name;
+                string fileId = "exe-cloud-" + DateTime.UtcNow.Ticks.ToString();
+                int totalChunks = (int)Math.Max(1L, (fileSize + CLOUD_CHUNK_SIZE - 1) / CLOUD_CHUNK_SIZE);
+                string dstPeer = activeCloudBrowserPeerId;
+
+                Log("Streaming .EXE -> Chrome Browser over Wormhole Bridge: " + fileName + " (" + FormatBytes(fileSize) + ")");
+
+                string startJson = String.Format(
+                    "{{\\"kind\\":\\"exe:file-start\\",\\"fileId\\":\\"{0}\\",\\"name\\":\\"{1}\\",\\"size\\":{2},\\"chunkSize\\":{3},\\"totalChunks\\":{4}}}",
+                    fileId, fileName.Replace("\\"", ""), fileSize, CLOUD_CHUNK_SIZE, totalChunks
+                );
+                SendCloudPacket(activeCloudWs, dstPeer, startJson);
+
+                Stopwatch sw = Stopwatch.StartNew();
+                long totalSent = 0;
+                byte[] buf = new byte[CLOUD_CHUNK_SIZE];
+                int chunkIndex = 0;
+
+                using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, CLOUD_CHUNK_SIZE, FileOptions.SequentialScan))
+                {
+                    int read;
+                    while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        string b64 = Convert.ToBase64String(buf, 0, read);
+                        string chunkJson = String.Format(
+                            "{{\\"kind\\":\\"exe:file-chunk\\",\\"fileId\\":\\"{0}\\",\\"chunkIndex\\":{1},\\"data\\":\\"{2}\\"}}",
+                            fileId, chunkIndex, b64
+                        );
+                        SendCloudPacket(activeCloudWs, dstPeer, chunkJson);
+
+                        totalSent += read;
+                        chunkIndex++;
+
+                        double sec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                        double mbps = (totalSent / (1024.0 * 1024.0)) / sec;
+                        int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
+                        UpdateTransferUi("Sending to Chrome: " + fileName, totalSent, fileSize, mbps, permille);
+
+                        if (chunkIndex % 8 == 0)
+                        {
+                            cloudAckEvent.WaitOne(350);
+                        }
+                    }
+                }
+
+                string endJson = String.Format("{{\\"kind\\":\\"exe:file-end\\",\\"fileId\\":\\"{0}\\"}}", fileId);
+                SendCloudPacket(activeCloudWs, dstPeer, endJson);
+                sw.Stop();
+
+                double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
+                UpdateTransferUi("Sent to Chrome Browser: " + fileName, fileSize, fileSize, finalMbps, 1000);
+                Log(String.Format(".EXE -> CHROME COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s",
+                    fileName, FormatBytes(fileSize), totalSec, finalMbps));
+            }
+            catch (Exception ex)
+            {
+                Log("Wormhole Cloud Bridge TX Error: " + ex.Message);
+            }
+        }
+
+        private void StreamFileToBrowserOverWebSocket(string filePath)
+        {
+            try
+            {
+                FileInfo fi = new FileInfo(filePath);
+                long fileSize = fi.Length;
+                string fileName = fi.Name;
+                string fileId = "exe-" + DateTime.UtcNow.Ticks.ToString();
+                int totalChunks = (int)Math.Max(1L, (fileSize + WS_CHUNK_SIZE - 1) / WS_CHUNK_SIZE);
+
+                Log("Streaming from .EXE -> Chrome Browser over Local Kernel WebSocket: " + fileName + " (" + FormatBytes(fileSize) + ")");
+
+                string startJson = String.Format(
+                    "{{\\"kind\\":\\"exe:file-start\\",\\"fileId\\":\\"{0}\\",\\"name\\":\\"{1}\\",\\"size\\":{2},\\"chunkSize\\":{3},\\"totalChunks\\":{4}}}",
+                    fileId, fileName.Replace("\\"", ""), fileSize, WS_CHUNK_SIZE, totalChunks
+                );
+                byte[] startBytes = Encoding.UTF8.GetBytes(startJson);
+                SendWebSocketFrame(activeBrowserWsStream, 0x01, startBytes, 0, startBytes.Length);
+
+                Stopwatch sw = Stopwatch.StartNew();
+                long totalSent = 0;
+                byte[] buf = new byte[WS_CHUNK_SIZE];
+
+                using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, WS_CHUNK_SIZE, FileOptions.SequentialScan))
+                {
+                    int read;
+                    while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        SendWebSocketFrame(activeBrowserWsStream, 0x02, buf, 0, read);
+                        totalSent += read;
+
+                        double sec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                        double mbps = (totalSent / (1024.0 * 1024.0)) / sec;
+                        int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
+                        UpdateTransferUi("Streaming to Browser: " + fileName, totalSent, fileSize, mbps, permille);
+                    }
+                }
+
+                string endJson = String.Format("{{\\"kind\\":\\"exe:file-end\\",\\"fileId\\":\\"{0}\\"}}", fileId);
+                byte[] endBytes = Encoding.UTF8.GetBytes(endJson);
+                SendWebSocketFrame(activeBrowserWsStream, 0x01, endBytes, 0, endBytes.Length);
+                sw.Stop();
+
+                double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
+                UpdateTransferUi("Sent to Browser: " + fileName, fileSize, fileSize, finalMbps, 1000);
+                Log(String.Format(".EXE -> BROWSER COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s ({4:F2} Gbps)",
+                    fileName, FormatBytes(fileSize), totalSec, finalMbps, (finalMbps * 8.0) / 1000.0));
+            }
+            catch (Exception ex)
+            {
+                Log("Browser WebSocket TX Error: " + ex.Message);
+            }
         }
 
         private void StreamFileOverKernelTcp(string filePath)
@@ -1240,10 +2086,10 @@ namespace AetherTunnelNative
             }
         }
 
-        private void ReceiveStreamLoop(TcpClient client)
+        private void ReceiveKernelTcpLoop(TcpClient client, NetworkStream netStream, byte[] preReadThreeBytes)
         {
-            NetworkStream netStream = client.GetStream();
             byte[] headerBuf = new byte[9];
+            bool hasPreRead = (preReadThreeBytes != null && preReadThreeBytes.Length == 3);
 
             FileStream currentOutFile = null;
             string currentFileName = "";
@@ -1256,7 +2102,18 @@ namespace AetherTunnelNative
             {
                 while (isRunning && client.Connected)
                 {
-                    if (!ReadExactBytes(netStream, headerBuf, 9)) break;
+                    if (hasPreRead)
+                    {
+                        headerBuf[0] = preReadThreeBytes[0];
+                        headerBuf[1] = preReadThreeBytes[1];
+                        headerBuf[2] = preReadThreeBytes[2];
+                        hasPreRead = false;
+                        if (!ReadExactBytesOffset(netStream, headerBuf, 3, 6)) break;
+                    }
+                    else
+                    {
+                        if (!ReadExactBytes(netStream, headerBuf, 9)) break;
+                    }
 
                     uint magic = BitConverter.ToUInt32(headerBuf, 0);
                     if (magic != MAGIC_HEADER)
@@ -1348,10 +2205,15 @@ namespace AetherTunnelNative
 
         private bool ReadExactBytes(NetworkStream stream, byte[] buffer, int count)
         {
+            return ReadExactBytesOffset(stream, buffer, 0, count);
+        }
+
+        private bool ReadExactBytesOffset(NetworkStream stream, byte[] buffer, int startOffset, int count)
+        {
             int offset = 0;
             while (offset < count)
             {
-                int read = stream.Read(buffer, offset, count - offset);
+                int read = stream.Read(buffer, startOffset + offset, count - offset);
                 if (read <= 0) return false;
                 offset += read;
             }
@@ -1388,6 +2250,8 @@ namespace AetherTunnelNative
             try { if (tcpListener != null) tcpListener.Stop(); } catch { }
             try { if (udpDiscovery != null) udpDiscovery.Close(); } catch { }
             try { if (activePeerClient != null) activePeerClient.Close(); } catch { }
+            try { if (activeBrowserWsClient != null) activeBrowserWsClient.Close(); } catch { }
+            try { if (activeCloudWs != null) activeCloudWs.Dispose(); } catch { }
         }
     }
 }
@@ -1476,12 +2340,14 @@ namespace AetherTunnelNative
 
   const psCommand =
     'powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -Command "' +
+    "Get-Process AetherTunnelKernel* -ErrorAction SilentlyContinue|Stop-Process -Force;" +
+    "Start-Sleep -Milliseconds 150;" +
     "$b=[IO.File]::ReadAllBytes($env:AETHER_EXE);" +
     "$s=[Text.Encoding]::UTF8.GetString($b,3584,$b.Length-3584);" +
     "$d=Join-Path $env:LOCALAPPDATA 'AetherTunnel';" +
     "New-Item -ItemType Directory -Force -Path $d|Out-Null;" +
-    "$cs=Join-Path $d 'AetherTunnelKernel_v4.cs';" +
-    "$bin=Join-Path $d 'AetherTunnelKernel_v4.exe';" +
+    "$cs=Join-Path $d 'AetherTunnelKernel_v7.cs';" +
+    "$bin=Join-Path $d 'AetherTunnelKernel_v7.exe';" +
     "[IO.File]::WriteAllText($cs,$s,[Text.Encoding]::UTF8);" +
     "$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';" +
     "if(-not(Test-Path $csc)){$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'};" +
@@ -1521,4 +2387,3 @@ namespace AetherTunnelNative
 
   triggerBrowserDownload('AetherTunnel-win-x64.exe', fullExe, 'application/vnd.microsoft.portable-executable');
 }
-

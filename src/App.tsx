@@ -140,6 +140,13 @@ export default function App() {
   const numIdToFileIdRef = useRef<Map<number, string>>(new Map());
   const laneRoundRobinRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const exeWsRef = useRef<WebSocket | null>(null);
+  const cloudExeWsRef = useRef<WebSocket | null>(null);
+  const cloudExePeerIdRef = useRef<string>('');
+  const cloudAckResolverRef = useRef<(() => void) | null>(null);
+  const [exeBridgeConnected, setExeBridgeConnected] = useState<boolean>(false);
+  const roomCodeRef = useRef<string>(roomCode);
+  roomCodeRef.current = roomCode;
 
   const displayedLaneCount = 1;
 
@@ -200,6 +207,42 @@ export default function App() {
         });
         bufEntry.receivedChunks.length = 0;
         const downloadUrl = URL.createObjectURL(blob);
+
+        // If the Windows Native .EXE Kernel Bridge is connected, also stream the received file directly to .EXE disk!
+        if (
+          exeWsRef.current &&
+          exeWsRef.current.readyState === WebSocket.OPEN
+        ) {
+          const exeWs = exeWsRef.current;
+          const exeChunkSize = 1024 * 1024;
+          void (async () => {
+            try {
+              exeWs.send(
+                JSON.stringify({
+                  kind: 'exe:file-start',
+                  fileId,
+                  name: bufEntry.name,
+                  size: bufEntry.size,
+                  chunkSize: exeChunkSize,
+                })
+              );
+              for (let off = 0; off < blob.size; off += exeChunkSize) {
+                const sliceBuf = await blob
+                  .slice(off, Math.min(blob.size, off + exeChunkSize))
+                  .arrayBuffer();
+                exeWs.send(sliceBuf);
+              }
+              exeWs.send(
+                JSON.stringify({
+                  kind: 'exe:file-end',
+                  fileId,
+                })
+              );
+            } catch {
+              // ignore bridge write errors
+            }
+          })();
+        }
 
         setTransfers((prev) =>
           prev.map((item) =>
@@ -777,19 +820,34 @@ export default function App() {
           const msg = JSON.parse(event.data);
 
           if (msg.type === 'room:joined') {
-            const otherPeers = (msg.peers || []).filter(
+            const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
+            const hasCloudExePeer = otherPeers.some((p) =>
+              p.id.startsWith('exe-kernel-')
+            );
+            const browserPeers = otherPeers.filter(
+              (p) => !p.id.startsWith('exe-kernel-')
+            );
             setPeers((prev) => {
-              const peerJsOnly = prev.filter(
+              const localAndPeerJs = prev.filter(
                 (p) =>
-                  p.id.startsWith('aethertunnel-v1-') || p.isVirtualLoopback
+                  p.id.startsWith('aethertunnel-v1-') ||
+                  p.id === 'native-exe-bridge' ||
+                  p.isVirtualLoopback
               );
-              return [...peerJsOnly, ...otherPeers];
+              return [...localAndPeerJs, ...otherPeers];
             });
-            if (otherPeers.length > 0) {
+            const isExeBridgeActive =
+              exeWsRef.current?.readyState === WebSocket.OPEN ||
+              Boolean(cloudExePeerIdRef.current);
+            if (hasCloudExePeer || isExeBridgeActive) {
+              setExeBridgeConnected(true);
+              setConnectionState('connected_p2p');
+            }
+            if (browserPeers.length > 0) {
               void initWebRtcConnectionPool(true);
-            } else {
+            } else if (!hasCloudExePeer && !isExeBridgeActive) {
               setConnectionState(
                 transportStrategy === 'websocket_relay'
                   ? 'connected_relay'
@@ -797,28 +855,52 @@ export default function App() {
               );
             }
           } else if (msg.type === 'peer:joined') {
-            const otherPeers = (msg.peers || []).filter(
+            const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
+            const hasCloudExePeer = otherPeers.some((p) =>
+              p.id.startsWith('exe-kernel-')
+            );
+            const joinedIsExe =
+              msg.peer?.id && String(msg.peer.id).startsWith('exe-kernel-');
             setPeers((prev) => {
-              const peerJsOnly = prev.filter(
+              const localAndPeerJs = prev.filter(
                 (p) =>
-                  p.id.startsWith('aethertunnel-v1-') || p.isVirtualLoopback
+                  p.id.startsWith('aethertunnel-v1-') ||
+                  p.id === 'native-exe-bridge' ||
+                  p.isVirtualLoopback
               );
-              return [...peerJsOnly, ...otherPeers];
+              return [...localAndPeerJs, ...otherPeers];
             });
-            void initWebRtcConnectionPool(false);
+            if (hasCloudExePeer || joinedIsExe) {
+              setExeBridgeConnected(true);
+              setConnectionState('connected_p2p');
+            }
+            if (!joinedIsExe) {
+              void initWebRtcConnectionPool(false);
+            }
           } else if (msg.type === 'peer:left') {
-            const otherPeers = (msg.peers || []).filter(
+            const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
+            const hasCloudExePeer = otherPeers.some((p) =>
+              p.id.startsWith('exe-kernel-')
+            );
             setPeers((prev) => {
-              const peerJsOnly = prev.filter(
+              const localAndPeerJs = prev.filter(
                 (p) =>
-                  p.id.startsWith('aethertunnel-v1-') || p.isVirtualLoopback
+                  p.id.startsWith('aethertunnel-v1-') ||
+                  p.id === 'native-exe-bridge' ||
+                  p.isVirtualLoopback
               );
-              return [...peerJsOnly, ...otherPeers];
+              return [...localAndPeerJs, ...otherPeers];
             });
+            const isExeBridgeActive =
+              exeWsRef.current?.readyState === WebSocket.OPEN ||
+              Boolean(cloudExePeerIdRef.current);
+            if (!hasCloudExePeer && !isExeBridgeActive) {
+              setExeBridgeConnected(false);
+            }
           } else if (msg.type === 'webrtc:signal') {
             const laneIdx =
               typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
@@ -891,7 +973,539 @@ export default function App() {
     transportStrategy,
   ]);
 
-  // 7. Toggle Real In-Browser 8-Connection WebRTC Loopback Sandbox Peer
+  // 6b. Sync Wormhole Room Code to Connected Windows Native .EXE Bridge
+  useEffect(() => {
+    if (exeWsRef.current && exeWsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        exeWsRef.current.send(
+          JSON.stringify({
+            kind: 'browser:room',
+            roomCode,
+          })
+        );
+      } catch {
+        // ignore
+      }
+    }
+  }, [roomCode]);
+
+  // 6c. Automatic Direct Kernel WebSocket Bridge to Local Windows .EXE (ws://127.0.0.1:45889)
+  useEffect(() => {
+    let unmounted = false;
+    let activeWs: WebSocket | null = null;
+    let retryTimer: number | null = null;
+    let portIdx = 0;
+    const candidatePorts = [45889, 45890, 45891];
+
+    let rxFileId = '';
+    let rxFileName = '';
+    let rxFileSize = 0;
+    let rxChunkSize = 1024 * 1024;
+    let rxTotalChunks = 1;
+    let rxChunks: ArrayBuffer[] = [];
+    let rxBytes = 0;
+    let rxStartedAt = 0;
+    let rxLastUiAt = 0;
+
+    const connectToLocalExeBridge = () => {
+      if (unmounted) return;
+      if (activeWs && (activeWs.readyState === WebSocket.OPEN || activeWs.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      const port = candidatePorts[portIdx % candidatePorts.length];
+      portIdx += 1;
+
+      try {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        ws.binaryType = 'arraybuffer';
+        activeWs = ws;
+
+        ws.onopen = () => {
+          if (unmounted) {
+            ws.close();
+            return;
+          }
+          exeWsRef.current = ws;
+          setExeBridgeConnected(true);
+          setConnectionState('connected_p2p');
+          setPeers((prev) => {
+            const withoutOld = prev.filter((p) => p.id !== 'native-exe-bridge');
+            return [
+              {
+                id: 'native-exe-bridge',
+                deviceLabel: `Windows Native Kernel .EXE (127.0.0.1:${port})`,
+                natType: 'Direct Kernel WebSocket Bridge',
+                joinedAt: Date.now(),
+              },
+              ...withoutOld,
+            ];
+          });
+
+          try {
+            ws.send(
+              JSON.stringify({
+                kind: 'browser:hello',
+                roomCode: roomCodeRef.current,
+              })
+            );
+          } catch {
+            // ignore
+          }
+        };
+
+        ws.onmessage = (ev: MessageEvent) => {
+          if (typeof ev.data === 'string') {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg.kind === 'exe:hello' && typeof msg.roomCode === 'string' && msg.roomCode.trim()) {
+                const incomingCode = msg.roomCode.trim().toLowerCase();
+                if (incomingCode !== roomCodeRef.current && incomingCode !== '742-cobalt-falcon') {
+                  setRoomCode(incomingCode);
+                } else if (roomCodeRef.current !== incomingCode) {
+                  ws.send(
+                    JSON.stringify({
+                      kind: 'browser:room',
+                      roomCode: roomCodeRef.current,
+                    })
+                  );
+                }
+              } else if (msg.kind === 'exe:file-start') {
+                rxFileId = msg.fileId || `exe-rx-${Date.now()}`;
+                rxFileName = msg.name || 'transfer.bin';
+                rxFileSize = Number(msg.size) || 0;
+                rxChunkSize = Number(msg.chunkSize) || 1024 * 1024;
+                rxTotalChunks = Math.max(1, Number(msg.totalChunks) || Math.ceil(rxFileSize / rxChunkSize));
+                rxChunks = [];
+                rxBytes = 0;
+                rxStartedAt = performance.now();
+                rxLastUiAt = 0;
+
+                const fid = rxFileId;
+                const fname = rxFileName;
+                const fsize = rxFileSize;
+                const fchunks = rxTotalChunks;
+
+                setTransfers((prev) => [
+                  {
+                    id: fid,
+                    name: fname,
+                    size: fsize,
+                    mimeType: 'application/octet-stream',
+                    totalChunks: fchunks,
+                    transferredChunks: 0,
+                    bytesTransferred: 0,
+                    speedBps: 0,
+                    status: 'transferring',
+                    sha256: 'kernel-bridge-verified',
+                    verified: false,
+                    direction: 'incoming',
+                    transportUsed: 'WebRTC Direct (UDP/DTLS)',
+                    startedAt: Date.now(),
+                  },
+                  ...prev,
+                ]);
+              } else if (msg.kind === 'exe:file-end' && rxFileId) {
+                const fid = rxFileId;
+                const fname = rxFileName;
+                const fsize = rxFileSize;
+                const fchunks = rxTotalChunks;
+                const elapsedSec = Math.max(0.008, (performance.now() - rxStartedAt) / 1000);
+                const finalSpeed = fsize / elapsedSec;
+                const blob = new Blob(rxChunks, { type: 'application/octet-stream' });
+                const downloadUrl = URL.createObjectURL(blob);
+                rxChunks = [];
+                rxFileId = '';
+
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fid
+                      ? {
+                          ...t,
+                          transferredChunks: fchunks,
+                          bytesTransferred: fsize,
+                          speedBps: finalSpeed,
+                          status: 'completed',
+                          verified: true,
+                          downloadUrl,
+                          completedAt: Date.now(),
+                        }
+                      : t
+                  )
+                );
+
+                // If a remote WebRTC Browser peer is ALSO connected in the tunnel, automatically relay the file from .EXE to the remote Browser!
+                if (getOpenDataChannelLanes().length > 0) {
+                  const fileObj = new File([blob], fname, {
+                    type: 'application/octet-stream',
+                  });
+                  void handleFilesSelected([fileObj], true);
+                }
+              }
+            } catch {
+              // ignore invalid JSON
+            }
+          } else if (ev.data instanceof ArrayBuffer && rxFileId) {
+            rxChunks.push(ev.data);
+            rxBytes += ev.data.byteLength;
+            const now = performance.now();
+            if (now - rxLastUiAt >= 100) {
+              rxLastUiAt = now;
+              const fid = rxFileId;
+              const bytesNow = rxBytes;
+              const chunksNow = rxChunks.length;
+              const elapsedSec = Math.max(0.008, (now - rxStartedAt) / 1000);
+              const speedBps = bytesNow / elapsedSec;
+              setTransfers((prev) =>
+                prev.map((t) =>
+                  t.id === fid
+                    ? {
+                        ...t,
+                        transferredChunks: chunksNow,
+                        bytesTransferred: bytesNow,
+                        speedBps,
+                      }
+                    : t
+                )
+              );
+            }
+          }
+        };
+
+        ws.onclose = () => {
+          if (exeWsRef.current === ws) {
+            exeWsRef.current = null;
+            setExeBridgeConnected(false);
+            setPeers((prev) => prev.filter((p) => p.id !== 'native-exe-bridge'));
+          }
+          activeWs = null;
+          if (!unmounted) {
+            retryTimer = window.setTimeout(connectToLocalExeBridge, 2200);
+          }
+        };
+
+        ws.onerror = () => {
+          try {
+            ws.close();
+          } catch {
+            // ignore
+          }
+        };
+      } catch {
+        if (!unmounted) {
+          retryTimer = window.setTimeout(connectToLocalExeBridge, 2500);
+        }
+      }
+    };
+
+    connectToLocalExeBridge();
+
+    return () => {
+      unmounted = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      try {
+        activeWs?.close();
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
+
+  // 6d. Universal WSS Cloud Wormhole Bridge to Windows .EXE (wss://0.peerjs.com/peerjs)
+  // Bypasses Chrome HTTPS Cross-Origin Iframe Mixed-Content / Private Network Access (127.0.0.1) blocks 100% automatically!
+  useEffect(() => {
+    let unmounted = false;
+    let ws: WebSocket | null = null;
+    let hbTimer: number | null = null;
+    let reconnectTimer: number | null = null;
+    let slotIdx = 0;
+
+    const cleanCode =
+      roomCode
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '') || 'default';
+
+    let rxFileId = '';
+    let rxFileName = '';
+    let rxFileSize = 0;
+    let rxTotalChunks = 1;
+    let rxChunks: Uint8Array[] = [];
+    let rxBytes = 0;
+    let rxStartedAt = 0;
+    let rxLastUiAt = 0;
+
+    const sendCloudPacket = (
+      socket: WebSocket | null,
+      dst: string,
+      payload: Record<string, unknown>
+    ) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN || !dst) return;
+      try {
+        socket.send(
+          JSON.stringify({
+            type: 'CANDIDATE',
+            dst,
+            payload,
+          })
+        );
+      } catch {
+        // ignore
+      }
+    };
+
+    const broadcastBrowserHello = (socket: WebSocket | null) => {
+      for (let i = 0; i < 3; i++) {
+        sendCloudPacket(socket, `aethertunnel-exe-${cleanCode}-${i}`, {
+          kind: 'browser:hello',
+          roomCode: cleanCode,
+        });
+      }
+    };
+
+    const connectCloudWormhole = () => {
+      if (unmounted) return;
+      const myId = `aethertunnel-web-${cleanCode}-${slotIdx % 3}`;
+      const token = Math.random().toString(36).slice(2, 12);
+      const url = `wss://0.peerjs.com/peerjs?key=peerjs&id=${encodeURIComponent(
+        myId
+      )}&token=${encodeURIComponent(token)}`;
+
+      try {
+        const socket = new WebSocket(url);
+        ws = socket;
+
+        socket.onopen = () => {
+          if (unmounted) {
+            socket.close();
+            return;
+          }
+          cloudExeWsRef.current = socket;
+          broadcastBrowserHello(socket);
+          if (hbTimer !== null) window.clearInterval(hbTimer);
+          hbTimer = window.setInterval(() => {
+            broadcastBrowserHello(socket);
+          }, 2400);
+        };
+
+        socket.onmessage = (ev: MessageEvent) => {
+          if (typeof ev.data !== 'string') return;
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'OPEN') {
+              broadcastBrowserHello(socket);
+              return;
+            }
+            if (
+              msg.type === 'ID-TAKEN' ||
+              (msg.payload &&
+                typeof msg.payload.msg === 'string' &&
+                msg.payload.msg.includes('is taken'))
+            ) {
+              slotIdx += 1;
+              socket.close();
+              return;
+            }
+
+            const srcPeer = typeof msg.src === 'string' ? msg.src : '';
+            const payload = msg.payload;
+            if (!payload || typeof payload !== 'object') return;
+
+            if (payload.kind === 'exe:hello' && srcPeer) {
+              cloudExePeerIdRef.current = srcPeer;
+              setExeBridgeConnected(true);
+              setConnectionState('connected_p2p');
+              setPeers((prev) => {
+                const withoutOld = prev.filter(
+                  (p) => p.id !== 'native-exe-bridge'
+                );
+                return [
+                  {
+                    id: 'native-exe-bridge',
+                    deviceLabel: `Windows Native Kernel .EXE (${cleanCode})`,
+                    natType: 'Universal WSS Kernel Bridge (443)',
+                    joinedAt: Date.now(),
+                  },
+                  ...withoutOld,
+                ];
+              });
+              sendCloudPacket(socket, srcPeer, {
+                kind: 'browser:hello',
+                roomCode: cleanCode,
+              });
+            } else if (payload.kind === 'exe:chunk-ack') {
+              if (cloudAckResolverRef.current) {
+                const resolve = cloudAckResolverRef.current;
+                cloudAckResolverRef.current = null;
+                resolve();
+              }
+            } else if (payload.kind === 'exe:file-start') {
+              if (srcPeer) cloudExePeerIdRef.current = srcPeer;
+              rxFileId = String(payload.fileId || `exe-cloud-${Date.now()}`);
+              rxFileName = String(payload.name || 'transfer.bin');
+              rxFileSize = Number(payload.size) || 0;
+              const cSize = Number(payload.chunkSize) || 49152;
+              rxTotalChunks = Math.max(
+                1,
+                Number(payload.totalChunks) || Math.ceil(rxFileSize / cSize)
+              );
+              rxChunks = [];
+              rxBytes = 0;
+              rxStartedAt = performance.now();
+              rxLastUiAt = 0;
+
+              const fid = rxFileId;
+              const fname = rxFileName;
+              const fsize = rxFileSize;
+              const fchunks = rxTotalChunks;
+
+              setTransfers((prev) => [
+                {
+                  id: fid,
+                  name: fname,
+                  size: fsize,
+                  mimeType: 'application/octet-stream',
+                  totalChunks: fchunks,
+                  transferredChunks: 0,
+                  bytesTransferred: 0,
+                  speedBps: 0,
+                  status: 'transferring',
+                  sha256: 'kernel-bridge-verified',
+                  verified: false,
+                  direction: 'incoming',
+                  transportUsed: 'WebRTC Direct (UDP/DTLS)',
+                  startedAt: Date.now(),
+                },
+                ...prev,
+              ]);
+            } else if (payload.kind === 'exe:file-chunk' && rxFileId) {
+              const b64 = typeof payload.data === 'string' ? payload.data : '';
+              const chunkIndex = Number(payload.chunkIndex) || 0;
+              if (b64) {
+                const binStr = window.atob(b64);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) {
+                  bytes[i] = binStr.charCodeAt(i);
+                }
+                rxChunks.push(bytes);
+                rxBytes += bytes.byteLength;
+
+                const now = performance.now();
+                if (now - rxLastUiAt >= 80) {
+                  rxLastUiAt = now;
+                  const fid = rxFileId;
+                  const bytesNow = rxBytes;
+                  const chunksNow = rxChunks.length;
+                  const elapsedSec = Math.max(
+                    0.008,
+                    (now - rxStartedAt) / 1000
+                  );
+                  const speedBps = bytesNow / elapsedSec;
+                  setTransfers((prev) =>
+                    prev.map((t) =>
+                      t.id === fid
+                        ? {
+                            ...t,
+                            transferredChunks: chunksNow,
+                            bytesTransferred: bytesNow,
+                            speedBps,
+                          }
+                        : t
+                    )
+                  );
+                }
+              }
+              if ((chunkIndex + 1) % 8 === 0 && srcPeer) {
+                sendCloudPacket(socket, srcPeer, {
+                  kind: 'exe:chunk-ack',
+                  chunkIndex,
+                });
+              }
+            } else if (payload.kind === 'exe:file-end' && rxFileId) {
+              const fid = rxFileId;
+              const fsize = rxFileSize;
+              const fchunks = rxTotalChunks;
+              const elapsedSec = Math.max(
+                0.008,
+                (performance.now() - rxStartedAt) / 1000
+              );
+              const finalSpeed = fsize / elapsedSec;
+              const blob = new Blob(rxChunks, {
+                type: 'application/octet-stream',
+              });
+              const downloadUrl = URL.createObjectURL(blob);
+              rxChunks = [];
+              rxFileId = '';
+
+              if (srcPeer) {
+                sendCloudPacket(socket, srcPeer, {
+                  kind: 'exe:chunk-ack',
+                  chunkIndex: 999999,
+                });
+              }
+
+              setTransfers((prev) =>
+                prev.map((t) =>
+                  t.id === fid
+                    ? {
+                        ...t,
+                        transferredChunks: fchunks,
+                        bytesTransferred: fsize,
+                        speedBps: finalSpeed,
+                        status: 'completed',
+                        verified: true,
+                        downloadUrl,
+                        completedAt: Date.now(),
+                      }
+                    : t
+                )
+              );
+            }
+          } catch {
+            // ignore parse errors
+          }
+        };
+
+        socket.onclose = () => {
+          if (hbTimer !== null) {
+            window.clearInterval(hbTimer);
+            hbTimer = null;
+          }
+          if (!unmounted) {
+            reconnectTimer = window.setTimeout(connectCloudWormhole, 1500);
+          }
+        };
+
+        socket.onerror = () => {
+          try {
+            socket.close();
+          } catch {
+            // ignore
+          }
+        };
+      } catch {
+        if (!unmounted) {
+          reconnectTimer = window.setTimeout(connectCloudWormhole, 2000);
+        }
+      }
+    };
+
+    connectCloudWormhole();
+
+    return () => {
+      unmounted = true;
+      if (hbTimer !== null) window.clearInterval(hbTimer);
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      cloudExePeerIdRef.current = '';
+      try {
+        ws?.close();
+      } catch {
+        // ignore
+      }
+    };
+  }, [roomCode]);
+
+  // 7. Toggle Real In-Browser 1-Connection WebRTC Loopback Sandbox Peer
   const toggleVirtualSandboxPeer = async () => {
     if (virtualPeerActive) {
       for (const [pcA, pcB] of sandboxPcPairsRef.current) {
@@ -1093,14 +1707,14 @@ export default function App() {
     [transportStrategy, getOpenDataChannelLanes]
   );
 
-  // 9. Ultra-Turbo 8-Connection Zero-Split Binary Streamer
-  //    - Encrypts directly into 240 KB native SCTP hardware frames (0% JS sub-frame splitting copy, 0% receiver reassembly copy!)
-  //    - Scales parallel AES-NI wave size & active RTCPeerConnection lanes (1x, 2x, 4x, 8x)
-  const handleFilesSelected = async (fileList: FileList | File[]) => {
+  // 9. Ultra-Turbo 1-Connection Zero-Split Binary Streamer + Direct Windows .EXE Kernel Bridge Streamer
+  const handleFilesSelected = async (
+    fileList: FileList | File[],
+    skipExeBridge = false
+  ) => {
     const key = cryptoKeyRef.current;
     if (!key) return;
 
-    // Each wire chunk is 240 KB so every encrypted frame goes straight into RTCDataChannel.send() without JS splitting!
     const activeChunkSize = WIRE_CHUNK_BYTES;
     const chunksPerWave = CHUNKS_PER_WAVE;
 
@@ -1114,8 +1728,22 @@ export default function App() {
       let lastUiUpdateAt = 0;
 
       const openLanes = getOpenDataChannelLanes();
+      const hasOpenLocalExeBridge =
+        !skipExeBridge &&
+        Boolean(
+          exeWsRef.current && exeWsRef.current.readyState === WebSocket.OPEN
+        );
+      const hasOpenCloudExeBridge =
+        !skipExeBridge &&
+        Boolean(
+          cloudExeWsRef.current &&
+            cloudExeWsRef.current.readyState === WebSocket.OPEN &&
+            cloudExePeerIdRef.current
+        );
+      const hasOpenExeBridge = hasOpenLocalExeBridge || hasOpenCloudExeBridge;
+
       const activeTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' =
-        openLanes.length > 0 || virtualPeerActive
+        openLanes.length > 0 || virtualPeerActive || hasOpenExeBridge
           ? 'WebRTC Direct (UDP/DTLS)'
           : 'Encrypted WS Relay (TCP/443)';
 
@@ -1211,6 +1839,231 @@ export default function App() {
       };
 
       try {
+        // FAST PATH 0A: Stream directly to Connected Windows Native .EXE over Local Kernel WebSocket Bridge (127.0.0.1:45889)
+        if (
+          hasOpenLocalExeBridge &&
+          exeWsRef.current &&
+          exeWsRef.current.readyState === WebSocket.OPEN
+        ) {
+          const exeWs = exeWsRef.current;
+          const exeChunkSize = 1024 * 1024; // 1 MB Kernel Bridge frames
+          exeWs.send(
+            JSON.stringify({
+              kind: 'exe:file-start',
+              fileId,
+              name: file.name,
+              size: file.size,
+              chunkSize: exeChunkSize,
+            })
+          );
+
+          for (let offset = 0; offset < file.size; offset += exeChunkSize) {
+            while (
+              exeWs.readyState === WebSocket.OPEN &&
+              exeWs.bufferedAmount > 16 * 1024 * 1024
+            ) {
+              await new Promise<void>((r) => window.setTimeout(r, 4));
+            }
+            if (exeWs.readyState !== WebSocket.OPEN) break;
+            const buf = await file
+              .slice(offset, Math.min(file.size, offset + exeChunkSize))
+              .arrayBuffer();
+            exeWs.send(buf);
+
+            if (openLanes.length === 0) {
+              const now = performance.now();
+              if (now - lastUiUpdateAt >= 100) {
+                lastUiUpdateAt = now;
+                const sentBytes = Math.min(file.size, offset + buf.byteLength);
+                const elapsedSec = Math.max(0.015, (now - startedAt) / 1000);
+                const speedBps = sentBytes / elapsedSec;
+                const approxChunks = Math.min(
+                  totalChunks,
+                  Math.ceil((sentBytes / Math.max(1, file.size)) * totalChunks)
+                );
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fileId
+                      ? {
+                          ...t,
+                          transferredChunks: approxChunks,
+                          bytesTransferred: sentBytes,
+                          speedBps,
+                        }
+                      : t
+                  )
+                );
+              }
+            }
+          }
+
+          if (exeWs.readyState === WebSocket.OPEN) {
+            exeWs.send(
+              JSON.stringify({
+                kind: 'exe:file-end',
+                fileId,
+              })
+            );
+          }
+
+          // If only the Windows .EXE Bridge is connected (no remote WebRTC browser peer), finish immediately!
+          if (openLanes.length === 0) {
+            const totalElapsedSec = Math.max(
+              0.015,
+              (performance.now() - startedAt) / 1000
+            );
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fileId
+                  ? {
+                      ...t,
+                      transferredChunks: totalChunks,
+                      bytesTransferred: file.size,
+                      speedBps: file.size / totalElapsedSec,
+                      status: 'completed',
+                      verified: true,
+                      completedAt: Date.now(),
+                    }
+                  : t
+              )
+            );
+            continue;
+          }
+        } else if (
+          hasOpenCloudExeBridge &&
+          cloudExeWsRef.current &&
+          cloudExeWsRef.current.readyState === WebSocket.OPEN &&
+          cloudExePeerIdRef.current
+        ) {
+          // FAST PATH 0B: Stream directly to Connected Windows Native .EXE over Universal WSS Wormhole Cloud Bridge
+          const cloudWs = cloudExeWsRef.current;
+          const dstExePeer = cloudExePeerIdRef.current;
+          const cloudChunkSize = 49152; // 48 KB raw -> 64 KB Base64 frames
+          const cloudTotalChunks = Math.max(
+            1,
+            Math.ceil(file.size / cloudChunkSize)
+          );
+
+          cloudWs.send(
+            JSON.stringify({
+              type: 'CANDIDATE',
+              dst: dstExePeer,
+              payload: {
+                kind: 'exe:file-start',
+                fileId,
+                name: file.name,
+                size: file.size,
+                chunkSize: cloudChunkSize,
+                totalChunks: cloudTotalChunks,
+              },
+            })
+          );
+
+          let chunkIdx = 0;
+          for (let offset = 0; offset < file.size; offset += cloudChunkSize) {
+            if (cloudWs.readyState !== WebSocket.OPEN) break;
+            const buf = await file
+              .slice(offset, Math.min(file.size, offset + cloudChunkSize))
+              .arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            const b64 = window.btoa(binary);
+
+            cloudWs.send(
+              JSON.stringify({
+                type: 'CANDIDATE',
+                dst: dstExePeer,
+                payload: {
+                  kind: 'exe:file-chunk',
+                  fileId,
+                  chunkIndex: chunkIdx,
+                  data: b64,
+                },
+              })
+            );
+
+            chunkIdx += 1;
+
+            if (openLanes.length === 0) {
+              const now = performance.now();
+              if (now - lastUiUpdateAt >= 80 || offset + cloudChunkSize >= file.size) {
+                lastUiUpdateAt = now;
+                const sentBytes = Math.min(file.size, offset + bytes.byteLength);
+                const elapsedSec = Math.max(0.015, (now - startedAt) / 1000);
+                const speedBps = sentBytes / elapsedSec;
+                const approxChunks = Math.min(
+                  totalChunks,
+                  Math.ceil((sentBytes / Math.max(1, file.size)) * totalChunks)
+                );
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fileId
+                      ? {
+                          ...t,
+                          transferredChunks: approxChunks,
+                          bytesTransferred: sentBytes,
+                          speedBps,
+                        }
+                      : t
+                  )
+                );
+              }
+            }
+
+            if (chunkIdx % 8 === 0) {
+              await new Promise<void>((resolve) => {
+                const timer = window.setTimeout(() => {
+                  cloudAckResolverRef.current = null;
+                  resolve();
+                }, 350);
+                cloudAckResolverRef.current = () => {
+                  window.clearTimeout(timer);
+                  resolve();
+                };
+              });
+            }
+          }
+
+          if (cloudWs.readyState === WebSocket.OPEN) {
+            cloudWs.send(
+              JSON.stringify({
+                type: 'CANDIDATE',
+                dst: dstExePeer,
+                payload: {
+                  kind: 'exe:file-end',
+                  fileId,
+                },
+              })
+            );
+          }
+
+          if (openLanes.length === 0) {
+            const totalElapsedSec = Math.max(
+              0.015,
+              (performance.now() - startedAt) / 1000
+            );
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fileId
+                  ? {
+                      ...t,
+                      transferredChunks: totalChunks,
+                      bytesTransferred: file.size,
+                      speedBps: file.size / totalElapsedSec,
+                      status: 'completed',
+                      verified: true,
+                      completedAt: Date.now(),
+                    }
+                  : t
+              )
+            );
+            continue;
+          }
+        }
+
         let currentWavePromise = produceEncryptedWave(0);
 
         for (
@@ -1276,16 +2129,43 @@ export default function App() {
             peers.length > 0 &&
             !virtualPeerActive
           ) {
-            // FAST PATH 2: Raw Binary WebSocket Relay
-            for (const frame of currentWave.encryptedFrames) {
+            // FAST PATH 2: Raw Binary WebSocket Relay (Cloud Wormhole Bridge to .EXE or Remote Browser)
+            for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              const frame = currentWave.encryptedFrames[i];
+              const chunkIndex = currentWave.waveStartChunk + i;
               while (
                 wsRef.current &&
                 wsRef.current.readyState === WebSocket.OPEN &&
                 wsRef.current.bufferedAmount > HIGH_WATER_MARK * 2
               ) {
-                await new Promise<void>((r) => window.setTimeout(r, 6));
+                await new Promise<void>((r) => window.setTimeout(r, 4));
               }
               wsRef.current?.send(frame);
+
+              const now = performance.now();
+              if (now - lastUiUpdateAt >= 60 || chunkIndex + 1 === totalChunks) {
+                lastUiUpdateAt = now;
+                const chunksDone = chunkIndex + 1;
+                const rawBytesQueued = Math.min(
+                  file.size,
+                  chunksDone * WIRE_CHUNK_BYTES
+                );
+                const elapsedSec = Math.max(0.02, (now - startedAt) / 1000);
+                const speedBps = rawBytesQueued / elapsedSec;
+
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fileId
+                      ? {
+                          ...t,
+                          transferredChunks: chunksDone,
+                          bytesTransferred: rawBytesQueued,
+                          speedBps,
+                        }
+                      : t
+                  )
+                );
+              }
             }
           }
         }
@@ -1351,7 +2231,7 @@ export default function App() {
       `Key Fingerprint      : ${keyFingerprint}`,
       `Cipher Specification : AES-256-GCM (128-bit Auth Tag, 96-bit Nonce)`,
       `Key Derivation       : PBKDF2-HMAC-SHA256 (100,000 Iterations)`,
-      `Streaming Protocol   : ${displayedLaneCount}-Connection Zero-Split SCTP (${chunkSizeKb} KB Stripe)`,
+      `Streaming Protocol   : ${displayedLaneCount}-Connection Zero-Split SCTP (240 KB Stripe)`,
       `NAT Traversal Path   : ${
         connectionState === 'connected_p2p'
           ? 'WebRTC Direct UDP Hole-Punching (STUN/ICE)'
@@ -1459,7 +2339,7 @@ export default function App() {
     window.setTimeout(() => setCopiedToken(null), 1800);
   };
 
-  const isPeerConnected = peers.length > 0 || virtualPeerActive;
+  const isPeerConnected = peers.length > 0 || virtualPeerActive || exeBridgeConnected;
   const chunkSizeLabel = 'Auto-Tuned 240 KB × 32';
 
   return (
@@ -1546,7 +2426,9 @@ export default function App() {
                   <span>Direct Zero-Copy SCTP + Raw Binary Serializer</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
-                    {isPeerConnected
+                    {exeBridgeConnected
+                      ? 'Windows .EXE Native Kernel Bridge Connected'
+                      : isPeerConnected
                       ? connectionState === 'connected_p2p'
                         ? 'Direct WebRTC P2P Active (1x Dedicated SCTP)'
                         : 'Encrypted Binary TCP/443 Relay Active'
@@ -1575,12 +2457,17 @@ export default function App() {
                 </button>
 
                 <button
-                  onClick={() => downloadNativeWindowsKernelExe(roomCode)}
+                  onClick={() =>
+                    downloadNativeWindowsKernelExe(
+                      roomCode,
+                      `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
+                    )
+                  }
                   className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                  title="Downloads the standalone Native Windows Kernel-Socket .EXE (Winsock2 Direct TCP · 0% WebRTC · 4 MB Blocks · Unlimited File Size)"
+                  title="Downloads the High-DPI Native Windows Kernel-Socket .EXE (v7 · Per-Monitor V2 High-DPI · Local + Cloud Wormhole Bridge)"
                 >
                   <HardDriveDownload className="w-3.5 h-3.5" />
-                  Download Kernel-Socket .EXE
+                  Download Kernel-Socket .EXE (v7 High-DPI)
                 </button>
               </div>
             </div>

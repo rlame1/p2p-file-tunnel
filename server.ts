@@ -667,8 +667,27 @@ async function startServer() {
   await executeAutomatedReleasePipeline();
 
   // Serve compiled release artifacts with attachment headers
-  app.get('/downloads/:filename', (req, res) => {
+  app.get('/downloads/:filename', async (req, res) => {
     const safeName = path.basename(req.params.filename);
+    if (safeName === 'AetherTunnel-win-x64.exe') {
+      try {
+        const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').toString().split(',')[0].trim();
+        const wsProto = proto === 'https' ? 'wss' : 'ws';
+        const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+        const cloudWsUrl = `${wsProto}://${host}/ws-tunnel`;
+        const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? req.query.room.trim() : '742-cobalt-falcon';
+        const { createRequire } = await import('module');
+        const requireCjs = createRequire(import.meta.url);
+        const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
+        const freshExeBuf: Buffer = buildWindowsGuiExe(roomParam, cloudWsUrl);
+        res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+        res.setHeader('Content-Disposition', 'attachment; filename="AetherTunnel-win-x64.exe"');
+        res.send(freshExeBuf);
+        return;
+      } catch (err) {
+        console.error('Dynamic EXE build error:', err);
+      }
+    }
     const filePath = path.join(releaseDir, safeName);
     if (!fs.existsSync(filePath)) {
       res.status(404).send('Artifact not found');
