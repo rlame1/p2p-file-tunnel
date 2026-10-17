@@ -153,6 +153,7 @@ export default function App() {
   const [noteInput, setNoteInput] = useState<string>('');
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<'code' | 'link' | null>(null);
+  const [incomingFileAlert, setIncomingFileAlert] = useState<string | null>(null);
 
   // NAT Diagnostic Prober State
   const [natReport, setNatReport] = useState<NatProbeReport | null>(null);
@@ -554,6 +555,10 @@ export default function App() {
             }
           }
         }
+
+        setIncomingFileAlert(
+          `Incoming File Detected: ${name} (${formatBytes(size)}) — Receiving and preparing save prompt...`
+        );
 
         setTransfers((prev) => {
           if (prev.some((t) => t.id === fileId && t.direction === 'incoming')) {
@@ -2950,6 +2955,20 @@ export default function App() {
               <div className="lg:col-span-7 flex flex-col gap-6">
                 {/* Drag & Drop Encrypted File Staging Card */}
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5">
+                  {incomingFileAlert && (
+                    <div className="p-3.5 bg-sky-950/40 border border-sky-800/60 rounded-lg flex items-center justify-between gap-3 text-xs text-sky-200">
+                      <div className="flex items-center gap-2">
+                        <Download className="w-4 h-4 text-sky-400 shrink-0 animate-bounce" />
+                        <span className="font-medium">{incomingFileAlert}</span>
+                      </div>
+                      <button
+                        onClick={() => setIncomingFileAlert(null)}
+                        className="text-sky-400 hover:text-sky-300 font-bold px-1.5 py-0.5"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
                       <h2 className="text-base font-semibold text-slate-100">

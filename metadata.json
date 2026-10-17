@@ -1,5 +1,5 @@
 {
-  "name": "AetherTunnel — Encrypted P2P File Transfer",
+  "name": "AetherTunnel v2.2 — Encrypted P2P File Transfer",
   "description": "Zero-configuration end-to-end encrypted P2P file transfer tunnel with multi-strategy NAT/firewall traversal and standalone GitHub Releases executables.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
