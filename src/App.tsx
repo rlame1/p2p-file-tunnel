@@ -397,6 +397,7 @@ export default function App() {
 
       void flushChunksToDisk(bufEntry);
 
+      // FIXED: Progress bar calculation now includes chunks already written to disk!
       let downloadedCount = bufEntry.nextChunkToWrite;
       for (let i = bufEntry.nextChunkToWrite; i < bufEntry.totalChunks; i++) {
         if (bufEntry.receivedChunks[i] !== undefined) {
@@ -1904,7 +1905,7 @@ export default function App() {
             pendingFileAcceptResolversRef.current.get(fileId)?.reject(new Error('Vastaanottaja ei hyväksynyt tiedostoa ajoissa.'));
             pendingFileAcceptResolversRef.current.delete(fileId);
           }
-        }, 120000); 
+        }, 30000); // 30s timeout
       });
 
       transmitEncryptedPacket(metaPayload);
@@ -1913,22 +1914,29 @@ export default function App() {
       await new Promise((r) => window.setTimeout(r, 150));
       transmitEncryptedPacket(metaPayload);
 
-      try {
-        await acceptPromise;
-      } catch (err: any) {
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === fileId
-              ? {
-                  ...t,
-                  status: 'error',
-                  errorMessage: err.message || 'Transfer rejected by receiver',
-                }
-              : t
-          )
-        );
+      const expectsBrowserHandshake = openLanes.length > 0 || localBusPeersRef.current.length > 0 || cloudWebPeersRef.current.length > 0;
+
+      if (expectsBrowserHandshake) {
+        try {
+          await acceptPromise;
+        } catch (err: any) {
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === fileId
+                ? {
+                    ...t,
+                    status: 'error',
+                    errorMessage: err.message || 'Transfer rejected by receiver',
+                  }
+                : t
+            )
+          );
+          pendingFileAcceptResolversRef.current.delete(fileId);
+          continue;
+        }
+      } else {
+        // If we're only sending to EXE bridges, we don't need to wait for a browser accept
         pendingFileAcceptResolversRef.current.delete(fileId);
-        continue;
       }
 
       void file
