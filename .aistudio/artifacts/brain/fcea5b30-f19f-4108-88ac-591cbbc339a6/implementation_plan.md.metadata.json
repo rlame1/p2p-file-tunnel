@@ -1,6 +1,6 @@
 {
-  "summary": "Fix PeerJS WebRTC DataChannel binary frame handling by ensuring channel.onmessage always intercepts binary 'AETH' frames even when managedByPeerJs is true, and handling binary/Blob frames in conn.on('data').",
-  "updatedAt": "2026-10-17T19:13:42.433123175Z",
+  "summary": "Implementation plan to optimize P2P file transfer speed to >100 MB/s by increasing chunk size to 2 MB, wave size to 64 chunks, and SCTP high/low watermarks to 32 MB / 16 MB.",
+  "updatedAt": "2026-10-17T19:32:03.895359629Z",
   "requestFeedback": true,
   "userFacing": true
 }
