@@ -1735,7 +1735,7 @@ export default function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      // Send file metadata immediately at t = 0ms and again at 80ms to guarantee delivery
+      // Send file metadata 3 times (at 0ms, 150ms, 300ms) to guarantee reliable delivery
       const metaPayload = {
         kind: 'file:meta',
         fileId,
@@ -1749,10 +1749,13 @@ export default function App() {
       };
 
       transmitEncryptedPacket(metaPayload);
-
-      // Brief 100ms stabilization pause to ensure file:meta reaches receiver before data chunks
-      await new Promise((r) => window.setTimeout(r, 100));
+      await new Promise((r) => window.setTimeout(r, 150));
       transmitEncryptedPacket(metaPayload);
+      await new Promise((r) => window.setTimeout(r, 150));
+      transmitEncryptedPacket(metaPayload);
+
+      // Robust 450ms stabilization pause to ensure file:meta reaches receiver and initializes incoming buffer before data chunks arrive
+      await new Promise((r) => window.setTimeout(r, 450));
 
       // Compute SHA-256 asynchronously in the background without blocking streaming
       void file
