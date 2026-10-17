@@ -13,7 +13,6 @@ export interface PeerSummary {
   deviceLabel: string;
   natType: string;
   joinedAt: number;
-  isVirtualLoopback?: boolean;
 }
 
 export interface TransferItem {

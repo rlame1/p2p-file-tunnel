@@ -113,7 +113,6 @@ export default function App() {
   const [transportStrategy, setTransportStrategy] =
     useState<TransportStrategy>('auto');
   const [peers, setPeers] = useState<PeerSummary[]>([]);
-  const [virtualPeerActive, setVirtualPeerActive] = useState<boolean>(false);
   const [openPoolCount, setOpenPoolCount] = useState<number>(1);
 
   // Transfers & Encrypted Notes
@@ -134,10 +133,6 @@ export default function App() {
     new Map()
   );
   const dataChannelPoolRef = useRef<RTCDataChannel[]>([]);
-  const sandboxLanesRef = useRef<RTCDataChannel[]>([]);
-  const sandboxPcPairsRef = useRef<Array<[RTCPeerConnection, RTCPeerConnection]>>(
-    []
-  );
   const peerJsInstanceRef = useRef<Peer | null>(null);
   const peerJsConnsRef = useRef<DataConnection[]>([]);
   const incomingBuffersRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
@@ -933,8 +928,7 @@ export default function App() {
               const localAndPeerJs = prev.filter(
                 (p) =>
                   p.id.startsWith('aethertunnel-v1-') ||
-                  p.id === 'native-exe-bridge' ||
-                  p.isVirtualLoopback
+                  p.id === 'native-exe-bridge'
               );
               return [...localAndPeerJs, ...otherPeers];
             });
@@ -968,8 +962,7 @@ export default function App() {
               const localAndPeerJs = prev.filter(
                 (p) =>
                   p.id.startsWith('aethertunnel-v1-') ||
-                  p.id === 'native-exe-bridge' ||
-                  p.isVirtualLoopback
+                  p.id === 'native-exe-bridge'
               );
               return [...localAndPeerJs, ...otherPeers];
             });
@@ -992,8 +985,7 @@ export default function App() {
               const localAndPeerJs = prev.filter(
                 (p) =>
                   p.id.startsWith('aethertunnel-v1-') ||
-                  p.id === 'native-exe-bridge' ||
-                  p.isVirtualLoopback
+                  p.id === 'native-exe-bridge'
               );
               return [...localAndPeerJs, ...otherPeers];
             });
@@ -1692,80 +1684,6 @@ export default function App() {
     };
   }, [roomCode]);
 
-  // 7. Toggle Real In-Browser 1-Connection WebRTC Loopback Sandbox Peer
-  const toggleVirtualSandboxPeer = async () => {
-    if (virtualPeerActive) {
-      for (const [pcA, pcB] of sandboxPcPairsRef.current) {
-        pcA.close();
-        pcB.close();
-      }
-      sandboxPcPairsRef.current = [];
-      sandboxLanesRef.current = [];
-      setVirtualPeerActive(false);
-      setPeers((prev) => prev.filter((p) => !p.isVirtualLoopback));
-      return;
-    }
-
-    setVirtualPeerActive(true);
-    setConnectionState('connected_p2p');
-    const vPeerId = `sandbox-pipe-${Math.random().toString(36).slice(2, 6)}`;
-    setPeers((prev) => [
-      ...prev,
-      {
-        id: vPeerId,
-        deviceLabel: 'Sandbox Loopback Peer (Dedicated C++ WebRTC Pipe)',
-        natType: '1x Dedicated SCTP Loopback',
-        joinedAt: Date.now(),
-        isVirtualLoopback: true,
-      },
-    ]);
-
-    try {
-      const pairs: Array<[RTCPeerConnection, RTCPeerConnection]> = [];
-      const lanes: RTCDataChannel[] = [];
-
-      for (let i = 0; i < MAX_PARALLEL_LANES; i++) {
-        const pcSender = new RTCPeerConnection();
-        const pcReceiver = new RTCPeerConnection();
-        pairs.push([pcSender, pcReceiver]);
-
-        pcSender.onicecandidate = (e) => {
-          if (e.candidate) void pcReceiver.addIceCandidate(e.candidate);
-        };
-        pcReceiver.onicecandidate = (e) => {
-          if (e.candidate) void pcSender.addIceCandidate(e.candidate);
-        };
-
-        pcReceiver.ondatachannel = (ev) => {
-          ev.channel.binaryType = 'arraybuffer';
-          ev.channel.onmessage = () => {
-            // Sink incoming C++ WebRTC loopback frames at full hardware line-rate
-          };
-        };
-
-        const dc = pcSender.createDataChannel(`sandbox-lane-${i}`, {
-          ordered: true,
-        });
-        dc.binaryType = 'arraybuffer';
-        dc.bufferedAmountLowThreshold = LOW_WATER_MARK;
-        lanes.push(dc);
-
-        const offer = await pcSender.createOffer();
-        await pcSender.setLocalDescription(offer);
-        await pcReceiver.setRemoteDescription(offer);
-        const answer = await pcReceiver.createAnswer();
-        await pcReceiver.setLocalDescription(answer);
-        await pcSender.setRemoteDescription(answer);
-      }
-
-      sandboxPcPairsRef.current = pairs;
-      sandboxLanesRef.current = lanes;
-      setOpenPoolCount(MAX_PARALLEL_LANES);
-    } catch {
-      // Fallback if WebRTC loopback is restricted
-    }
-  };
-
   // Get active open RTCDataChannel lanes
   const getOpenDataChannelLanes = useCallback((): RTCDataChannel[] => {
     if (transportStrategy === 'websocket_relay') return [];
@@ -1784,13 +1702,6 @@ export default function App() {
       );
     if (peerJsOpen.length > 0) {
       return peerJsOpen;
-    }
-
-    const sbLanes = sandboxLanesRef.current.filter(
-      (dc) => dc.readyState === 'open'
-    );
-    if (sbLanes.length > 0) {
-      return sbLanes;
     }
 
     return [];
@@ -1949,8 +1860,7 @@ export default function App() {
       const hasBrowserPeers = peersRef.current.some(
         (p) =>
           !p.id.startsWith('exe-kernel-') &&
-          p.id !== 'native-exe-bridge' &&
-          !p.isVirtualLoopback
+          p.id !== 'native-exe-bridge'
       );
       const hasOpenLocalExeBridge =
         !skipExeBridge &&
@@ -1967,7 +1877,7 @@ export default function App() {
       const hasOpenExeBridge = hasOpenLocalExeBridge || hasOpenCloudExeBridge;
 
       const activeTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' =
-        openLanes.length > 0 || virtualPeerActive
+        openLanes.length > 0
           ? 'WebRTC Direct (UDP/DTLS)'
           : 'Encrypted WS Relay (TCP/443)';
 
@@ -2524,8 +2434,7 @@ export default function App() {
             }
           } else if (
             wsRef.current &&
-            wsRef.current.readyState === WebSocket.OPEN &&
-            !virtualPeerActive
+            wsRef.current.readyState === WebSocket.OPEN
           ) {
             // FAST PATH 3: Raw Binary WebSocket Relay (Cloud Wormhole Bridge to .EXE or Remote Browser)
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
@@ -2739,7 +2648,6 @@ export default function App() {
 
   const isPeerConnected =
     peers.length > 0 ||
-    virtualPeerActive ||
     exeBridgeConnected ||
     localBusPeers.length > 0 ||
     cloudWebPeers.length > 0;
@@ -2846,38 +2754,22 @@ export default function App() {
                   Encrypted Peer-to-Peer File Transfer
                 </h1>
               </div>
-
-              {/* Instant Sandbox Peer Toggle + 1-Click Portable Download */}
-              <div className="flex flex-wrap items-center gap-3 shrink-0">
-                <button
-                  onClick={toggleVirtualSandboxPeer}
-                  className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                    virtualPeerActive
-                      ? 'bg-emerald-950/60 border-emerald-500/60 text-emerald-300 hover:bg-emerald-950'
-                      : 'bg-slate-900 border-slate-800 text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  {virtualPeerActive
-                    ? 'Sandbox Peer Connected (Click to Disconnect)'
-                    : 'Connect Local Sandbox Peer'}
-                </button>
-
-                <button
-                  onClick={() =>
-                    downloadNativeWindowsKernelExe(
-                      roomCode,
-                      `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
-                    )
-                  }
-                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                  title="Downloads the High-DPI Native Windows Kernel-Socket .EXE (v7 · Per-Monitor V2 High-DPI · Local + Cloud Wormhole Bridge)"
-                >
-                  <HardDriveDownload className="w-3.5 h-3.5" />
-                  Download Kernel-Socket .EXE (v7 High-DPI)
-                </button>
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                  <button
+                    onClick={() =>
+                      downloadNativeWindowsKernelExe(
+                        roomCode,
+                        `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
+                      )
+                    }
+                    className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    title="Downloads the High-DPI Native Windows Kernel-Socket .EXE (v7 · Per-Monitor V2 High-DPI · Local + Cloud Wormhole Bridge)"
+                  >
+                    <HardDriveDownload className="w-3.5 h-3.5" />
+                    Download Kernel-Socket .EXE (v7 High-DPI)
+                  </button>
+                </div>
               </div>
-            </div>
 
             {/* 4-Stage NAT Traversal & Cryptographic Verification Stepper */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -3006,6 +2898,8 @@ export default function App() {
                     </div>
                   </div>
 
+
+
                   {/* Join Remote Peer Tunnel Form */}
                   <form onSubmit={handleJoinTunnel} className="space-y-2">
                     <label className="block text-xs font-medium text-slate-300">
@@ -3127,14 +3021,8 @@ export default function App() {
                     </div>
 
                     {peers.length === 0 ? (
-                      <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-lg text-xs text-slate-400 flex items-center justify-between gap-2">
-                        <span>No remote peer in room yet.</span>
-                        <button
-                          onClick={toggleVirtualSandboxPeer}
-                          className="text-sky-400 hover:text-sky-300 font-medium cursor-pointer whitespace-nowrap"
-                        >
-                          + Spawn Sandbox Peer
-                        </button>
+                      <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-lg text-xs text-slate-400">
+                        No remote peer in room yet.
                       </div>
                     ) : (
                       <div className="space-y-2">
