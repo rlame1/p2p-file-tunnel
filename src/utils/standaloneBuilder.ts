@@ -255,19 +255,25 @@ jobs:
               --latest
           fi
 
-      - name: 5. Publish Static Web App & Downloads to gh-pages Branch
-        env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd dist
-          touch .nojekyll
-          git init
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b gh-pages
-          git add -A
-          git commit -m "Deploy AetherTunnel Web App and Standalone .EXE"
-          git push --force "https://x-access-token:\${GH_TOKEN}@github.com/\${GITHUB_REPOSITORY}.git" gh-pages:gh-pages
+      - name: 5. Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: 6. Upload Artifact for GitHub Pages (Source: GitHub Actions)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+  deploy-pages:
+    name: Deploy Live Site to GitHub Pages
+    needs: build-and-publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 `;
 }
 

@@ -1056,13 +1056,14 @@ export default function App() {
                     : 'Connect Local Sandbox Peer'}
                 </button>
 
-                <button
-                  onClick={handleDirectPortableDownload}
+                <a
+                  href="./downloads/AetherTunnel-win-x64.exe"
+                  download="AetherTunnel-win-x64.exe"
                   className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <HardDriveDownload className="w-3.5 h-3.5" />
-                  Download Standalone App
-                </button>
+                  Download Windows .EXE
+                </a>
               </div>
             </div>
 
