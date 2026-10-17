@@ -17,7 +17,6 @@ import {
   Lock,
   HardDriveDownload,
   FileArchive,
-  Users,
   Zap,
 } from 'lucide-react';
 import {
@@ -53,10 +52,15 @@ import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
 const WIRE_CHUNK_BYTES = 240 * 1024;
-const MAX_PARALLEL_LANES = 1; 
+const MAX_PARALLEL_LANES = 1;
 const CHUNKS_PER_WAVE = 32;
 const HIGH_WATER_MARK = 8 * 1024 * 1024;
 const LOW_WATER_MARK = 4 * 1024 * 1024;
+
+// Disk streaming memory backpressure thresholds (bounds RAM usage strictly)
+const MAX_RAM_BUFFER_BYTES = 16 * 1024 * 1024; // Pause sender above 16 MB in RAM
+const LOW_RAM_BUFFER_BYTES = 4 * 1024 * 1024;  // Resume sender below 4 MB in RAM
+const MAX_CHUNKS_PER_DISK_WRITE = 64;          // Batch up to ~15 MB per single write syscall
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -64,6 +68,11 @@ export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
+
+// 0 = missing, 1 = buffered in RAM waiting for disk write, 2 = written to disk & freed from RAM
+const CHUNK_MISSING = 0;
+const CHUNK_IN_RAM = 1;
+const CHUNK_ON_DISK = 2;
 
 interface IncomingFileBuffer {
   id: string;
@@ -76,12 +85,17 @@ interface IncomingFileBuffer {
   expectedSha256: string;
   transportUsed: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)';
   receivedChunks: Array<ArrayBuffer | undefined>;
+  chunkState: Uint8Array;
+  pendingWriteIndices: number[];
   receivedCount: number;
+  writtenCount: number;
+  bufferedBytesInRam: number;
+  backpressureActive: boolean;
   startedAt: number;
   lastUiUpdateAt: number;
-  nextChunkToWrite: number;
   writableStream: any;
   isWriting: boolean;
+  streamError?: string;
 }
 
 interface PartialSubFrameAssembly {
@@ -90,28 +104,35 @@ interface PartialSubFrameAssembly {
   totalParts: number;
 }
 
-async function saveFileArrayWithPrompt(defaultName: string, fileBytes: Uint8Array): Promise<string> {
+async function saveFileArrayWithPrompt(
+  defaultName: string,
+  fileBytes: Uint8Array
+): Promise<string> {
   if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
     try {
       const handle = await (window as any).showSaveFilePicker({
         suggestedName: defaultName,
-        types: [{
-          description: 'Files',
-          accept: { '*/*': ['.*'] }
-        }]
+        types: [
+          {
+            description: 'Files',
+            accept: { '*/*': ['.*'] },
+          },
+        ],
       });
       const writable = await handle.createWritable();
       await writable.write(fileBytes);
       await writable.close();
-      return URL.createObjectURL(new Blob([fileBytes.buffer as ArrayBuffer]));
+      return 'SAVED_DIRECTLY_TO_DISK';
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        // User cancelled picker
+        return '';
       }
     }
   }
 
-  const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+  const blob = new Blob([fileBytes.buffer as ArrayBuffer], {
+    type: 'application/octet-stream',
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -142,15 +163,19 @@ export default function App() {
   const [transportStrategy, setTransportStrategy] =
     useState<TransportStrategy>('auto');
   const [peers, setPeers] = useState<PeerSummary[]>([]);
-  const [openPoolCount, setOpenPoolCount] = useState<number>(1);
+  const [, setOpenPoolCount] = useState<number>(1);
 
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const [notes, setNotes] = useState<EncryptedNote[]>([]);
   const [noteInput, setNoteInput] = useState<string>('');
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<'code' | 'link' | null>(null);
-  const [incomingFileAlert, setIncomingFileAlert] = useState<string | null>(null);
-  const [pendingIncomingFile, setPendingIncomingFile] = useState<{ fileId: string, name: string, size: number } | null>(null);
+  const [, setIncomingFileAlert] = useState<string | null>(null);
+  const [pendingIncomingFile, setPendingIncomingFile] = useState<{
+    fileId: string;
+    name: string;
+    size: number;
+  } | null>(null);
 
   const [natReport, setNatReport] = useState<NatProbeReport | null>(null);
   const [isProbingNat, setIsProbingNat] = useState<boolean>(false);
@@ -188,9 +213,13 @@ export default function App() {
   const peersRef = useRef<PeerSummary[]>([]);
   peersRef.current = peers;
 
-  const pendingFileAcceptResolversRef = useRef<Map<string, { resolve: () => void, reject: (reason?: any) => void }>>(new Map());
-
-  const displayedLaneCount = 1;
+  const pendingFileAcceptResolversRef = useRef<
+    Map<string, { resolve: () => void; reject: (reason?: any) => void }>
+  >(new Map());
+  const senderBackpressureWaitersRef = useRef<Map<string, () => void>>(
+    new Map()
+  );
+  const senderPausedFilesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -235,58 +264,223 @@ export default function App() {
     }
   }, [roomCode, peerId, natReport?.detectedNatTopology]);
 
-  // --- Streaming Write to Disk Logic ---
-  
-  const flushChunksToDisk = async (bufEntry: IncomingFileBuffer) => {
-    if (!bufEntry.writableStream || bufEntry.isWriting) return;
-    
-    bufEntry.isWriting = true;
-    try {
-      while (bufEntry.nextChunkToWrite < bufEntry.totalChunks) {
-        const chunk = bufEntry.receivedChunks[bufEntry.nextChunkToWrite];
-        if (chunk !== undefined) {
-          await bufEntry.writableStream.write(chunk);
-          bufEntry.receivedChunks[bufEntry.nextChunkToWrite] = undefined; 
-          bufEntry.nextChunkToWrite++;
-        } else {
-          break; 
+  const getOpenDataChannelLanes = useCallback((): RTCDataChannel[] => {
+    if (transportStrategy === 'websocket_relay') return [];
+
+    const realLanes = dataChannelPoolRef.current.filter(
+      (dc) => dc.readyState === 'open'
+    );
+    if (realLanes.length > 0) {
+      return realLanes;
+    }
+
+    return [];
+  }, [transportStrategy]);
+
+  const transmitEncryptedPacket = useCallback(
+    (
+      packet: unknown
+    ): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
+      const serialized = JSON.stringify(packet);
+      let transportUsed:
+        | 'WebRTC Direct (UDP/DTLS)'
+        | 'Encrypted WS Relay (TCP/443)' = 'WebRTC Direct (UDP/DTLS)';
+
+      if (localBusRef.current && localBusPeersRef.current.length > 0) {
+        try {
+          localBusRef.current.postMessage({
+            type: 'bus:packet',
+            packet,
+          });
+        } catch {}
+      }
+
+      if (
+        cloudExeWsRef.current &&
+        cloudExeWsRef.current.readyState === WebSocket.OPEN
+      ) {
+        for (const peerDst of cloudWebPeersRef.current) {
+          try {
+            cloudExeWsRef.current.send(
+              JSON.stringify({
+                type: 'CANDIDATE',
+                dst: peerDst,
+                payload: {
+                  kind: 'browser:packet',
+                  packet,
+                },
+              })
+            );
+          } catch {}
         }
       }
 
-      if (bufEntry.nextChunkToWrite >= bufEntry.totalChunks) {
-        await bufEntry.writableStream.close();
-        bufEntry.writableStream = null;
-        
-        const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
-        const speedBps = bufEntry.size / elapsedSec;
-        const fileId = bufEntry.id;
+      const openLanes = getOpenDataChannelLanes();
+      for (const dc of openLanes) {
+        if (dc.readyState === 'open') {
+          try {
+            dc.send(serialized);
+          } catch {}
+        }
+      }
 
+      for (const conn of peerJsConnsRef.current) {
+        if (conn.open) {
+          try {
+            conn.send(serialized);
+          } catch {}
+        }
+      }
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'relay:packet',
+              packet,
+            })
+          );
+          if (openLanes.length === 0) {
+            transportUsed = 'Encrypted WS Relay (TCP/443)';
+          }
+        } catch {}
+      }
+
+      return transportUsed;
+    },
+    [getOpenDataChannelLanes]
+  );
+
+  // --- Direct-to-Disk Streaming Engine (Zero-Copy Blob Batching + Offset Writes) ---
+
+  const flushChunksToDisk = useCallback(
+    async (bufEntry: IncomingFileBuffer) => {
+      if (!bufEntry.writableStream || bufEntry.isWriting) return;
+
+      bufEntry.isWriting = true;
+      try {
+        while (
+          bufEntry.writableStream &&
+          bufEntry.pendingWriteIndices.length > 0
+        ) {
+          // Sort indices ascending so contiguous chunks can be coalesced into one write call
+          bufEntry.pendingWriteIndices.sort((a, b) => a - b);
+
+          const startChunkIdx = bufEntry.pendingWriteIndices[0];
+          const batchParts: ArrayBuffer[] = [];
+          let batchBytes = 0;
+          let expectedIdx = startChunkIdx;
+
+          while (
+            bufEntry.pendingWriteIndices.length > 0 &&
+            bufEntry.pendingWriteIndices[0] === expectedIdx &&
+            batchParts.length < MAX_CHUNKS_PER_DISK_WRITE
+          ) {
+            bufEntry.pendingWriteIndices.shift();
+            const chunkBuf = bufEntry.receivedChunks[expectedIdx];
+            if (chunkBuf !== undefined) {
+              batchParts.push(chunkBuf);
+              batchBytes += chunkBuf.byteLength;
+              // Free reference from array immediately so GC can reclaim it right after write
+              bufEntry.receivedChunks[expectedIdx] = undefined;
+              bufEntry.chunkState[expectedIdx] = CHUNK_ON_DISK;
+              bufEntry.writtenCount += 1;
+              bufEntry.bufferedBytesInRam = Math.max(
+                0,
+                bufEntry.bufferedBytesInRam - chunkBuf.byteLength
+              );
+            }
+            expectedIdx += 1;
+          }
+
+          if (batchParts.length > 0) {
+            const position = startChunkIdx * bufEntry.chunkSize;
+            const batchBlob = new Blob(batchParts);
+            await bufEntry.writableStream.write({
+              type: 'write',
+              position,
+              data: batchBlob,
+            });
+            batchParts.length = 0;
+          }
+
+          // Release sender backpressure once RAM buffer drops below low-water mark
+          if (
+            bufEntry.backpressureActive &&
+            bufEntry.bufferedBytesInRam <= LOW_RAM_BUFFER_BYTES
+          ) {
+            bufEntry.backpressureActive = false;
+            transmitEncryptedPacket({
+              kind: 'file:backpressure',
+              fileId: bufEntry.id,
+              pause: false,
+            });
+          }
+        }
+
+        // Complete transfer once all chunks have been physically flushed to disk
+        if (
+          bufEntry.writableStream &&
+          bufEntry.writtenCount >= bufEntry.totalChunks
+        ) {
+          const streamToClose = bufEntry.writableStream;
+          bufEntry.writableStream = null;
+          await streamToClose.close();
+
+          const elapsedSec = Math.max(
+            0.015,
+            (performance.now() - bufEntry.startedAt) / 1000
+          );
+          const speedBps = bufEntry.size / elapsedSec;
+          const fileId = bufEntry.id;
+
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fileId && item.direction === 'incoming'
+                ? {
+                    ...item,
+                    transferredChunks: bufEntry.totalChunks,
+                    bytesTransferred: bufEntry.size,
+                    speedBps,
+                    status: 'completed',
+                    verified: true,
+                    downloadUrl: 'SAVED_DIRECTLY_TO_DISK',
+                    completedAt: Date.now(),
+                  }
+                : item
+            )
+          );
+
+          incomingBuffersRef.current.delete(fileId);
+          numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+        }
+      } catch (e: any) {
+        console.error('Stream write error:', e);
+        bufEntry.streamError = e?.message || 'Disk write error';
         setTransfers((prev) =>
           prev.map((item) =>
-            item.id === fileId && item.direction === 'incoming'
+            item.id === bufEntry.id && item.direction === 'incoming'
               ? {
                   ...item,
-                  transferredChunks: bufEntry.totalChunks,
-                  bytesTransferred: bufEntry.size,
-                  speedBps,
-                  status: 'completed',
-                  verified: true,
-                  downloadUrl: 'SAVED_DIRECTLY_TO_DISK',
-                  completedAt: Date.now(),
+                  status: 'error',
+                  errorMessage: `Levyvirhe: ${bufEntry.streamError}`,
                 }
               : item
           )
         );
-
-        incomingBuffersRef.current.delete(fileId);
-        numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+      } finally {
+        bufEntry.isWriting = false;
+        // If new chunks arrived while await write() was in flight, flush again
+        if (
+          bufEntry.writableStream &&
+          bufEntry.pendingWriteIndices.length > 0
+        ) {
+          void flushChunksToDisk(bufEntry);
+        }
       }
-    } catch (e) {
-      console.error("Stream write error:", e);
-    } finally {
-      bufEntry.isWriting = false;
-    }
-  };
+    },
+    [transmitEncryptedPacket]
+  );
 
   const handleInitSave = async (fileId: string, defaultName: string) => {
     const bufEntry = incomingBuffersRef.current.get(fileId);
@@ -296,90 +490,42 @@ export default function App() {
       try {
         const handle = await (window as any).showSaveFilePicker({
           suggestedName: defaultName,
-          types: [{ description: 'Files', accept: { '*/*': ['.*'] } }]
+          types: [{ description: 'Files', accept: { '*/*': ['.*'] } }],
         });
         const writable = await handle.createWritable();
         bufEntry.writableStream = writable;
-        setPendingIncomingFile(null); 
-        
-        transmitEncryptedPacket({ kind: 'file:accept', fileId });
-        void flushChunksToDisk(bufEntry); 
-      } catch (err: any) {
-        console.warn("Save picker failed or cancelled:", err);
         setPendingIncomingFile(null);
-        
-        if (err.name === 'AbortError') {
-             incomingBuffersRef.current.delete(fileId);
-             setTransfers((prev) =>
-                prev.map((item) =>
-                  item.id === fileId && item.direction === 'incoming'
-                    ? { ...item, status: 'error', errorMessage: 'Cancelled by user' }
-                    : item
-                )
-             );
-             transmitEncryptedPacket({ kind: 'file:reject', fileId });
-             return;
-        }
-        
-        // Fallback to memory for other errors (like iframe block)
+
         transmitEncryptedPacket({ kind: 'file:accept', fileId });
-        
-        if (bufEntry.receivedCount >= bufEntry.totalChunks) {
-             const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
-             const speedBps = bufEntry.size / elapsedSec;
-             const orderedParts: ArrayBuffer[] = [];
-             for (let i = 0; i < bufEntry.totalChunks; i++) {
-               orderedParts.push(bufEntry.receivedChunks[i]!);
-             }
-             const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
-             const combinedFileArray = new Uint8Array(totalByteLength);
-             let offset = 0;
-             for (const part of orderedParts) {
-               combinedFileArray.set(new Uint8Array(part), offset);
-               offset += part.byteLength;
-             }
-             void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
-               setTransfers((prev) =>
-                 prev.map((item) =>
-                   item.id === fileId && item.direction === 'incoming'
-                     ? { 
-                         ...item, 
-                         status: 'completed', 
-                         downloadUrl, 
-                         speedBps, 
-                         verified: true, 
-                         completedAt: Date.now() 
-                       }
-                     : item
-                 )
-               );
-             });
-             incomingBuffersRef.current.delete(fileId);
-        } else {
-             bufEntry.writableStream = null;
+        void flushChunksToDisk(bufEntry);
+        return;
+      } catch (err: any) {
+        console.warn('Save picker failed or cancelled:', err);
+        setPendingIncomingFile(null);
+
+        if (err.name === 'AbortError') {
+          incomingBuffersRef.current.delete(fileId);
+          numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fileId && item.direction === 'incoming'
+                ? {
+                    ...item,
+                    status: 'error',
+                    errorMessage: 'Cancelled by user',
+                  }
+                : item
+            )
+          );
+          transmitEncryptedPacket({ kind: 'file:reject', fileId });
+          return;
         }
       }
-    } else {
-        // Fallback for mobile browsers (no showSaveFilePicker)
-        setPendingIncomingFile(null);
-        transmitEncryptedPacket({ kind: 'file:accept', fileId });
-        
-        if (bufEntry.receivedCount >= bufEntry.totalChunks) {
-            const orderedParts: ArrayBuffer[] = [];
-            for (let i = 0; i < bufEntry.totalChunks; i++) {
-              orderedParts.push(bufEntry.receivedChunks[i]!);
-            }
-            const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
-            const combinedFileArray = new Uint8Array(totalByteLength);
-            let offset = 0;
-            for (const part of orderedParts) {
-              combinedFileArray.set(new Uint8Array(part), offset);
-              offset += part.byteLength;
-            }
-            void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray);
-            incomingBuffersRef.current.delete(fileId);
-        }
     }
+
+    // Fallback only if browser does not support File System Access API (e.g. mobile / restricted iframe)
+    setPendingIncomingFile(null);
+    transmitEncryptedPacket({ kind: 'file:accept', fileId });
   };
 
   const recordDecryptedChunk = useCallback(
@@ -388,83 +534,108 @@ export default function App() {
       chunkIndex: number,
       decryptedChunk: ArrayBuffer
     ) => {
-      if (chunkIndex >= 0 && chunkIndex < bufEntry.totalChunks) {
-        if (bufEntry.receivedChunks[chunkIndex] === undefined) {
-          bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
-          bufEntry.receivedCount += 1;
-        }
+      if (chunkIndex < 0 || chunkIndex >= bufEntry.totalChunks) return;
+
+      // Ignore if chunk was already received or already written to disk!
+      if (bufEntry.chunkState[chunkIndex] !== CHUNK_MISSING) {
+        return;
       }
 
-      void flushChunksToDisk(bufEntry);
+      bufEntry.chunkState[chunkIndex] = CHUNK_IN_RAM;
+      bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
+      bufEntry.pendingWriteIndices.push(chunkIndex);
+      bufEntry.receivedCount += 1;
+      bufEntry.bufferedBytesInRam += decryptedChunk.byteLength;
 
-      // FIXED: Progress bar calculation now includes chunks already written to disk!
-      let downloadedCount = bufEntry.nextChunkToWrite;
-      for (let i = bufEntry.nextChunkToWrite; i < bufEntry.totalChunks; i++) {
-        if (bufEntry.receivedChunks[i] !== undefined) {
-          downloadedCount++;
-        }
+      // Apply backpressure if unwritten RAM buffer exceeds threshold
+      if (
+        !bufEntry.backpressureActive &&
+        bufEntry.bufferedBytesInRam >= MAX_RAM_BUFFER_BYTES
+      ) {
+        bufEntry.backpressureActive = true;
+        transmitEncryptedPacket({
+          kind: 'file:backpressure',
+          fileId: bufEntry.id,
+          pause: true,
+        });
+      }
+
+      if (bufEntry.writableStream) {
+        void flushChunksToDisk(bufEntry);
       }
 
       const now = performance.now();
       const fileId = bufEntry.id;
-      const canStreamToDisk = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
+      const canStreamToDisk =
+        typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 
-      if (downloadedCount >= bufEntry.totalChunks && !bufEntry.writableStream && bufEntry.nextChunkToWrite === 0) {
-        if (!canStreamToDisk) {
-            const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
-            const speedBps = bufEntry.size / elapsedSec;
-            const orderedParts: ArrayBuffer[] = [];
-            for (let i = 0; i < bufEntry.totalChunks; i++) {
-              orderedParts.push(bufEntry.receivedChunks[i]!);
-            }
-            const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
-            const combinedFileArray = new Uint8Array(totalByteLength);
-            let offset = 0;
-            for (const part of orderedParts) {
-              combinedFileArray.set(new Uint8Array(part), offset);
-              offset += part.byteLength;
-            }
-            bufEntry.receivedChunks.length = 0;
-
-            void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
-              setTransfers((prev) =>
-                prev.map((item) =>
-                  item.id === fileId && item.direction === 'incoming'
-                    ? { 
-                        ...item, 
-                        status: 'completed', 
-                        downloadUrl, 
-                        speedBps, 
-                        verified: true, 
-                        completedAt: Date.now() 
-                      }
-                    : item
-                )
-              );
-            });
-            incomingBuffersRef.current.delete(fileId);
-            numIdToFileIdRef.current.delete(bufEntry.transferNumId);
-        } else {
-            setTransfers((prev) =>
-              prev.map((item) =>
-                item.id === fileId && item.direction === 'incoming'
-                  ? {
-                      ...item,
-                      transferredChunks: bufEntry.totalChunks,
-                      bytesTransferred: bufEntry.size,
-                      status: 'transferring', 
-                    }
-                  : item
-              )
-            );
+      // Fallback assembly ONLY when File System Access API is unavailable
+      if (
+        bufEntry.receivedCount >= bufEntry.totalChunks &&
+        !bufEntry.writableStream &&
+        bufEntry.writtenCount === 0 &&
+        !canStreamToDisk
+      ) {
+        const elapsedSec = Math.max(
+          0.015,
+          (now - bufEntry.startedAt) / 1000
+        );
+        const speedBps = bufEntry.size / elapsedSec;
+        const orderedParts: BlobPart[] = [];
+        for (let i = 0; i < bufEntry.totalChunks; i++) {
+          if (bufEntry.receivedChunks[i]) {
+            orderedParts.push(bufEntry.receivedChunks[i]!);
+            bufEntry.receivedChunks[i] = undefined;
+          }
         }
-      } else if (now - bufEntry.lastUiUpdateAt >= 120) {
+        const blob = new Blob(orderedParts, {
+          type: bufEntry.mimeType || 'application/octet-stream',
+        });
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = bufEntry.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        setTransfers((prev) =>
+          prev.map((item) =>
+            item.id === fileId && item.direction === 'incoming'
+              ? {
+                  ...item,
+                  transferredChunks: bufEntry.totalChunks,
+                  bytesTransferred: bufEntry.size,
+                  status: 'completed',
+                  downloadUrl,
+                  speedBps,
+                  verified: true,
+                  completedAt: Date.now(),
+                }
+              : item
+          )
+        );
+        incomingBuffersRef.current.delete(fileId);
+        numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+        return;
+      }
+
+      if (
+        now - bufEntry.lastUiUpdateAt >= 120 ||
+        bufEntry.receivedCount >= bufEntry.totalChunks
+      ) {
         bufEntry.lastUiUpdateAt = now;
+        const progressChunks = bufEntry.writableStream
+          ? bufEntry.writtenCount
+          : bufEntry.receivedCount;
         const bytesSoFar = Math.min(
           bufEntry.size,
-          downloadedCount * bufEntry.chunkSize
+          progressChunks * bufEntry.chunkSize
         );
-        const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
+        const elapsedSec = Math.max(
+          0.015,
+          (now - bufEntry.startedAt) / 1000
+        );
         const speedBps = bytesSoFar / elapsedSec;
 
         setTransfers((prev) =>
@@ -472,7 +643,7 @@ export default function App() {
             item.id === fileId && item.direction === 'incoming'
               ? {
                   ...item,
-                  transferredChunks: downloadedCount,
+                  transferredChunks: progressChunks,
                   bytesTransferred: bytesSoFar,
                   speedBps,
                 }
@@ -481,7 +652,7 @@ export default function App() {
         );
       }
     },
-    []
+    [flushChunksToDisk, transmitEncryptedPacket]
   );
 
   const handleCompleteAethFrame = useCallback(
@@ -489,9 +660,11 @@ export default function App() {
       const key = cryptoKeyRef.current;
       if (!key || rawBuffer.byteLength < 24) return;
 
-      const frameBuffer = rawBuffer.slice(0);
-
-      const headerView = new DataView(frameBuffer);
+      const headerView = new DataView(
+        rawBuffer,
+        rawBuffer.byteOffset,
+        rawBuffer.byteLength
+      );
       const transferNumId = headerView.getUint32(4, false);
       const chunkIndex = headerView.getUint32(8, false);
 
@@ -502,17 +675,25 @@ export default function App() {
           orphans = [];
           orphanChunksRef.current.set(transferNumId, orphans);
         }
-        if (orphans.length < 50000) {
-          orphans.push(frameBuffer);
+        // Keep bounded orphan buffer in case chunks arrive slightly before file:meta
+        if (orphans.length < 256) {
+          orphans.push(rawBuffer.slice(0));
         }
         return;
       }
+
       const bufEntry = incomingBuffersRef.current.get(fileId);
-      if (!bufEntry || bufEntry.receivedChunks[chunkIndex] !== undefined) {
+      if (
+        !bufEntry ||
+        chunkIndex < 0 ||
+        chunkIndex >= bufEntry.totalChunks ||
+        bufEntry.chunkState[chunkIndex] !== CHUNK_MISSING
+      ) {
         return;
       }
 
       try {
+        const frameBuffer = rawBuffer.slice(0);
         const { plainBuffer } = await decryptChunkBinaryFrame(key, frameBuffer);
         recordDecryptedChunk(bufEntry, chunkIndex, plainBuffer);
       } catch {
@@ -539,6 +720,19 @@ export default function App() {
         const totalFrameBytes = view.getUint32(12, false);
         const byteOffset = view.getUint32(16, false);
         const totalParts = view.getUint16(22, false);
+
+        // Skip reassembling subframe if chunk was already received or written to disk
+        const existingFileId = numIdToFileIdRef.current.get(transferNumId);
+        if (existingFileId) {
+          const existingBuf = incomingBuffersRef.current.get(existingFileId);
+          if (
+            existingBuf &&
+            chunkIndex < existingBuf.totalChunks &&
+            existingBuf.chunkState[chunkIndex] !== CHUNK_MISSING
+          ) {
+            return true;
+          }
+        }
 
         const assemblyKey = `${transferNumId}:${chunkIndex}`;
         let assembly = partialSubFramesRef.current.get(assemblyKey);
@@ -567,10 +761,103 @@ export default function App() {
     [handleCompleteAethFrame]
   );
 
+  const initIncomingFileSession = useCallback(
+    (
+      fileId: string,
+      transferNumId: number,
+      name: string,
+      size: number,
+      chunkSize: number,
+      mimeType: string,
+      totalChunks: number,
+      sha256: string,
+      sourceTransport:
+        | 'WebRTC Direct (UDP/DTLS)'
+        | 'Encrypted WS Relay (TCP/443)'
+    ): IncomingFileBuffer => {
+      // Guard against duplicate file:meta packets wiping an active stream!
+      const existing = incomingBuffersRef.current.get(fileId);
+      if (existing) {
+        return existing;
+      }
+
+      const safeTotalChunks = Math.max(1, totalChunks);
+      const bufEntry: IncomingFileBuffer = {
+        id: fileId,
+        transferNumId,
+        name,
+        size,
+        chunkSize: chunkSize || WIRE_CHUNK_BYTES,
+        mimeType: mimeType || 'application/octet-stream',
+        totalChunks: safeTotalChunks,
+        expectedSha256: sha256,
+        transportUsed: sourceTransport,
+        receivedChunks: new Array(safeTotalChunks),
+        chunkState: new Uint8Array(safeTotalChunks),
+        pendingWriteIndices: [],
+        receivedCount: 0,
+        writtenCount: 0,
+        bufferedBytesInRam: 0,
+        backpressureActive: false,
+        startedAt: performance.now(),
+        lastUiUpdateAt: 0,
+        writableStream: null,
+        isWriting: false,
+      };
+
+      numIdToFileIdRef.current.set(transferNumId, fileId);
+      incomingBuffersRef.current.set(fileId, bufEntry);
+
+      setPendingIncomingFile({ fileId, name, size });
+      setIncomingFileAlert(
+        `Incoming File Detected: ${name} (${formatBytes(size)}) — Click to save to disk.`
+      );
+
+      setTransfers((prev) => {
+        if (prev.some((t) => t.id === fileId && t.direction === 'incoming')) {
+          return prev;
+        }
+        return [
+          {
+            id: fileId,
+            name,
+            size,
+            mimeType: mimeType || 'application/octet-stream',
+            totalChunks: safeTotalChunks,
+            transferredChunks: 0,
+            bytesTransferred: 0,
+            speedBps: 0,
+            status: 'transferring',
+            sha256,
+            verified: false,
+            direction: 'incoming',
+            transportUsed: sourceTransport,
+            startedAt: Date.now(),
+          },
+          ...prev,
+        ];
+      });
+
+      // Drain any orphan frames that arrived before file:meta
+      const orphans = orphanChunksRef.current.get(transferNumId);
+      if (orphans && orphans.length > 0) {
+        orphanChunksRef.current.delete(transferNumId);
+        for (const orphanFrame of orphans) {
+          void handleCompleteAethFrame(orphanFrame);
+        }
+      }
+
+      return bufEntry;
+    },
+    [handleCompleteAethFrame]
+  );
+
   const handleTunnelPacket = useCallback(
     async (
       packet: any,
-      sourceTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)'
+      sourceTransport:
+        | 'WebRTC Direct (UDP/DTLS)'
+        | 'Encrypted WS Relay (TCP/443)'
     ) => {
       const key = cryptoKeyRef.current;
       if (!key) return;
@@ -627,8 +914,25 @@ export default function App() {
         const { fileId } = packet;
         const resolverObj = pendingFileAcceptResolversRef.current.get(fileId);
         if (resolverObj) {
-          resolverObj.reject(new Error('Vastaanottaja peruutti tiedoston vastaanoton.'));
+          resolverObj.reject(
+            new Error('Vastaanottaja peruutti tiedoston vastaanoton.')
+          );
           pendingFileAcceptResolversRef.current.delete(fileId);
+        }
+        return;
+      }
+
+      if (packet.kind === 'file:backpressure') {
+        const { fileId, pause } = packet;
+        if (pause) {
+          senderPausedFilesRef.current.add(fileId);
+        } else {
+          senderPausedFilesRef.current.delete(fileId);
+          const waiter = senderBackpressureWaitersRef.current.get(fileId);
+          if (waiter) {
+            senderBackpressureWaitersRef.current.delete(fileId);
+            waiter();
+          }
         }
         return;
       }
@@ -647,56 +951,17 @@ export default function App() {
 
         const numId =
           typeof transferNumId === 'number' ? transferNumId : 1001;
-        numIdToFileIdRef.current.set(numId, fileId);
-
-        incomingBuffersRef.current.set(fileId, {
-          id: fileId,
-          transferNumId: numId,
+        initIncomingFileSession(
+          fileId,
+          numId,
           name,
           size,
-          chunkSize: chunkSize || WIRE_CHUNK_BYTES,
-          mimeType,
+          chunkSize || WIRE_CHUNK_BYTES,
+          mimeType || 'application/octet-stream',
           totalChunks,
-          expectedSha256: sha256,
-          transportUsed: sourceTransport,
-          receivedChunks: new Array(totalChunks),
-          receivedCount: 0,
-          startedAt: performance.now(),
-          lastUiUpdateAt: 0,
-          nextChunkToWrite: 0,
-          writableStream: null,
-          isWriting: false,
-        });
-
-        setPendingIncomingFile({ fileId, name, size });
-        setIncomingFileAlert(
-          `Incoming File Detected: ${name} (${formatBytes(size)}) — Click to save to disk.`
+          sha256,
+          sourceTransport
         );
-
-        setTransfers((prev) => {
-          if (prev.some((t) => t.id === fileId && t.direction === 'incoming')) {
-            return prev;
-          }
-          return [
-            {
-              id: fileId,
-              name,
-              size,
-              mimeType,
-              totalChunks,
-              transferredChunks: 0,
-              bytesTransferred: 0,
-              speedBps: 0,
-              status: 'transferring',
-              sha256,
-              verified: false,
-              direction: 'incoming',
-              transportUsed: sourceTransport,
-              startedAt: Date.now(),
-            },
-            ...prev,
-          ];
-        });
         return;
       }
 
@@ -711,7 +976,14 @@ export default function App() {
       if (packet.kind === 'file:chunk') {
         const { fileId, chunkIndex, ivBase64, ciphertextBase64 } = packet;
         const bufEntry = incomingBuffersRef.current.get(fileId);
-        if (!bufEntry) return;
+        if (
+          !bufEntry ||
+          chunkIndex < 0 ||
+          chunkIndex >= bufEntry.totalChunks ||
+          bufEntry.chunkState[chunkIndex] !== CHUNK_MISSING
+        ) {
+          return;
+        }
 
         try {
           const decryptedChunk = await decryptChunk(
@@ -759,7 +1031,7 @@ export default function App() {
         }
       }
     },
-    [handleRawBinaryFrame, recordDecryptedChunk]
+    [handleRawBinaryFrame, initIncomingFileSession, recordDecryptedChunk]
   );
 
   const registerDataChannelLane = useCallback(
@@ -767,18 +1039,7 @@ export default function App() {
       channel.binaryType = 'arraybuffer';
       channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
-      channel.addEventListener('message', async (ev: MessageEvent) => {
-        let data = ev.data;
-        if (data instanceof Blob) {
-          try {
-            data = await data.arrayBuffer();
-          } catch {}
-        }
-        if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) {
-          return;
-        }
-      });
-
+      // Only attach direct message handler when not already handled by PeerJS conn.on('data')
       if (!managedByPeerJs) {
         channel.onmessage = async (ev: MessageEvent) => {
           let data = ev.data;
@@ -822,7 +1083,10 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') {
+    if (
+      typeof window === 'undefined' ||
+      typeof BroadcastChannel === 'undefined'
+    ) {
       return;
     }
 
@@ -962,7 +1226,9 @@ export default function App() {
 
       conn.on('close', () => {
         if (destroyed) return;
-        peerJsConnsRef.current = peerJsConnsRef.current.filter((c) => c !== conn);
+        peerJsConnsRef.current = peerJsConnsRef.current.filter(
+          (c) => c !== conn
+        );
         if (peerJsConnsRef.current.length === 0) {
           setPeers((prev) => prev.filter((p) => p.id !== conn.peer));
         }
@@ -1017,7 +1283,12 @@ export default function App() {
       peerJsConnsRef.current = [];
       peerJsInstanceRef.current?.destroy();
     };
-  }, [roomCode, handleTunnelPacket, handleRawBinaryFrame, registerDataChannelLane]);
+  }, [
+    roomCode,
+    handleTunnelPacket,
+    handleRawBinaryFrame,
+    registerDataChannelLane,
+  ]);
 
   const initWebRtcConnectionPool = useCallback(
     async (isInitiator: boolean, specificLaneIndex?: number) => {
@@ -1131,7 +1402,8 @@ export default function App() {
             roomCode,
             peerId,
             deviceLabel: `${navigator.platform || 'Desktop'} Client`,
-            natType: natReport?.detectedNatTopology || 'Port-Restricted Cone NAT',
+            natType:
+              natReport?.detectedNatTopology || 'Port-Restricted Cone NAT',
           })
         );
       };
@@ -1186,7 +1458,7 @@ export default function App() {
               );
             }
           } else if (msg.type === 'peer:joined') {
-             const otherPeers: PeerSummary[] = (msg.peers || []).filter(
+            const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
             const hasCloudExePeer = otherPeers.some((p) =>
@@ -1232,7 +1504,7 @@ export default function App() {
               setExeBridgeConnected(false);
             }
           } else if (msg.type === 'webrtc:signal') {
-             const laneIdx = typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
+            const laneIdx = typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
             let pc = peerConnPoolRef.current.get(laneIdx);
             if (!pc) {
               await initWebRtcConnectionPool(false, laneIdx);
@@ -1326,14 +1598,7 @@ export default function App() {
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, '') || 'default';
 
-    let rxFileId = '';
-    let rxFileName = '';
-    let rxFileSize = 0;
-    let rxTotalChunks = 1;
-    let rxChunks: Uint8Array[] = [];
-    let rxBytes = 0;
-    let rxStartedAt = 0;
-    let rxLastUiAt = 0;
+    let activeCloudRxFileId = '';
 
     const sendCloudPacket = (
       socket: WebSocket | null,
@@ -1354,7 +1619,10 @@ export default function App() {
 
     let cloudFailedAttempts = 0;
 
-    const broadcastBrowserHello = (socket: WebSocket | null, currentMyId: string) => {
+    const broadcastBrowserHello = (
+      socket: WebSocket | null,
+      currentMyId: string
+    ) => {
       sendCloudPacket(socket, `aethertunnel-exe-${cleanCode}-0`, {
         kind: 'browser:hello',
         roomCode: cleanCode,
@@ -1423,7 +1691,8 @@ export default function App() {
                 socket.close();
               } catch {}
               if (!unmounted) {
-                if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+                if (reconnectTimer !== null)
+                  window.clearTimeout(reconnectTimer);
                 reconnectTimer = window.setTimeout(connectCloudWormhole, 60);
               }
               return;
@@ -1434,12 +1703,15 @@ export default function App() {
             if (!payload || typeof payload !== 'object') return;
 
             if (
-              (payload.kind === 'browser:hello' || payload.kind === 'web:hello') &&
+              (payload.kind === 'browser:hello' ||
+                payload.kind === 'web:hello') &&
               srcPeer &&
               srcPeer.startsWith('aethertunnel-web-') &&
               srcPeer !== myId
             ) {
-              setCloudWebPeers((prev) => Array.from(new Set([...prev, srcPeer])));
+              setCloudWebPeers((prev) =>
+                Array.from(new Set([...prev, srcPeer]))
+              );
               setConnectionState('connected_p2p');
               setPeers((prev) => {
                 if (prev.some((p) => p.id === srcPeer)) return prev;
@@ -1457,8 +1729,14 @@ export default function App() {
                 kind: 'browser:hello-ack',
                 roomCode: cleanCode,
               });
-            } else if (payload.kind === 'browser:hello-ack' && srcPeer && srcPeer !== myId) {
-              setCloudWebPeers((prev) => Array.from(new Set([...prev, srcPeer])));
+            } else if (
+              payload.kind === 'browser:hello-ack' &&
+              srcPeer &&
+              srcPeer !== myId
+            ) {
+              setCloudWebPeers((prev) =>
+                Array.from(new Set([...prev, srcPeer]))
+              );
               setConnectionState('connected_p2p');
               setPeers((prev) => {
                 if (prev.some((p) => p.id === srcPeer)) return prev;
@@ -1473,7 +1751,10 @@ export default function App() {
                 ];
               });
             } else if (payload.kind === 'browser:packet' && payload.packet) {
-              void handleTunnelPacket(payload.packet, 'Encrypted WS Relay (TCP/443)');
+              void handleTunnelPacket(
+                payload.packet,
+                'Encrypted WS Relay (TCP/443)'
+              );
             } else if (payload.kind === 'exe:hello' && srcPeer) {
               cloudExePeerIdRef.current = srcPeer;
               setExeBridgeConnected(true);
@@ -1496,133 +1777,85 @@ export default function App() {
                 kind: 'browser:hello',
                 roomCode: cleanCode,
               });
-            } else if (payload.kind === 'exe:chunk-ack' || payload.kind === 'browser:chunk-ack') {
+            } else if (
+              payload.kind === 'exe:chunk-ack' ||
+              payload.kind === 'browser:chunk-ack'
+            ) {
               if (cloudAckResolverRef.current) {
                 const resolve = cloudAckResolverRef.current;
                 cloudAckResolverRef.current = null;
                 resolve();
               }
-            } else if (payload.kind === 'exe:file-start' || payload.kind === 'browser:file-start') {
+            } else if (
+              payload.kind === 'exe:file-start' ||
+              payload.kind === 'browser:file-start'
+            ) {
               if (srcPeer) cloudExePeerIdRef.current = srcPeer;
-              rxFileId = String(payload.fileId || `cloud-${Date.now()}`);
-              rxFileName = String(payload.name || 'transfer.bin');
-              rxFileSize = Number(payload.size) || 0;
+              const fid = String(payload.fileId || `cloud-${Date.now()}`);
+              const fname = String(payload.name || 'transfer.bin');
+              const fsize = Number(payload.size) || 0;
               const cSize = Number(payload.chunkSize) || 49152;
-              rxTotalChunks = Math.max(
+              const fchunks = Math.max(
                 1,
-                Number(payload.totalChunks) || Math.ceil(rxFileSize / cSize)
+                Number(payload.totalChunks) || Math.ceil(fsize / cSize)
               );
-              rxChunks = [];
-              rxBytes = 0;
-              rxStartedAt = performance.now();
-              rxLastUiAt = 0;
+              activeCloudRxFileId = fid;
 
-              const fid = rxFileId;
-              const fname = rxFileName;
-              const fsize = rxFileSize;
-              const fchunks = rxTotalChunks;
-
-              setTransfers((prev) => [
-                {
-                  id: fid,
-                  name: fname,
-                  size: fsize,
-                  mimeType: 'application/octet-stream',
-                  totalChunks: fchunks,
-                  transferredChunks: 0,
-                  bytesTransferred: 0,
-                  speedBps: 0,
-                  status: 'transferring',
-                  sha256: 'cloud-relay-verified',
-                  verified: false,
-                  direction: 'incoming',
-                  transportUsed: 'Encrypted WS Relay (TCP/443)',
-                  startedAt: Date.now(),
-                },
-                ...prev,
-              ]);
-            } else if ((payload.kind === 'exe:file-chunk' || payload.kind === 'browser:file-chunk') && rxFileId) {
+              initIncomingFileSession(
+                fid,
+                Math.floor(Math.random() * 0x7fffffff) + 1,
+                fname,
+                fsize,
+                cSize,
+                'application/octet-stream',
+                fchunks,
+                'cloud-relay-verified',
+                'Encrypted WS Relay (TCP/443)'
+              );
+            } else if (
+              (payload.kind === 'exe:file-chunk' ||
+                payload.kind === 'browser:file-chunk') &&
+              (payload.fileId || activeCloudRxFileId)
+            ) {
+              const targetFileId = String(
+                payload.fileId || activeCloudRxFileId
+              );
+              const bufEntry = incomingBuffersRef.current.get(targetFileId);
               const b64 = typeof payload.data === 'string' ? payload.data : '';
               const chunkIndex = Number(payload.chunkIndex) || 0;
-              if (b64) {
+
+              if (b64 && bufEntry) {
                 const binStr = window.atob(b64);
                 const bytes = new Uint8Array(binStr.length);
                 for (let i = 0; i < binStr.length; i++) {
                   bytes[i] = binStr.charCodeAt(i);
                 }
-                rxChunks.push(bytes);
-                rxBytes += bytes.byteLength;
-
-                const now = performance.now();
-                if (now - rxLastUiAt >= 80) {
-                  rxLastUiAt = now;
-                  const fid = rxFileId;
-                  const bytesNow = rxBytes;
-                  const chunksNow = rxChunks.length;
-                  const elapsedSec = Math.max(
-                    0.008,
-                    (now - rxStartedAt) / 1000
-                  );
-                  const speedBps = bytesNow / elapsedSec;
-                  setTransfers((prev) =>
-                    prev.map((t) =>
-                      t.id === fid
-                        ? {
-                            ...t,
-                            transferredChunks: chunksNow,
-                            bytesTransferred: bytesNow,
-                            speedBps,
-                          }
-                        : t
-                    )
-                  );
-                }
+                recordDecryptedChunk(
+                  bufEntry,
+                  chunkIndex,
+                  bytes.buffer as ArrayBuffer
+                );
               }
               if ((chunkIndex + 1) % 8 === 0 && srcPeer) {
                 sendCloudPacket(socket, srcPeer, {
-                  kind: payload.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack',
+                  kind: payload.kind.startsWith('browser:')
+                    ? 'browser:chunk-ack'
+                    : 'exe:chunk-ack',
                   chunkIndex,
                 });
               }
-            } else if ((payload.kind === 'exe:file-end' || payload.kind === 'browser:file-end') && rxFileId) {
-              const fid = rxFileId;
-              const fsize = rxFileSize;
-              const fchunks = rxTotalChunks;
-              const elapsedSec = Math.max(
-                0.008,
-                (performance.now() - rxStartedAt) / 1000
-              );
-              const finalSpeed = fsize / elapsedSec;
-              const blob = new Blob(rxChunks as BlobPart[], {
-                type: 'application/octet-stream',
-              });
-              const downloadUrl = URL.createObjectURL(blob);
-              rxChunks = [];
-              rxFileId = '';
-
+            } else if (
+              payload.kind === 'exe:file-end' ||
+              payload.kind === 'browser:file-end'
+            ) {
               if (srcPeer) {
                 sendCloudPacket(socket, srcPeer, {
-                  kind: payload.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack',
+                  kind: payload.kind.startsWith('browser:')
+                    ? 'browser:chunk-ack'
+                    : 'exe:chunk-ack',
                   chunkIndex: 999999,
                 });
               }
-
-              setTransfers((prev) =>
-                prev.map((t) =>
-                  t.id === fid
-                    ? {
-                        ...t,
-                        transferredChunks: fchunks,
-                        bytesTransferred: fsize,
-                        speedBps: finalSpeed,
-                        status: 'completed',
-                        verified: true,
-                        downloadUrl,
-                        completedAt: Date.now(),
-                      }
-                    : t
-                )
-              );
             }
           } catch {}
         };
@@ -1667,20 +1900,12 @@ export default function App() {
         ws?.close();
       } catch {}
     };
-  }, [roomCode, handleTunnelPacket]);
-
-  const getOpenDataChannelLanes = useCallback((): RTCDataChannel[] => {
-    if (transportStrategy === 'websocket_relay') return [];
-
-    const realLanes = dataChannelPoolRef.current.filter(
-      (dc) => dc.readyState === 'open'
-    );
-    if (realLanes.length > 0) {
-      return realLanes;
-    }
-
-    return [];
-  }, [transportStrategy]);
+  }, [
+    roomCode,
+    handleTunnelPacket,
+    initIncomingFileSession,
+    recordDecryptedChunk,
+  ]);
 
   const trySendBinaryPacketSync = useCallback(
     (packet: ArrayBuffer): boolean => {
@@ -1731,7 +1956,9 @@ export default function App() {
               return;
             } catch {}
           }
-          throw new Error('No open WebRTC DataChannel lanes or WebSocket relay available');
+          throw new Error(
+            'No open WebRTC DataChannel lanes or WebSocket relay available'
+          );
         }
 
         if (trySendBinaryPacketSync(packet)) return;
@@ -1753,75 +1980,27 @@ export default function App() {
           window.setTimeout(cleanup, 4);
         });
       }
-      throw new Error('WebRTC DataChannel send timed out waiting for queue drain');
+      throw new Error(
+        'WebRTC DataChannel send timed out waiting for queue drain'
+      );
     },
     [getOpenDataChannelLanes, trySendBinaryPacketSync]
   );
 
-  const transmitEncryptedPacket = useCallback(
-    (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
-      const serialized = JSON.stringify(packet);
-      let transportUsed: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' = 'WebRTC Direct (UDP/DTLS)';
-
-      if (localBusRef.current && localBusPeersRef.current.length > 0) {
-        try {
-          localBusRef.current.postMessage({
-            type: 'bus:packet',
-            packet,
-          });
-        } catch {}
-      }
-
-      if (cloudExeWsRef.current && cloudExeWsRef.current.readyState === WebSocket.OPEN) {
-        for (const peerDst of cloudWebPeersRef.current) {
-          try {
-            cloudExeWsRef.current.send(
-              JSON.stringify({
-                type: 'CANDIDATE',
-                dst: peerDst,
-                payload: {
-                  kind: 'browser:packet',
-                  packet,
-                },
-              })
-            );
-          } catch {}
-        }
-      }
-
-      const openLanes = getOpenDataChannelLanes();
-      for (const dc of openLanes) {
-        if (dc.readyState === 'open') {
-          try {
-            dc.send(serialized);
-          } catch {}
-        }
-      }
-
-      for (const conn of peerJsConnsRef.current) {
-        if (conn.open) {
-          try {
-            conn.send(serialized);
-          } catch {}
-        }
-      }
-
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        try {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'relay:packet',
-              packet,
-            })
-          );
-          transportUsed = 'Encrypted WS Relay (TCP/443)';
-        } catch {}
-      }
-
-      return transportUsed;
-    },
-    [transportStrategy, getOpenDataChannelLanes]
-  );
+  const waitIfReceiverBackpressured = async (fileId: string) => {
+    if (!senderPausedFilesRef.current.has(fileId)) return;
+    await new Promise<void>((resolve) => {
+      const timeout = window.setTimeout(() => {
+        senderBackpressureWaitersRef.current.delete(fileId);
+        senderPausedFilesRef.current.delete(fileId);
+        resolve();
+      }, 15000);
+      senderBackpressureWaitersRef.current.set(fileId, () => {
+        window.clearTimeout(timeout);
+        resolve();
+      });
+    });
+  };
 
   const handleFilesSelected = async (
     fileList: FileList | File[],
@@ -1845,8 +2024,7 @@ export default function App() {
       const openLanes = getOpenDataChannelLanes();
       const hasBrowserPeers = peersRef.current.some(
         (p) =>
-          !p.id.startsWith('exe-kernel-') &&
-          p.id !== 'native-exe-bridge'
+          !p.id.startsWith('exe-kernel-') && p.id !== 'native-exe-bridge'
       );
       const hasOpenLocalExeBridge =
         !skipExeBridge &&
@@ -1860,9 +2038,10 @@ export default function App() {
             cloudExeWsRef.current.readyState === WebSocket.OPEN &&
             cloudExePeerIdRef.current
         );
-      const hasOpenExeBridge = hasOpenLocalExeBridge || hasOpenCloudExeBridge;
 
-      const activeTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' =
+      const activeTransport:
+        | 'WebRTC Direct (UDP/DTLS)'
+        | 'Encrypted WS Relay (TCP/443)' =
         openLanes.length > 0
           ? 'WebRTC Direct (UDP/DTLS)'
           : 'Encrypted WS Relay (TCP/443)';
@@ -1900,21 +2079,25 @@ export default function App() {
 
       const acceptPromise = new Promise<void>((resolve, reject) => {
         pendingFileAcceptResolversRef.current.set(fileId, { resolve, reject });
-        setTimeout(() => {
+        window.setTimeout(() => {
           if (pendingFileAcceptResolversRef.current.has(fileId)) {
-            pendingFileAcceptResolversRef.current.get(fileId)?.reject(new Error('Vastaanottaja ei hyväksynyt tiedostoa ajoissa.'));
+            pendingFileAcceptResolversRef.current
+              .get(fileId)
+              ?.reject(
+                new Error('Vastaanottaja ei hyväksynyt tiedostoa ajoissa.')
+              );
             pendingFileAcceptResolversRef.current.delete(fileId);
           }
-        }, 30000); // 30s timeout
+        }, 120000); // 120s timeout so user has time to choose disk folder
       });
 
       transmitEncryptedPacket(metaPayload);
-      await new Promise((r) => window.setTimeout(r, 150));
-      transmitEncryptedPacket(metaPayload);
-      await new Promise((r) => window.setTimeout(r, 150));
-      transmitEncryptedPacket(metaPayload);
 
-      const expectsBrowserHandshake = openLanes.length > 0 || localBusPeersRef.current.length > 0 || cloudWebPeersRef.current.length > 0;
+      const expectsBrowserHandshake =
+        openLanes.length > 0 ||
+        hasBrowserPeers ||
+        localBusPeersRef.current.length > 0 ||
+        cloudWebPeersRef.current.length > 0;
 
       if (expectsBrowserHandshake) {
         try {
@@ -1926,7 +2109,8 @@ export default function App() {
                 ? {
                     ...t,
                     status: 'error',
-                    errorMessage: err.message || 'Transfer rejected by receiver',
+                    errorMessage:
+                      err.message || 'Transfer rejected by receiver',
                   }
                 : t
             )
@@ -1935,7 +2119,6 @@ export default function App() {
           continue;
         }
       } else {
-        // If we're only sending to EXE bridges, we don't need to wait for a browser accept
         pendingFileAcceptResolversRef.current.delete(fileId);
       }
 
@@ -2120,6 +2303,8 @@ export default function App() {
           let chunkIdx = 0;
           for (let offset = 0; offset < file.size; offset += cloudChunkSize) {
             if (cloudWs.readyState !== WebSocket.OPEN) break;
+            await waitIfReceiverBackpressured(fileId);
+
             const buf = await file
               .slice(offset, Math.min(file.size, offset + cloudChunkSize))
               .arrayBuffer();
@@ -2146,7 +2331,10 @@ export default function App() {
             chunkIdx += 1;
 
             const now = performance.now();
-            if (now - lastUiUpdateAt >= 80 || offset + cloudChunkSize >= file.size) {
+            if (
+              now - lastUiUpdateAt >= 80 ||
+              offset + cloudChunkSize >= file.size
+            ) {
               lastUiUpdateAt = now;
               const sentBytes = Math.min(file.size, offset + bytes.byteLength);
               const elapsedSec = Math.max(0.015, (now - startedAt) / 1000);
@@ -2251,6 +2439,8 @@ export default function App() {
           let chunkIdx = 0;
           for (let offset = 0; offset < file.size; offset += cloudChunkSize) {
             if (cloudWs.readyState !== WebSocket.OPEN) break;
+            await waitIfReceiverBackpressured(fileId);
+
             const buf = await file
               .slice(offset, Math.min(file.size, offset + cloudChunkSize))
               .arrayBuffer();
@@ -2279,7 +2469,10 @@ export default function App() {
             chunkIdx += 1;
 
             const now = performance.now();
-            if (now - lastUiUpdateAt >= 80 || offset + cloudChunkSize >= file.size) {
+            if (
+              now - lastUiUpdateAt >= 80 ||
+              offset + cloudChunkSize >= file.size
+            ) {
               lastUiUpdateAt = now;
               const sentBytes = Math.min(file.size, offset + bytes.byteLength);
               const elapsedSec = Math.max(0.015, (now - startedAt) / 1000);
@@ -2360,6 +2553,8 @@ export default function App() {
           waveStart < totalChunks;
           waveStart += chunksPerWave
         ) {
+          await waitIfReceiverBackpressured(fileId);
+
           const nextWavePromise = produceEncryptedWave(
             waveStart + chunksPerWave
           );
@@ -2372,12 +2567,8 @@ export default function App() {
 
           if (currentLanes.length > 0) {
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              await waitIfReceiverBackpressured(fileId);
               const frame = currentWave.encryptedFrames[i];
-              if (localBusRef.current && localBusPeersRef.current.length > 0) {
-                try {
-                  localBusRef.current.postMessage(frame.slice(0));
-                } catch {}
-              }
               if (!trySendBinaryPacketSync(frame)) {
                 await sendBinaryPacketSafely(frame);
               }
@@ -2420,6 +2611,7 @@ export default function App() {
             localBusPeersRef.current.length > 0
           ) {
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              await waitIfReceiverBackpressured(fileId);
               const frame = currentWave.encryptedFrames[i];
               const chunkIndex = currentWave.waveStartChunk + i;
               try {
@@ -2456,6 +2648,7 @@ export default function App() {
             wsRef.current.readyState === WebSocket.OPEN
           ) {
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              await waitIfReceiverBackpressured(fileId);
               const frame = currentWave.encryptedFrames[i];
               const chunkIndex = currentWave.waveStartChunk + i;
               while (
@@ -2538,6 +2731,9 @@ export default function App() {
               : t
           )
         );
+      } finally {
+        senderPausedFilesRef.current.delete(fileId);
+        senderBackpressureWaitersRef.current.delete(fileId);
       }
     }
   };
@@ -2568,7 +2764,7 @@ export default function App() {
     const buffer = encoded.buffer;
     const sha256 = await computeSha256Hex(buffer);
     const fileId = `rx-${Date.now()}`;
-    const transferNumId = 9001;
+    const transferNumId = Math.floor(Math.random() * 8000) + 9001;
     const transportLabel =
       connectionState === 'connected_p2p'
         ? 'WebRTC Direct (UDP/DTLS)'
@@ -2679,7 +2875,10 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.1</span>
+          AetherTunnel{' '}
+          <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">
+            v2.2 Direct-Disk
+          </span>
         </a>
 
         <nav className="flex items-center gap-6 text-sm font-medium text-slate-400 overflow-x-auto">
@@ -2743,7 +2942,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Zero-Configuration P2P File Tunnel</span>
                   <span aria-hidden="true">·</span>
-                  <span>Direct Zero-Copy SCTP + Raw Binary Serializer</span>
+                  <span>Direct Zero-Copy Disk Streamer</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
                     {exeBridgeConnected
@@ -2763,22 +2962,22 @@ export default function App() {
                   Encrypted Peer-to-Peer File Transfer
                 </h1>
               </div>
-                <div className="flex flex-wrap items-center gap-3 shrink-0">
-                  <button
-                    onClick={() =>
-                      downloadNativeWindowsKernelExe(
-                        roomCode,
-                        `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
-                      )
-                    }
-                    className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                    title="Downloads the High-DPI Native Windows Kernel-Socket .EXE (v7 · Per-Monitor V2 High-DPI · Local + Cloud Wormhole Bridge)"
-                  >
-                    <HardDriveDownload className="w-3.5 h-3.5" />
-                    Download Kernel-Socket .EXE (v7 High-DPI)
-                  </button>
-                </div>
+              <div className="flex flex-wrap items-center gap-3 shrink-0">
+                <button
+                  onClick={() =>
+                    downloadNativeWindowsKernelExe(
+                      roomCode,
+                      `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`
+                    )
+                  }
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  title="Downloads the High-DPI Native Windows Kernel-Socket .EXE (v7 · Per-Monitor V2 High-DPI · Local + Cloud Wormhole Bridge)"
+                >
+                  <HardDriveDownload className="w-3.5 h-3.5" />
+                  Download Kernel-Socket .EXE (v7 High-DPI)
+                </button>
               </div>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg">
@@ -2790,7 +2989,10 @@ export default function App() {
                   {roomCode}
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  Peers in room: <span className="font-mono text-slate-200 tabular-nums">{peers.length + 1}</span>
+                  Peers in room:{' '}
+                  <span className="font-mono text-slate-200 tabular-nums">
+                    {peers.length + 1}
+                  </span>
                 </div>
               </div>
 
@@ -2833,14 +3035,14 @@ export default function App() {
 
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg">
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>04. Direct WebRTC Channel</span>
+                  <span>04. Direct Disk Streamer</span>
                   <Zap className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
-                  {chunkSizeLabel} · 1x Direct SCTP
+                  {chunkSizeLabel} · Zero-RAM Retention
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  8 MB In-Flight Window · Zero-Copy Wire Frames
+                  16 MB Bounded RAM Cap · Offset Batch Flushing
                 </div>
               </div>
             </div>
@@ -2859,7 +3061,9 @@ export default function App() {
 
                   <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs text-slate-400">Active Wormhole Code</div>
+                      <div className="text-xs text-slate-400">
+                        Active Wormhole Code
+                      </div>
                       <div className="text-xl font-mono font-bold text-sky-400 tracking-wide mt-0.5">
                         {roomCode}
                       </div>
@@ -2981,7 +3185,9 @@ export default function App() {
                           Direct UDP Only
                         </button>
                         <button
-                          onClick={() => setTransportStrategy('websocket_relay')}
+                          onClick={() =>
+                            setTransportStrategy('websocket_relay')
+                          }
                           className={`py-2 px-2 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap truncate ${
                             transportStrategy === 'websocket_relay'
                               ? 'bg-slate-800 text-slate-100'
@@ -2996,21 +3202,26 @@ export default function App() {
                     <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-lg space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-300 font-medium">
-                          SCTP Engine Profile
+                          SCTP &amp; Disk Engine Profile
                         </span>
                         <span className="font-mono text-emerald-400">
-                          1x Direct Zero-Copy SCTP
+                          Direct Disk Write + Backpressure
                         </span>
                       </div>
                       <div className="text-xs text-slate-400 leading-relaxed">
-                        Single dedicated WebRTC SCTP pipe: <span className="text-slate-200 font-mono">240 KB</span> atomic zero-copy frames, <span className="text-slate-200 font-mono">7.5 MB</span> L3-cache wave, and synchronous zero-await packet bursting.
+                        Chunks are coalesced into zero-copy{' '}
+                        <span className="text-slate-200 font-mono">Blob</span>{' '}
+                        batches, written directly to disk offsets, and
+                        immediately evicted from RAM.
                       </div>
                     </div>
                   </div>
 
                   <div className="pt-4 border-t border-slate-800 space-y-2.5">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400 font-medium">Connected Tunnel Peers</span>
+                      <span className="text-slate-400 font-medium">
+                        Connected Tunnel Peers
+                      </span>
                       <span className="font-mono text-slate-300 tabular-nums">
                         {peers.length} remote
                       </span>
@@ -3032,7 +3243,8 @@ export default function App() {
                                 {p.deviceLabel}
                               </div>
                               <div className="text-slate-400 mt-0.5">
-                                {p.natType} · ID: <span className="font-mono">{p.id}</span>
+                                {p.natType} · ID:{' '}
+                                <span className="font-mono">{p.id}</span>
                               </div>
                             </div>
                             <span className="text-emerald-400 font-mono shrink-0">
@@ -3048,18 +3260,25 @@ export default function App() {
 
               <div className="lg:col-span-7 flex flex-col gap-6">
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5">
-                  
                   {pendingIncomingFile && (
                     <div className="p-3.5 bg-sky-950/40 border border-sky-800/60 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-sky-200">
                       <div className="flex items-center gap-2">
                         <Download className="w-4 h-4 text-sky-400 shrink-0 animate-bounce" />
-                        <span className="font-medium">Saapuva tiedosto: {pendingIncomingFile.name} ({formatBytes(pendingIncomingFile.size)})</span>
+                        <span className="font-medium">
+                          Saapuva tiedosto: {pendingIncomingFile.name} (
+                          {formatBytes(pendingIncomingFile.size)})
+                        </span>
                       </div>
                       <button
-                        onClick={() => handleInitSave(pendingIncomingFile.fileId, pendingIncomingFile.name)}
+                        onClick={() =>
+                          handleInitSave(
+                            pendingIncomingFile.fileId,
+                            pendingIncomingFile.name
+                          )
+                        }
                         className="px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded transition-colors whitespace-nowrap cursor-pointer"
                       >
-                        Valitse tallennuspaikka & Aloita
+                        Valitse tallennuspaikka &amp; Aloita suora levykirjoitus
                       </button>
                     </div>
                   )}
@@ -3070,7 +3289,7 @@ export default function App() {
                         Encrypted File Staging &amp; Streamer
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Zero-split 240 KB hardware frames · 1x Dedicated Direct SCTP Pipe · 64 MB continuous in-flight window.
+                        Zero-split 240 KB hardware frames · Direct-to-disk streaming with automatic RAM eviction.
                       </p>
                     </div>
 
@@ -3120,7 +3339,7 @@ export default function App() {
                       Drop files here or click to select files for encrypted P2P transfer
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Any file size (10 GB+ supported) · Dedicated Direct P2P Pipe · Raw Binary Serializer (0% BinaryPack Overhead)
+                      Any file size (10 GB+ supported) · Streams directly to disk without filling browser memory
                     </p>
                   </div>
 
@@ -3158,9 +3377,13 @@ export default function App() {
                                     {item.name}
                                   </div>
                                   <div className="text-xs text-slate-400 mt-0.5">
-                                    {item.direction === 'outgoing' ? 'Sending' : 'Receiving'} ·{' '}
+                                    {item.direction === 'outgoing'
+                                      ? 'Sending'
+                                      : 'Streaming to Disk'}{' '}
+                                    ·{' '}
                                     <span className="font-mono tabular-nums text-slate-300">
-                                      {formatBytes(item.bytesTransferred)} / {formatBytes(item.size)}
+                                      {formatBytes(item.bytesTransferred)} /{' '}
+                                      {formatBytes(item.size)}
                                     </span>{' '}
                                     · {item.transportUsed}
                                   </div>
@@ -3169,21 +3392,23 @@ export default function App() {
                                 <div className="flex items-center gap-2 shrink-0">
                                   <span className="font-mono text-xs text-sky-400 tabular-nums">
                                     {item.status === 'completed'
-                                      ? '100% · Verified'
+                                      ? '100% · Saved to Disk'
                                       : item.status === 'error'
                                       ? 'Error'
                                       : `${pct}%`}
                                   </span>
-                                  {item.downloadUrl && item.downloadUrl !== 'SAVED_DIRECTLY_TO_DISK' && (
-                                    <a
-                                      href={item.downloadUrl}
-                                      download={item.name}
-                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors"
-                                    >
-                                      <Download className="w-3 h-3" />
-                                      Save File
-                                    </a>
-                                  )}
+                                  {item.downloadUrl &&
+                                    item.downloadUrl !==
+                                      'SAVED_DIRECTLY_TO_DISK' && (
+                                      <a
+                                        href={item.downloadUrl}
+                                        download={item.name}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors"
+                                      >
+                                        <Download className="w-3 h-3" />
+                                        Save File
+                                      </a>
+                                    )}
                                 </div>
                               </div>
 
@@ -3207,7 +3432,9 @@ export default function App() {
                                     : `SHA-256: ${item.sha256.slice(0, 20)}...`}
                                 </span>
                                 <span>
-                                  {formatSpeed(item.speedBps)} · {item.transferredChunks}/{item.totalChunks} chunks
+                                  {formatSpeed(item.speedBps)} ·{' '}
+                                  {item.transferredChunks}/{item.totalChunks}{' '}
+                                  chunks
                                 </span>
                               </div>
                             </div>
@@ -3227,7 +3454,10 @@ export default function App() {
                       Exchange AES-256-GCM encrypted verification notes, archive passwords, or instructions across the tunnel.
                     </p>
 
-                    <form onSubmit={handleSendEncryptedNote} className="mt-3 flex gap-2">
+                    <form
+                      onSubmit={handleSendEncryptedNote}
+                      className="mt-3 flex gap-2"
+                    >
                       <input
                         type="text"
                         value={noteInput}
@@ -3308,8 +3538,6 @@ export default function App() {
             onSwitchToStudio={() => setActiveTab('studio')}
           />
         )}
-
-
       </main>
 
       <footer className="border-t border-slate-800/80 py-4 px-6 text-xs text-slate-400">
