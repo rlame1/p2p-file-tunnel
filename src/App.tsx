@@ -91,6 +91,38 @@ interface PartialSubFrameAssembly {
   totalParts: number;
 }
 
+async function saveFileArrayWithPrompt(defaultName: string, fileBytes: Uint8Array): Promise<string> {
+  if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+    try {
+      const handle = await (window as any).showSaveFilePicker({
+        suggestedName: defaultName,
+        types: [{
+          description: 'Files',
+          accept: { '*/*': ['.*'] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(fileBytes);
+      await writable.close();
+      return URL.createObjectURL(new Blob([fileBytes.buffer as ArrayBuffer]));
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        // User cancelled picker
+      }
+    }
+  }
+
+  const blob = new Blob([fileBytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = defaultName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  return url;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('studio');
 
@@ -240,11 +272,39 @@ export default function App() {
         for (let i = 0; i < bufEntry.totalChunks; i++) {
           orderedParts.push(bufEntry.receivedChunks[i]!);
         }
-        const blob = new Blob(orderedParts, {
-          type: bufEntry.mimeType || 'application/octet-stream',
-        });
+
+        // Combine into a single continuous Uint8Array (FileArray) without Blob abstractions
+        const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
+        const combinedFileArray = new Uint8Array(totalByteLength);
+        let offset = 0;
+        for (const part of orderedParts) {
+          combinedFileArray.set(new Uint8Array(part), offset);
+          offset += part.byteLength;
+        }
+
         bufEntry.receivedChunks.length = 0;
-        const downloadUrl = URL.createObjectURL(blob);
+
+        // Prompt user for save name and location (defaulting to downloads folder and original filename)
+        void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fileId && item.direction === 'incoming'
+                ? {
+                    ...item,
+                    transferredChunks: bufEntry.totalChunks,
+                    bytesTransferred: bufEntry.size,
+                    speedBps,
+                    status: 'completed',
+                    verified: true,
+                    downloadUrl,
+                    completedAt: Date.now(),
+                  }
+                : item
+            )
+          );
+        });
+
+        const blob = new Blob([combinedFileArray.buffer as ArrayBuffer]);
 
         // If the Windows Native .EXE Kernel Bridge is connected, also stream the received file directly to .EXE disk!
         if (
@@ -282,22 +342,6 @@ export default function App() {
           })();
         }
 
-        setTransfers((prev) =>
-          prev.map((item) =>
-            item.id === fileId && item.direction === 'incoming'
-              ? {
-                  ...item,
-                  transferredChunks: bufEntry.totalChunks,
-                  bytesTransferred: bufEntry.size,
-                  speedBps,
-                  status: 'completed',
-                  verified: true,
-                  downloadUrl,
-                  completedAt: Date.now(),
-                }
-              : item
-          )
-        );
         incomingBuffersRef.current.delete(fileId);
         numIdToFileIdRef.current.delete(bufEntry.transferNumId);
       } else if (now - bufEntry.lastUiUpdateAt >= 120) {
@@ -2518,7 +2562,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.1</span>
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.2</span>
         </a>
 
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}
