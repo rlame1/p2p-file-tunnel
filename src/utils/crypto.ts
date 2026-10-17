@@ -1,6 +1,6 @@
 // Web Crypto API End-to-End Encryption (AES-256-GCM + PBKDF2 + SHA-256)
-// Ultra-Turbo Engine: Supports 256 KB, 512 KB, 1 MB, and 2 MB Macro-Chunks
-// with Zero-Copy Raw Binary Frames ('AETH') & Multi-Lane SCTP Sub-Frame Slicing ('AETP')
+// Direct Binary Engine: Supports 256 KB, 512 KB, 1 MB, and 2 MB Chunks
+// with Zero-Copy Raw Binary Frames ('AETH') & SCTP Sub-Frame Slicing ('AETP')
 
 const WORD_LIST_A = [
   'cobalt', 'cipher', 'quantum', 'vortex', 'aether', 'obsidian',

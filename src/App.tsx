@@ -1708,13 +1708,13 @@ export default function App() {
 
     setVirtualPeerActive(true);
     setConnectionState('connected_p2p');
-    const vPeerId = `sandbox-8lane-${Math.random().toString(36).slice(2, 6)}`;
+    const vPeerId = `sandbox-pipe-${Math.random().toString(36).slice(2, 6)}`;
     setPeers((prev) => [
       ...prev,
       {
         id: vPeerId,
-        deviceLabel: 'Sandbox Loopback Peer (8-Connection C++ WebRTC Pipe)',
-        natType: '8x Independent SCTP Loopback',
+        deviceLabel: 'Sandbox Loopback Peer (Dedicated C++ WebRTC Pipe)',
+        natType: '1x Dedicated SCTP Loopback',
         joinedAt: Date.now(),
         isVirtualLoopback: true,
       },
@@ -1925,7 +1925,7 @@ export default function App() {
     [transportStrategy, getOpenDataChannelLanes]
   );
 
-  // 9. Ultra-Turbo 1-Connection Zero-Split Binary Streamer + Direct Windows .EXE Kernel Bridge Streamer
+  // 9. Direct 1-Connection Zero-Split Binary Streamer + Direct Windows .EXE Kernel Bridge Streamer
   const handleFilesSelected = async (
     fileList: FileList | File[],
     skipExeBridge = false
@@ -2629,7 +2629,7 @@ export default function App() {
       `Key Fingerprint      : ${keyFingerprint}`,
       `Cipher Specification : AES-256-GCM (128-bit Auth Tag, 96-bit Nonce)`,
       `Key Derivation       : PBKDF2-HMAC-SHA256 (100,000 Iterations)`,
-      `Streaming Protocol   : ${displayedLaneCount}-Connection Zero-Split SCTP (240 KB Stripe)`,
+      `Streaming Protocol   : Dedicated Zero-Split SCTP (240 KB Frames)`,
       `NAT Traversal Path   : ${
         connectionState === 'connected_p2p'
           ? 'WebRTC Direct UDP Hole-Punching (STUN/ICE)'
@@ -2933,7 +2933,7 @@ export default function App() {
 
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg">
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>04. Ultra-Turbo Binary Pipe</span>
+                  <span>04. Direct WebRTC Channel</span>
                   <Zap className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
@@ -3053,7 +3053,7 @@ export default function App() {
                     <div>
                       <div className="flex items-center justify-between">
                         <h2 className="text-base font-semibold text-slate-100">
-                          NAT Traversal &amp; Parallel Stripe Mode
+                          NAT Traversal &amp; Transport Routing
                         </h2>
                         <button
                           onClick={() => setActiveTab('diagnostics')}
@@ -3063,7 +3063,7 @@ export default function App() {
                         </button>
                       </div>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Configure transport routing and parallel WebRTC connection lanes (up to 8 independent C++ SCTP connections).
+                        Configure transport routing and WebRTC SCTP connection (1x dedicated zero-lock C++ SCTP pipe).
                       </p>
 
                       {/* Segmented Interactive Controls for Transport */}
@@ -3172,7 +3172,7 @@ export default function App() {
                         Encrypted File Staging &amp; Streamer
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Zero-split 240 KB hardware frames · {displayedLaneCount}x Parallel SCTP Connections · 64 MB continuous in-flight window.
+                        Zero-split 240 KB hardware frames · 1x Dedicated Direct SCTP Pipe · 64 MB continuous in-flight window.
                       </p>
                     </div>
 
@@ -3223,7 +3223,7 @@ export default function App() {
                       Drop files here or click to select files for encrypted P2P transfer
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Any file size (10 GB+ supported) · {displayedLaneCount}x Parallel Connections · Raw Binary Serializer (0% BinaryPack Overhead)
+                      Any file size (10 GB+ supported) · Dedicated Direct P2P Pipe · Raw Binary Serializer (0% BinaryPack Overhead)
                     </p>
                   </div>
 

@@ -22,7 +22,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     <header class="flex items-center justify-between pb-4 border-b border-slate-800">
       <div>
         <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel Portable</span>
-        <span class="ml-3 text-xs text-emerald-400 font-mono">1-Lane Ultra-Turbo Binary WebRTC + AES-256-GCM</span>
+        <span class="ml-3 text-xs text-emerald-400 font-mono">Direct WebRTC P2P + AES-256-GCM</span>
       </div>
       <div id="status-badge" class="text-xs font-mono text-sky-400">Initializing P2P Node...</div>
     </header>
@@ -46,8 +46,8 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           <label class="block text-xs text-slate-400 mb-1">Crypto Super-Chunk Size</label>
           <select id="chunk-select" class="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400">
             <option value="240" selected>240 KB (Zero-Split SCTP — Recommended)</option>
-            <option value="512">512 KB (Turbo 2x)</option>
-            <option value="1024">1 MB (Ultra-Turbo 4x)</option>
+            <option value="512">512 KB (Large Buffer)</option>
+            <option value="1024">1 MB (Max Buffer)</option>
           </select>
         </div>
         <div class="pt-3 border-t border-slate-800 text-xs space-y-1">
@@ -57,7 +57,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       </div>
 
       <div class="md:col-span-7 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
-        <h2 class="text-base font-semibold">2. Ultra-Turbo Encrypted File Transfer</h2>
+        <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
