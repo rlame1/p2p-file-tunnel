@@ -328,9 +328,11 @@ export default function App() {
 
   // Decrypt a complete 'AETH' Binary Frame (checks duplicate chunkIndex BEFORE running WebCrypto decrypt!)
   const handleCompleteAethFrame = useCallback(
-    async (frameBuffer: ArrayBuffer) => {
+    async (rawBuffer: ArrayBuffer) => {
       const key = cryptoKeyRef.current;
-      if (!key || frameBuffer.byteLength < 24) return;
+      if (!key || rawBuffer.byteLength < 24) return;
+
+      const frameBuffer = rawBuffer.slice(0);
 
       const headerView = new DataView(frameBuffer);
       const transferNumId = headerView.getUint32(4, false);
@@ -2510,7 +2512,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v2.0</span>
         </a>
 
         {/* Zone 2: 4 Concise Single-Line Navigation Links */}

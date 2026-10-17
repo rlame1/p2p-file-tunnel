@@ -189,12 +189,13 @@ export function splitFrameForSctpLanes(frameBuffer: ArrayBuffer): ArrayBuffer[] 
  */
 export async function decryptChunkBinaryFrame(
   key: CryptoKey,
-  frameBuffer: ArrayBuffer
+  rawBuffer: ArrayBuffer
 ): Promise<{
   transferNumId: number;
   chunkIndex: number;
   plainBuffer: ArrayBuffer;
 }> {
+  const frameBuffer = rawBuffer.slice(0);
   const view = new DataView(frameBuffer);
   const transferNumId = view.getUint32(4, false);
   const chunkIndex = view.getUint32(8, false);
