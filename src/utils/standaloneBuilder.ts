@@ -525,11 +525,13 @@ namespace AetherTunnelNative
         private NetworkStream activeBrowserWsStream;
         private readonly object wsWriteLock = new object();
 
-        // 3. Native .EXE <-> Chrome Browser Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
+        // 3. Native .EXE <-> Chrome Browser & Remote .EXE Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
         private ClientWebSocket activeCloudWs;
         private string activeCloudMyId = "";
         private string activeCloudBrowserPeerId = "";
+        private string activeCloudExePeerId = "";
         private DateTime lastCloudBrowserSeen = DateTime.MinValue;
+        private DateTime lastCloudExeSeen = DateTime.MinValue;
         private volatile bool cloudReconnectRequested = false;
         private readonly object cloudSendLock = new object();
         private readonly AutoResetEvent cloudAckEvent = new AutoResetEvent(false);
@@ -1195,8 +1197,22 @@ namespace AetherTunnelNative
                                 SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\"}");
                             }
                         }
-                        else if (kind == "exe:hello" && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
+                        else if ((kind == "exe:hello" || kind == "exe:hello-reply") && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
                         {
+                            bool isNewPairing = (activeCloudExePeerId != srcPeer) || ((DateTime.UtcNow - lastCloudExeSeen).TotalSeconds > 10);
+                            activeCloudExePeerId = srcPeer;
+                            lastCloudExeSeen = DateTime.UtcNow;
+
+                            if (isNewPairing)
+                            {
+                                UpdateStatusBadge("CONNECTED: REMOTE .EXE [" + cleanCode + "]");
+                                Log("Paired with Remote .EXE Peer in Wormhole Room [" + cleanCode + "] (" + srcPeer + ")");
+                                if (kind == "exe:hello")
+                                {
+                                    SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:hello-reply\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\"}");
+                                }
+                            }
+
                             string remoteLan = ExtractJsonString(text, "lanEndpoint");
                             if (remoteLan.Length > 0 && (activePeerClient == null || !activePeerClient.Connected))
                             {
@@ -1210,8 +1226,18 @@ namespace AetherTunnelNative
                         }
                         else if (kind == "exe:file-start")
                         {
-                            activeCloudBrowserPeerId = srcPeer;
-                            lastCloudBrowserSeen = DateTime.UtcNow;
+                            bool fromExe = srcPeer.StartsWith("aethertunnel-exe-");
+                            if (fromExe)
+                            {
+                                activeCloudExePeerId = srcPeer;
+                                lastCloudExeSeen = DateTime.UtcNow;
+                            }
+                            else
+                            {
+                                activeCloudBrowserPeerId = srcPeer;
+                                lastCloudBrowserSeen = DateTime.UtcNow;
+                            }
+                            string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
                             cloudFileName = ExtractJsonString(text, "name");
                             if (cloudFileName.Length == 0) cloudFileName = "transfer.bin";
                             cloudExpectedSize = ExtractJsonLong(text, "size");
@@ -1221,8 +1247,8 @@ namespace AetherTunnelNative
                             cloudOutFile = new FileStream(cloudOutPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
                             cloudReceivedBytes = 0;
                             cloudRxSw = Stopwatch.StartNew();
-                            Log("Receiving file from Chrome Browser -> " + cloudOutPath + " (" + FormatBytes(cloudExpectedSize) + ")");
-                            UpdateTransferUi("Receiving from Chrome: " + cloudFileName, 0, cloudExpectedSize, 0, 0);
+                            Log("Receiving file from " + senderLabel + " -> " + cloudOutPath + " (" + FormatBytes(cloudExpectedSize) + ")");
+                            UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, 0, cloudExpectedSize, 0, 0);
                         }
                         else if (kind == "exe:file-chunk" && cloudOutFile != null)
                         {

@@ -105,11 +105,13 @@ namespace AetherTunnelNative
         private NetworkStream activeBrowserWsStream;
         private readonly object wsWriteLock = new object();
 
-        // 3. Native .EXE <-> Chrome Browser Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
+        // 3. Native .EXE <-> Chrome Browser & Remote .EXE Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
         private ClientWebSocket activeCloudWs;
         private string activeCloudMyId = "";
         private string activeCloudBrowserPeerId = "";
+        private string activeCloudExePeerId = "";
         private DateTime lastCloudBrowserSeen = DateTime.MinValue;
+        private DateTime lastCloudExeSeen = DateTime.MinValue;
         private volatile bool cloudReconnectRequested = false;
         private readonly object cloudSendLock = new object();
         private readonly AutoResetEvent cloudAckEvent = new AutoResetEvent(false);
@@ -779,8 +781,22 @@ namespace AetherTunnelNative
                                 SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\"}");
                             }
                         }
-                        else if (kind == "exe:hello" && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
+                        else if ((kind == "exe:hello" || kind == "exe:hello-reply") && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
                         {
+                            bool isNewPairing = (activeCloudExePeerId != srcPeer) || ((DateTime.UtcNow - lastCloudExeSeen).TotalSeconds > 10);
+                            activeCloudExePeerId = srcPeer;
+                            lastCloudExeSeen = DateTime.UtcNow;
+
+                            if (isNewPairing)
+                            {
+                                UpdateStatusBadge("CONNECTED: REMOTE .EXE [" + cleanCode + "]");
+                                Log("Paired with Remote .EXE Peer in Wormhole Room [" + cleanCode + "] (" + srcPeer + ")");
+                                if (kind == "exe:hello")
+                                {
+                                    SendCloudPacket(ws, srcPeer, "{\\"kind\\":\\"exe:hello-reply\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint + "\\"}");
+                                }
+                            }
+
                             string remoteLan = ExtractJsonString(text, "lanEndpoint");
                             if (remoteLan.Length > 0 && (activePeerClient == null || !activePeerClient.Connected))
                             {
@@ -794,8 +810,18 @@ namespace AetherTunnelNative
                         }
                         else if (kind == "exe:file-start")
                         {
-                            activeCloudBrowserPeerId = srcPeer;
-                            lastCloudBrowserSeen = DateTime.UtcNow;
+                            bool fromExe = srcPeer.StartsWith("aethertunnel-exe-");
+                            if (fromExe)
+                            {
+                                activeCloudExePeerId = srcPeer;
+                                lastCloudExeSeen = DateTime.UtcNow;
+                            }
+                            else
+                            {
+                                activeCloudBrowserPeerId = srcPeer;
+                                lastCloudBrowserSeen = DateTime.UtcNow;
+                            }
+                            string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
                             cloudFileName = ExtractJsonString(text, "name");
                             if (cloudFileName.Length == 0) cloudFileName = "transfer.bin";
                             cloudExpectedSize = ExtractJsonLong(text, "size");
@@ -805,8 +831,8 @@ namespace AetherTunnelNative
                             cloudOutFile = new FileStream(cloudOutPath, FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
                             cloudReceivedBytes = 0;
                             cloudRxSw = Stopwatch.StartNew();
-                            Log("Receiving file from Chrome Browser -> " + cloudOutPath + " (" + FormatBytes(cloudExpectedSize) + ")");
-                            UpdateTransferUi("Receiving from Chrome: " + cloudFileName, 0, cloudExpectedSize, 0, 0);
+                            Log("Receiving file from " + senderLabel + " -> " + cloudOutPath + " (" + FormatBytes(cloudExpectedSize) + ")");
+                            UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, 0, cloudExpectedSize, 0, 0);
                         }
                         else if (kind == "exe:file-chunk" && cloudOutFile != null)
                         {
@@ -1394,6 +1420,7 @@ namespace AetherTunnelNative
         {
             bool hasExePeer = (activePeerClient != null && activePeerClient.Connected && activePeerStream != null);
             bool hasLocalBrowserPeer = (activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null);
+            bool hasCloudExePeer = (activeCloudWs != null && activeCloudWs.State == WebSocketState.Open && !String.IsNullOrEmpty(activeCloudExePeerId));
             bool hasCloudBrowserPeer = (activeCloudWs != null && activeCloudWs.State == WebSocketState.Open && !String.IsNullOrEmpty(activeCloudBrowserPeerId));
 
             if (hasExePeer)
@@ -1412,9 +1439,17 @@ namespace AetherTunnelNative
                 return;
             }
 
+            if (hasCloudExePeer)
+            {
+                Thread cloudTxThread = new Thread(delegate() { StreamFileToPeerOverCloudBridge(filePath, activeCloudExePeerId, "Remote .EXE"); });
+                cloudTxThread.IsBackground = true;
+                cloudTxThread.Start();
+                return;
+            }
+
             if (hasCloudBrowserPeer)
             {
-                Thread cloudTxThread = new Thread(delegate() { StreamFileToBrowserOverCloudBridge(filePath); });
+                Thread cloudTxThread = new Thread(delegate() { StreamFileToPeerOverCloudBridge(filePath, activeCloudBrowserPeerId, "Chrome Browser"); });
                 cloudTxThread.IsBackground = true;
                 cloudTxThread.Start();
                 return;
@@ -1423,8 +1458,8 @@ namespace AetherTunnelNative
             Log("WAIT: Make sure the Chrome Browser App (or another .EXE) has the same Wormhole Code [" + txtRoomCode.Text.Trim() + "]!");
             MessageBox.Show(
                 "No peer is paired in Wormhole Room [" + txtRoomCode.Text.Trim() + "] yet.\\n\\n" +
-                "1. Open the Chrome Browser App and enter the same Wormhole Code: " + txtRoomCode.Text.Trim() + "\\n" +
-                "2. Within 1-2 seconds, the top-right status will turn green: CONNECTED: CHROME BROWSER.\\n" +
+                "1. Open the Chrome Browser App or run another .EXE with the same Wormhole Code: " + txtRoomCode.Text.Trim() + "\\n" +
+                "2. Within 1-2 seconds, the top-right status will turn green: CONNECTED: REMOTE .EXE or CONNECTED: CHROME BROWSER.\\n" +
                 "3. Or click 'Run Local NVMe Loopback Benchmark' on the left to test local disk speed.",
                 "AetherTunnel — Waiting for Wormhole Pairing",
                 MessageBoxButtons.OK,
@@ -1432,7 +1467,7 @@ namespace AetherTunnelNative
             );
         }
 
-        private void StreamFileToBrowserOverCloudBridge(string filePath)
+        private void StreamFileToPeerOverCloudBridge(string filePath, string dstPeer, string peerLabel)
         {
             try
             {
@@ -1441,9 +1476,8 @@ namespace AetherTunnelNative
                 string fileName = fi.Name;
                 string fileId = "exe-cloud-" + DateTime.UtcNow.Ticks.ToString();
                 int totalChunks = (int)Math.Max(1L, (fileSize + CLOUD_CHUNK_SIZE - 1) / CLOUD_CHUNK_SIZE);
-                string dstPeer = activeCloudBrowserPeerId;
 
-                Log("Streaming .EXE -> Chrome Browser over Wormhole Bridge: " + fileName + " (" + FormatBytes(fileSize) + ")");
+                Log("Streaming .EXE -> " + peerLabel + " over Wormhole Bridge: " + fileName + " (" + FormatBytes(fileSize) + ")");
 
                 string startJson = String.Format(
                     "{{\\"kind\\":\\"exe:file-start\\",\\"fileId\\":\\"{0}\\",\\"name\\":\\"{1}\\",\\"size\\":{2},\\"chunkSize\\":{3},\\"totalChunks\\":{4}}}",
@@ -1474,7 +1508,7 @@ namespace AetherTunnelNative
                         double sec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                         double mbps = (totalSent / (1024.0 * 1024.0)) / sec;
                         int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                        UpdateTransferUi("Sending to Chrome: " + fileName, totalSent, fileSize, mbps, permille);
+                        UpdateTransferUi("Sending to " + peerLabel + ": " + fileName, totalSent, fileSize, mbps, permille);
 
                         if (chunkIndex % 8 == 0)
                         {
@@ -1489,9 +1523,9 @@ namespace AetherTunnelNative
 
                 double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                 double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
-                UpdateTransferUi("Sent to Chrome Browser: " + fileName, fileSize, fileSize, finalMbps, 1000);
-                Log(String.Format(".EXE -> CHROME COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s",
-                    fileName, FormatBytes(fileSize), totalSec, finalMbps));
+                UpdateTransferUi("Sent to " + peerLabel + ": " + fileName, fileSize, fileSize, finalMbps, 1000);
+                Log(String.Format(".EXE -> {0} COMPLETE: {1} ({2}) in {3:F2}s — {4:F2} MB/s",
+                    peerLabel.ToUpperInvariant(), fileName, FormatBytes(fileSize), totalSec, finalMbps));
             }
             catch (Exception ex)
             {

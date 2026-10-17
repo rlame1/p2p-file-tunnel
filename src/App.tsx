@@ -144,6 +144,10 @@ export default function App() {
   const cloudExeWsRef = useRef<WebSocket | null>(null);
   const cloudExePeerIdRef = useRef<string>('');
   const cloudAckResolverRef = useRef<(() => void) | null>(null);
+  const localBusRef = useRef<BroadcastChannel | null>(null);
+  const [localBusPeers, setLocalBusPeers] = useState<string[]>([]);
+  const localBusPeersRef = useRef<string[]>([]);
+  localBusPeersRef.current = localBusPeers;
   const [exeBridgeConnected, setExeBridgeConnected] = useState<boolean>(false);
   const roomCodeRef = useRef<string>(roomCode);
   roomCodeRef.current = roomCode;
@@ -575,6 +579,101 @@ export default function App() {
     },
     [handleRawBinaryFrame, handleTunnelPacket]
   );
+
+  // 3b. Local High-Speed Tab Memory Bus (BroadcastChannel)
+  // Connects tabs/windows on the same machine/origin instantly with 0ms latency, 100% immune to router/NAT drops
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') {
+      return;
+    }
+
+    const cleanCode =
+      roomCode.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'default';
+    const channelName = `aethertunnel-local-bus-${cleanCode}`;
+    const bus = new BroadcastChannel(channelName);
+    localBusRef.current = bus;
+
+    bus.onmessage = (ev: MessageEvent) => {
+      if (!ev.data) return;
+      if (ev.data instanceof ArrayBuffer) {
+        handleRawBinaryFrame(ev.data);
+        return;
+      }
+      const msg = ev.data;
+      if (msg.type === 'bus:hello' && msg.peerId !== peerId) {
+        setLocalBusPeers((prev) => Array.from(new Set([...prev, msg.peerId])));
+        setPeers((prev) => {
+          if (prev.some((p) => p.id === msg.peerId)) return prev;
+          return [
+            {
+              id: msg.peerId,
+              deviceLabel: 'Local Chrome Tab (High-Speed Memory Bus)',
+              natType: 'Local Machine Tab Bus',
+              joinedAt: Date.now(),
+            },
+            ...prev,
+          ];
+        });
+        setConnectionState('connected_p2p');
+        try {
+          bus.postMessage({
+            type: 'bus:hello-reply',
+            peerId,
+            deviceLabel: 'Local Chrome Tab (High-Speed Memory Bus)',
+          });
+        } catch {}
+      } else if (msg.type === 'bus:hello-reply' && msg.peerId !== peerId) {
+        setLocalBusPeers((prev) => Array.from(new Set([...prev, msg.peerId])));
+        setPeers((prev) => {
+          if (prev.some((p) => p.id === msg.peerId)) return prev;
+          return [
+            {
+              id: msg.peerId,
+              deviceLabel: 'Local Chrome Tab (High-Speed Memory Bus)',
+              natType: 'Local Machine Tab Bus',
+              joinedAt: Date.now(),
+            },
+            ...prev,
+          ];
+        });
+        setConnectionState('connected_p2p');
+      } else if (msg.type === 'bus:packet' && msg.packet) {
+        void handleTunnelPacket(msg.packet, 'WebRTC Direct (UDP/DTLS)');
+      } else if (msg.type === 'bus:bye' && msg.peerId) {
+        setLocalBusPeers((prev) => prev.filter((id) => id !== msg.peerId));
+        setPeers((prev) => prev.filter((p) => p.id !== msg.peerId));
+      }
+    };
+
+    // Announce immediately and send periodic heartbeat
+    try {
+      bus.postMessage({
+        type: 'bus:hello',
+        peerId,
+        deviceLabel: 'Local Chrome Tab (High-Speed Memory Bus)',
+      });
+    } catch {}
+
+    const pingInterval = window.setInterval(() => {
+      try {
+        bus.postMessage({
+          type: 'bus:hello',
+          peerId,
+          deviceLabel: 'Local Chrome Tab (High-Speed Memory Bus)',
+        });
+      } catch {}
+    }, 1500);
+
+    return () => {
+      window.clearInterval(pingInterval);
+      try {
+        bus.postMessage({ type: 'bus:bye', peerId });
+        bus.close();
+      } catch {}
+      localBusRef.current = null;
+      setLocalBusPeers([]);
+    };
+  }, [roomCode, peerId, handleRawBinaryFrame, handleTunnelPacket]);
 
   // 4. Serverless PeerJS WebRTC Broker with Auto-Tuned Dual RTCPeerConnections
   //    AND Zero-BinaryPack 'raw' Serializer Override!
@@ -1274,12 +1373,21 @@ export default function App() {
       }
     };
 
-    const broadcastBrowserHello = (socket: WebSocket | null) => {
+    const broadcastBrowserHello = (socket: WebSocket | null, currentMyId: string) => {
       for (let i = 0; i < 3; i++) {
         sendCloudPacket(socket, `aethertunnel-exe-${cleanCode}-${i}`, {
           kind: 'browser:hello',
           roomCode: cleanCode,
         });
+      }
+      for (let i = 0; i < 3; i++) {
+        const targetWeb = `aethertunnel-web-${cleanCode}-${i}`;
+        if (targetWeb !== currentMyId) {
+          sendCloudPacket(socket, targetWeb, {
+            kind: 'browser:hello',
+            roomCode: cleanCode,
+          });
+        }
       }
     };
 
@@ -1301,10 +1409,10 @@ export default function App() {
             return;
           }
           cloudExeWsRef.current = socket;
-          broadcastBrowserHello(socket);
+          broadcastBrowserHello(socket, myId);
           if (hbTimer !== null) window.clearInterval(hbTimer);
           hbTimer = window.setInterval(() => {
-            broadcastBrowserHello(socket);
+            broadcastBrowserHello(socket, myId);
           }, 2400);
         };
 
@@ -1313,7 +1421,7 @@ export default function App() {
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === 'OPEN') {
-              broadcastBrowserHello(socket);
+              broadcastBrowserHello(socket, myId);
               return;
             }
             if (
@@ -1331,7 +1439,45 @@ export default function App() {
             const payload = msg.payload;
             if (!payload || typeof payload !== 'object') return;
 
-            if (payload.kind === 'exe:hello' && srcPeer) {
+            if (
+              (payload.kind === 'browser:hello' || payload.kind === 'web:hello') &&
+              srcPeer &&
+              srcPeer.startsWith('aethertunnel-web-')
+            ) {
+              setConnectionState('connected_p2p');
+              setPeers((prev) => {
+                if (prev.some((p) => p.id === srcPeer)) return prev;
+                return [
+                  {
+                    id: srcPeer,
+                    deviceLabel: `Remote Web Peer (${srcPeer})`,
+                    natType: 'Universal Cloud Wormhole Bridge',
+                    joinedAt: Date.now(),
+                  },
+                  ...prev,
+                ];
+              });
+              sendCloudPacket(socket, srcPeer, {
+                kind: 'browser:hello-ack',
+                roomCode: cleanCode,
+              });
+            } else if (payload.kind === 'browser:hello-ack' && srcPeer) {
+              setConnectionState('connected_p2p');
+              setPeers((prev) => {
+                if (prev.some((p) => p.id === srcPeer)) return prev;
+                return [
+                  {
+                    id: srcPeer,
+                    deviceLabel: `Remote Web Peer (${srcPeer})`,
+                    natType: 'Universal Cloud Wormhole Bridge',
+                    joinedAt: Date.now(),
+                  },
+                  ...prev,
+                ];
+              });
+            } else if (payload.kind === 'browser:packet' && payload.packet) {
+              void handleTunnelPacket(payload.packet, 'Encrypted WS Relay (TCP/443)');
+            } else if (payload.kind === 'exe:hello' && srcPeer) {
               cloudExePeerIdRef.current = srcPeer;
               setExeBridgeConnected(true);
               setConnectionState('connected_p2p');
@@ -1695,6 +1841,16 @@ export default function App() {
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
       const serialized = JSON.stringify(packet);
+
+      if (localBusRef.current && localBusPeersRef.current.length > 0) {
+        try {
+          localBusRef.current.postMessage({
+            type: 'bus:packet',
+            packet,
+          });
+        } catch {}
+      }
+
       const openLanes = getOpenDataChannelLanes();
 
       if (openLanes.length > 0) {
@@ -2109,6 +2265,11 @@ export default function App() {
             // FAST PATH 1: Synchronous Zero-Await Burst across Dual SCTP Connections
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
               const frame = currentWave.encryptedFrames[i];
+              if (localBusRef.current && localBusPeersRef.current.length > 0) {
+                try {
+                  localBusRef.current.postMessage(frame.slice(0));
+                } catch {}
+              }
               if (!trySendBinaryPacketSync(frame)) {
                 await sendBinaryPacketSafely(frame);
               }
@@ -2147,11 +2308,48 @@ export default function App() {
               }
             }
           } else if (
+            localBusRef.current &&
+            localBusPeersRef.current.length > 0
+          ) {
+            // FAST PATH 2: Local High-Speed Tab Memory Bus (BroadcastChannel) — 100% router/NAT immune
+            for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+              const frame = currentWave.encryptedFrames[i];
+              const chunkIndex = currentWave.waveStartChunk + i;
+              try {
+                localBusRef.current.postMessage(frame.slice(0));
+              } catch {}
+
+              const now = performance.now();
+              if (now - lastUiUpdateAt >= 50 || chunkIndex + 1 === totalChunks) {
+                lastUiUpdateAt = now;
+                const chunksDone = chunkIndex + 1;
+                const rawBytesQueued = Math.min(
+                  file.size,
+                  chunksDone * WIRE_CHUNK_BYTES
+                );
+                const elapsedSec = Math.max(0.02, (now - startedAt) / 1000);
+                const speedBps = rawBytesQueued / elapsedSec;
+
+                setTransfers((prev) =>
+                  prev.map((t) =>
+                    t.id === fileId
+                      ? {
+                          ...t,
+                          transferredChunks: chunksDone,
+                          bytesTransferred: rawBytesQueued,
+                          speedBps,
+                        }
+                      : t
+                  )
+                );
+              }
+            }
+          } else if (
             wsRef.current &&
             wsRef.current.readyState === WebSocket.OPEN &&
             !virtualPeerActive
           ) {
-            // FAST PATH 2: Raw Binary WebSocket Relay (Cloud Wormhole Bridge to .EXE or Remote Browser)
+            // FAST PATH 3: Raw Binary WebSocket Relay (Cloud Wormhole Bridge to .EXE or Remote Browser)
             for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
               const frame = currentWave.encryptedFrames[i];
               const chunkIndex = currentWave.waveStartChunk + i;
@@ -2361,7 +2559,11 @@ export default function App() {
     window.setTimeout(() => setCopiedToken(null), 1800);
   };
 
-  const isPeerConnected = peers.length > 0 || virtualPeerActive || exeBridgeConnected;
+  const isPeerConnected =
+    peers.length > 0 ||
+    virtualPeerActive ||
+    exeBridgeConnected ||
+    localBusPeers.length > 0;
   const chunkSizeLabel = 'Auto-Tuned 240 KB × 32';
 
   return (
@@ -2450,6 +2652,8 @@ export default function App() {
                   <span className="text-emerald-400 font-medium">
                     {exeBridgeConnected
                       ? 'Windows .EXE Native Kernel Bridge Connected'
+                      : localBusPeers.length > 0
+                      ? 'Direct Browser-to-Browser Active (Local Tab Bus)'
                       : isPeerConnected
                       ? connectionState === 'connected_p2p'
                         ? 'Direct WebRTC P2P Active (1x Dedicated SCTP)'
