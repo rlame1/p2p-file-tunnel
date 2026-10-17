@@ -408,7 +408,7 @@ export function triggerBrowserDownload(
   content: string | Uint8Array,
   mimeType: string = 'application/octet-stream'
 ) {
-  const blob = new Blob([content], { type: mimeType });
+  const blob = new Blob([content as BlobPart], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

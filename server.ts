@@ -827,6 +827,7 @@ async function startServer() {
               type: 'webrtc:signal',
               fromPeerId: currentPeer.id,
               signalType: msg.signalType,
+              laneIdx: msg.laneIdx,
               sdp: msg.sdp,
               candidate: msg.candidate,
             });

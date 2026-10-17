@@ -114,11 +114,11 @@ export async function encryptChunkBinaryFrame(
   const encryptedBuffer = await window.crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
-      iv,
+      iv: iv as BufferSource,
       tagLength: 128,
     },
     key,
-    plainChunk
+    plainChunk as BufferSource
   );
 
   const frame = new Uint8Array(24 + encryptedBuffer.byteLength);
@@ -225,7 +225,7 @@ export async function encryptChunk(
   const encryptedBuffer = await window.crypto.subtle.encrypt(
     {
       name: 'AES-GCM',
-      iv,
+      iv: iv as BufferSource,
       tagLength: 128,
     },
     key,
@@ -233,7 +233,7 @@ export async function encryptChunk(
   );
 
   return {
-    ivBase64: arrayBufferToBase64(iv.buffer),
+    ivBase64: arrayBufferToBase64(iv.buffer as ArrayBuffer),
     ciphertextBase64: arrayBufferToBase64(encryptedBuffer),
     byteLength: encryptedBuffer.byteLength,
   };
