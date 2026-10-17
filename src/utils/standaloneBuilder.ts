@@ -235,7 +235,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
             config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] }
           });
           peer.on('open', () => {
-            const conn = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: 0 } });
+            const conn = peer.connect(hostId, { reliable: true, serialization: 'binary', metadata: { laneIndex: 0 } });
             conn.on('open', () => setupConnection(conn, true));
           });
           peer.on('connection', (conn) => {

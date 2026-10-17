@@ -759,7 +759,7 @@ export default function App() {
                 if (destroyed) return;
                 const outConn = guestPeer.connect(hostBrokerId, {
                   reliable: true,
-                  serialization: 'none',
+                  serialization: 'binary',
                   label: `aether-conn-${i}`,
                 });
                 bindPeerJsDataConn(outConn);
