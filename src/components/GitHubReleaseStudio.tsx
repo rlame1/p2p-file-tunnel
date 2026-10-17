@@ -126,8 +126,20 @@ const STATIC_FALLBACK_STATE: WorkflowRunState = {
 export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
   currentRoomCode,
 }) => {
-  const [repoOwner, setRepoOwner] = useState('rlame1');
-  const [repoName, setRepoName] = useState('p2p-file-tunnel');
+  const [repoOwner, setRepoOwner] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hostname.toLowerCase().endsWith('.github.io')) {
+      const match = window.location.hostname.match(/^([a-z0-9-_]+)\.github\.io$/i);
+      if (match && match[1]) return match[1];
+    }
+    return 'rlame1';
+  });
+  const [repoName, setRepoName] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hostname.toLowerCase().endsWith('.github.io')) {
+      const pathSegments = window.location.pathname.split('/').filter(Boolean);
+      if (pathSegments.length > 0) return pathSegments[0];
+    }
+    return 'p2p-file-tunnel';
+  });
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [workflowState, setWorkflowState] = useState<WorkflowRunState>(
     STATIC_FALLBACK_STATE
