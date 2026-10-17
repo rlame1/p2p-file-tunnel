@@ -55,12 +55,12 @@ type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 // Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
 const WIRE_CHUNK_BYTES = 240 * 1024;
 // Single Dedicated RTCPeerConnection: 100% direct C++ webrtc_network_thread path with zero multi-connection lock overhead
-const MAX_PARALLEL_LANES = 1;
+const MAX_PARALLEL_LANES = 2;
 // 32 chunks per wave (~7.5 MB) fits 100% inside CPU L3 cache
 const CHUNKS_PER_WAVE = 32;
 // 8 MB high-water mark & 4 MB low-water mark per independent RTCPeerConnection
-const HIGH_WATER_MARK = 8 * 1024 * 1024;
-const LOW_WATER_MARK = 4 * 1024 * 1024;
+const HIGH_WATER_MARK = 16 * 1024 * 1024;
+const LOW_WATER_MARK = 8 * 1024 * 1024;
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -942,7 +942,7 @@ export default function App() {
           if (isInitiator) {
             const channel = pc.createDataChannel(
               `aethertunnel-lane-${laneIdx}`,
-              { ordered: true }
+              { ordered: false }
             );
             registerDataChannelLane(channel);
           } else {
