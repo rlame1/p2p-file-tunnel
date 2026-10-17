@@ -122,7 +122,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
-          <div class="text-xs text-slate-400 mt-1">Up to 2 MB AES-256-GCM Super-Chunks · 4x Striped WebRTC Lanes · 0% Base64 Overhead</div>
+          <div class="text-xs text-slate-400 mt-1">8x Parallel RTCPeerConnections · 240 KB Atomic Zero-Copy Frames · Raw Serializer</div>
         </label>
         <div id="transfer-list" class="space-y-2 max-h-64 overflow-y-auto text-xs">
           <div class="text-slate-500 text-center py-4">No transfers yet. Connect with a peer and select a file.</div>
@@ -135,8 +135,9 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     const MAGIC_AETH = 0x41455448;
     const MAGIC_AETP = 0x41455450;
     const MAX_SCTP_SLICE = 240 * 1024;
-    const HIGH_WATER = 2 * 1024 * 1024;
-    const LOW_WATER = 512 * 1024;
+    const HIGH_WATER = 8 * 1024 * 1024;
+    const LOW_WATER = 4 * 1024 * 1024;
+    const PARALLEL_LANES = 8;
 
     let currentKey = null;
     let peer = null;
@@ -179,7 +180,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         const pct = Math.round((incomingFile.receivedCount / incomingFile.totalChunks) * 100);
         const elapsed = Math.max(0.02, (now - incomingFile.startedAt) / 1000);
         const mbps = ((incomingFile.receivedCount * incomingFile.chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
-        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s)');
+        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s · ' + rawLanes.filter(d => d.readyState === 'open').length + 'x Lanes)');
       }
     }
 
@@ -214,46 +215,40 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       return false;
     }
 
-    function registerRawLane(dc) {
+    function registerRawLane(dc, connObj) {
       if (!dc) return;
       dc.binaryType = 'arraybuffer';
       dc.bufferedAmountLowThreshold = LOW_WATER;
-      const orig = dc.onmessage;
-      dc.onmessage = (ev) => {
-        if (ev.data instanceof ArrayBuffer && handleIncomingBinary(ev.data)) return;
-        if (orig) orig.call(dc, ev);
-      };
+      if (connObj && typeof connObj._handleDataMessage === 'function') {
+        const origHandle = connObj._handleDataMessage.bind(connObj);
+        connObj._handleDataMessage = (ev) => {
+          if (ev && ev.data instanceof ArrayBuffer && handleIncomingBinary(ev.data)) return;
+          origHandle(ev);
+        };
+      } else {
+        const orig = dc.onmessage;
+        dc.onmessage = (ev) => {
+          if (ev.data instanceof ArrayBuffer && handleIncomingBinary(ev.data)) return;
+          if (orig) orig.call(dc, ev);
+        };
+      }
       if (!rawLanes.includes(dc)) rawLanes.push(dc);
     }
 
-    function setupConnection(conn, isInitiator) {
-      activeConn = conn;
-      rawLanes = [];
-      document.getElementById('status-badge').textContent = 'Connected 4-Lane P2P (' + conn.peer + ')';
-      document.getElementById('status-badge').className = 'text-xs font-mono text-emerald-400';
-
-      if (conn.dataChannel) registerRawLane(conn.dataChannel);
-      if (conn.peerConnection) {
-        conn.peerConnection.addEventListener('datachannel', (ev) => {
-          if (ev.channel && ev.channel.label.startsWith('aether-lane-')) {
-            registerRawLane(ev.channel);
-          }
-        });
-        if (isInitiator) {
-          for (let i = 1; i <= 3; i++) {
-            try {
-              const extraDc = conn.peerConnection.createDataChannel('aether-lane-' + i, { ordered: false });
-              registerRawLane(extraDc);
-            } catch {}
-          }
-        }
+    function setupConnection(conn, isPrimary) {
+      if (isPrimary) {
+        activeConn = conn;
+        rawLanes = [];
       }
+      if (conn.dataChannel) registerRawLane(conn.dataChannel, conn);
+      document.getElementById('status-badge').textContent = 'Connected ' + rawLanes.length + 'x-Lane P2P (' + conn.peer + ')';
+      document.getElementById('status-badge').className = 'text-xs font-mono text-emerald-400';
 
       conn.on('data', async (data) => {
         if (data instanceof ArrayBuffer && handleIncomingBinary(data)) return;
         const msg = typeof data === 'string' ? JSON.parse(data) : data;
-        if (msg.kind === 'file:meta') {
-          incomingFile = { ...msg, chunkSize: msg.chunkSize || 1024*1024, chunks: new Array(msg.totalChunks), receivedCount: 0, startedAt: performance.now(), lastUi: 0 };
+        if (msg && msg.kind === 'file:meta') {
+          incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks: new Array(msg.totalChunks), receivedCount: 0, startedAt: performance.now(), lastUi: 0 };
           renderStatus('Receiving: ' + msg.name + ' (0%)');
         }
       });
@@ -288,7 +283,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       });
 
       peer.on('connection', (conn) => {
-        conn.on('open', () => setupConnection(conn, false));
+        const isPrimary = !conn.metadata || !conn.metadata.laneIndex;
+        conn.on('open', () => setupConnection(conn, isPrimary));
       });
 
       peer.on('error', (err) => {
@@ -297,11 +293,22 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
             config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] }
           });
           peer.on('open', () => {
-            const conn = peer.connect(hostId, { reliable: true });
-            conn.on('open', () => setupConnection(conn, true));
+            const conn = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: 0 } });
+            conn.on('open', () => {
+              setupConnection(conn, true);
+              for (let i = 1; i < PARALLEL_LANES; i++) {
+                setTimeout(() => {
+                  try {
+                    const extra = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: i } });
+                    extra.on('open', () => setupConnection(extra, false));
+                  } catch {}
+                }, i * 35);
+              }
+            });
           });
           peer.on('connection', (conn) => {
-            conn.on('open', () => setupConnection(conn, false));
+            const isPrimary = !conn.metadata || !conn.metadata.laneIndex;
+            conn.on('open', () => setupConnection(conn, isPrimary));
           });
         }
       });
