@@ -657,6 +657,18 @@ export default function App() {
       channel.binaryType = 'arraybuffer';
       channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
+      channel.addEventListener('message', async (ev: MessageEvent) => {
+        let data = ev.data;
+        if (data instanceof Blob) {
+          try {
+            data = await data.arrayBuffer();
+          } catch {}
+        }
+        if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) {
+          return;
+        }
+      });
+
       if (!managedByPeerJs) {
         channel.onmessage = async (ev: MessageEvent) => {
           let data = ev.data;

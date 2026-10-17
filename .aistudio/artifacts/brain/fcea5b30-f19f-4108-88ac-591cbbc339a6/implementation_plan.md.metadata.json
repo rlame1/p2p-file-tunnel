@@ -1,6 +1,6 @@
 {
-  "summary": "Fix PeerJS Blob binary frame handling so file transfers between separate browsers/devices successfully receive and save chunks.",
-  "updatedAt": "2026-10-17T19:03:26.088995271Z",
+  "summary": "Fix PeerJS WebRTC DataChannel binary frame handling by ensuring channel.onmessage always intercepts binary 'AETH' frames even when managedByPeerJs is true, and handling binary/Blob frames in conn.on('data').",
+  "updatedAt": "2026-10-17T19:13:42.433123175Z",
   "requestFeedback": true,
   "userFacing": true
 }
