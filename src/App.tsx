@@ -191,6 +191,23 @@ export default function App() {
     executeNatProbe();
   }, [executeNatProbe]);
 
+  // Automatically re-join WebSocket room when roomCode changes
+  useEffect(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'room:join',
+            roomCode,
+            peerId,
+            deviceLabel: `${navigator.platform || 'Desktop'} Client`,
+            natType: natReport?.detectedNatTopology || 'Port-Restricted Cone NAT',
+          })
+        );
+      } catch {}
+    }
+  }, [roomCode, peerId, natReport?.detectedNatTopology]);
+
   // Shared helper to record a decrypted chunk and trigger zero-copy Blob completion
   const recordDecryptedChunk = useCallback(
     (
@@ -198,22 +215,31 @@ export default function App() {
       chunkIndex: number,
       decryptedChunk: ArrayBuffer
     ) => {
-      if (bufEntry.receivedChunks[chunkIndex] === undefined) {
-        bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
-        bufEntry.receivedCount += 1;
+      if (chunkIndex >= 0 && chunkIndex < bufEntry.totalChunks) {
+        if (bufEntry.receivedChunks[chunkIndex] === undefined) {
+          bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
+          bufEntry.receivedCount += 1;
+        }
       }
 
-      const receivedCount = bufEntry.receivedCount;
+      let filledCount = 0;
+      for (let i = 0; i < bufEntry.totalChunks; i++) {
+        if (bufEntry.receivedChunks[i] !== undefined) {
+          filledCount++;
+        }
+      }
+
       const now = performance.now();
       const fileId = bufEntry.id;
 
-      if (receivedCount >= bufEntry.totalChunks) {
+      if (filledCount >= bufEntry.totalChunks) {
         const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
         const speedBps = bufEntry.size / elapsedSec;
 
-        const orderedParts = bufEntry.receivedChunks.filter(
-          (part): part is ArrayBuffer => part !== undefined
-        );
+        const orderedParts: ArrayBuffer[] = [];
+        for (let i = 0; i < bufEntry.totalChunks; i++) {
+          orderedParts.push(bufEntry.receivedChunks[i]!);
+        }
         const blob = new Blob(orderedParts, {
           type: bufEntry.mimeType || 'application/octet-stream',
         });
@@ -278,7 +304,7 @@ export default function App() {
         bufEntry.lastUiUpdateAt = now;
         const bytesSoFar = Math.min(
           bufEntry.size,
-          receivedCount * bufEntry.chunkSize
+          filledCount * bufEntry.chunkSize
         );
         const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
         const speedBps = bytesSoFar / elapsedSec;
@@ -288,7 +314,7 @@ export default function App() {
             item.id === fileId && item.direction === 'incoming'
               ? {
                   ...item,
-                  transferredChunks: receivedCount,
+                  transferredChunks: filledCount,
                   bytesTransferred: bytesSoFar,
                   speedBps,
                 }
