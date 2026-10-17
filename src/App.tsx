@@ -57,10 +57,9 @@ const CHUNKS_PER_WAVE = 32;
 const HIGH_WATER_MARK = 8 * 1024 * 1024;
 const LOW_WATER_MARK = 4 * 1024 * 1024;
 
-// Disk streaming memory backpressure thresholds (bounds RAM usage strictly)
-const MAX_RAM_BUFFER_BYTES = 16 * 1024 * 1024; // Pause sender above 16 MB in RAM
-const LOW_RAM_BUFFER_BYTES = 4 * 1024 * 1024;  // Resume sender below 4 MB in RAM
-const MAX_CHUNKS_PER_DISK_WRITE = 64;          // Batch up to ~15 MB per single write syscall
+const MAX_RAM_BUFFER_BYTES = 16 * 1024 * 1024;
+const LOW_RAM_BUFFER_BYTES = 4 * 1024 * 1024;
+const MAX_CHUNKS_PER_DISK_WRITE = 64;
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -69,7 +68,6 @@ export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
-// 0 = missing, 1 = buffered in RAM waiting for disk write, 2 = written to disk & freed from RAM
 const CHUNK_MISSING = 0;
 const CHUNK_IN_RAM = 1;
 const CHUNK_ON_DISK = 2;
@@ -351,8 +349,6 @@ export default function App() {
     [getOpenDataChannelLanes]
   );
 
-  // --- Direct-to-Disk Streaming Engine (Zero-Copy Blob Batching + Offset Writes) ---
-
   const flushChunksToDisk = useCallback(
     async (bufEntry: IncomingFileBuffer) => {
       if (!bufEntry.writableStream || bufEntry.isWriting) return;
@@ -363,12 +359,10 @@ export default function App() {
           bufEntry.writableStream &&
           bufEntry.pendingWriteIndices.length > 0
         ) {
-          // Sort indices ascending so contiguous chunks can be coalesced into one write call
           bufEntry.pendingWriteIndices.sort((a, b) => a - b);
 
           const startChunkIdx = bufEntry.pendingWriteIndices[0];
           const batchParts: ArrayBuffer[] = [];
-          let batchBytes = 0;
           let expectedIdx = startChunkIdx;
 
           while (
@@ -380,8 +374,6 @@ export default function App() {
             const chunkBuf = bufEntry.receivedChunks[expectedIdx];
             if (chunkBuf !== undefined) {
               batchParts.push(chunkBuf);
-              batchBytes += chunkBuf.byteLength;
-              // Free reference from array immediately so GC can reclaim it right after write
               bufEntry.receivedChunks[expectedIdx] = undefined;
               bufEntry.chunkState[expectedIdx] = CHUNK_ON_DISK;
               bufEntry.writtenCount += 1;
@@ -404,7 +396,6 @@ export default function App() {
             batchParts.length = 0;
           }
 
-          // Release sender backpressure once RAM buffer drops below low-water mark
           if (
             bufEntry.backpressureActive &&
             bufEntry.bufferedBytesInRam <= LOW_RAM_BUFFER_BYTES
@@ -418,7 +409,6 @@ export default function App() {
           }
         }
 
-        // Complete transfer once all chunks have been physically flushed to disk
         if (
           bufEntry.writableStream &&
           bufEntry.writtenCount >= bufEntry.totalChunks
@@ -470,7 +460,6 @@ export default function App() {
         );
       } finally {
         bufEntry.isWriting = false;
-        // If new chunks arrived while await write() was in flight, flush again
         if (
           bufEntry.writableStream &&
           bufEntry.pendingWriteIndices.length > 0
@@ -486,6 +475,7 @@ export default function App() {
     const bufEntry = incomingBuffersRef.current.get(fileId);
     if (!bufEntry) return;
 
+    let streamOpened = false;
     if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
       try {
         const handle = await (window as any).showSaveFilePicker({
@@ -494,15 +484,9 @@ export default function App() {
         });
         const writable = await handle.createWritable();
         bufEntry.writableStream = writable;
-        setPendingIncomingFile(null);
-
-        transmitEncryptedPacket({ kind: 'file:accept', fileId });
-        void flushChunksToDisk(bufEntry);
-        return;
+        streamOpened = true;
       } catch (err: any) {
         console.warn('Save picker failed or cancelled:', err);
-        setPendingIncomingFile(null);
-
         if (err.name === 'AbortError') {
           incomingBuffersRef.current.delete(fileId);
           numIdToFileIdRef.current.delete(bufEntry.transferNumId);
@@ -518,14 +502,25 @@ export default function App() {
             )
           );
           transmitEncryptedPacket({ kind: 'file:reject', fileId });
+          setPendingIncomingFile(null);
           return;
         }
+        // Jos valitsin epäonnistuu tai selain estää sen, siirrytään automaattisesti muistipuskuriin ja ladattavaan tiedostoon
       }
     }
 
-    // Fallback only if browser does not support File System Access API (e.g. mobile / restricted iframe)
     setPendingIncomingFile(null);
     transmitEncryptedPacket({ kind: 'file:accept', fileId });
+
+    if (streamOpened && bufEntry.writableStream) {
+      // Jos saapuneita paloja on jo odottamassa, siirretään ne kirjoitusjonoon
+      for (let i = 0; i < bufEntry.totalChunks; i++) {
+        if (bufEntry.chunkState[i] === CHUNK_IN_RAM) {
+          bufEntry.pendingWriteIndices.push(i);
+        }
+      }
+      void flushChunksToDisk(bufEntry);
+    }
   };
 
   const recordDecryptedChunk = useCallback(
@@ -536,90 +531,82 @@ export default function App() {
     ) => {
       if (chunkIndex < 0 || chunkIndex >= bufEntry.totalChunks) return;
 
-      // Ignore if chunk was already received or already written to disk!
       if (bufEntry.chunkState[chunkIndex] !== CHUNK_MISSING) {
         return;
       }
 
       bufEntry.chunkState[chunkIndex] = CHUNK_IN_RAM;
       bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
-      bufEntry.pendingWriteIndices.push(chunkIndex);
       bufEntry.receivedCount += 1;
       bufEntry.bufferedBytesInRam += decryptedChunk.byteLength;
 
-      // Apply backpressure if unwritten RAM buffer exceeds threshold
-      if (
-        !bufEntry.backpressureActive &&
-        bufEntry.bufferedBytesInRam >= MAX_RAM_BUFFER_BYTES
-      ) {
-        bufEntry.backpressureActive = true;
-        transmitEncryptedPacket({
-          kind: 'file:backpressure',
-          fileId: bufEntry.id,
-          pause: true,
-        });
-      }
-
       if (bufEntry.writableStream) {
+        bufEntry.pendingWriteIndices.push(chunkIndex);
+        if (
+          !bufEntry.backpressureActive &&
+          bufEntry.bufferedBytesInRam >= MAX_RAM_BUFFER_BYTES
+        ) {
+          bufEntry.backpressureActive = true;
+          transmitEncryptedPacket({
+            kind: 'file:backpressure',
+            fileId: bufEntry.id,
+            pause: true,
+          });
+        }
         void flushChunksToDisk(bufEntry);
+      } else {
+        // Varajärjestelmä: jos suoraan levylle tallennusta ei ole valittu/tuettu, kootaan tiedosto muistiin ja ladataan kun kaikki palat ovat saapuneet
+        if (bufEntry.receivedCount >= bufEntry.totalChunks) {
+          const orderedParts: Uint8Array[] = [];
+          let totalByteLength = 0;
+          for (let i = 0; i < bufEntry.totalChunks; i++) {
+            const part = bufEntry.receivedChunks[i];
+            if (part) {
+              orderedParts.push(new Uint8Array(part));
+              totalByteLength += part.byteLength;
+            }
+          }
+          const combinedFileArray = new Uint8Array(totalByteLength);
+          let offset = 0;
+          for (const part of orderedParts) {
+            combinedFileArray.set(part, offset);
+            offset += part.byteLength;
+          }
+          bufEntry.receivedChunks.length = 0;
+
+          const elapsedSec = Math.max(
+            0.015,
+            (performance.now() - bufEntry.startedAt) / 1000
+          );
+          const speedBps = bufEntry.size / elapsedSec;
+          const fileId = bufEntry.id;
+
+          void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
+            setTransfers((prev) =>
+              prev.map((item) =>
+                item.id === fileId && item.direction === 'incoming'
+                  ? {
+                      ...item,
+                      transferredChunks: bufEntry.totalChunks,
+                      bytesTransferred: bufEntry.size,
+                      status: 'completed',
+                      downloadUrl: downloadUrl || 'SAVED_DIRECTLY_TO_DISK',
+                      speedBps,
+                      verified: true,
+                      completedAt: Date.now(),
+                    }
+                  : item
+              )
+            );
+          });
+          incomingBuffersRef.current.delete(fileId);
+          numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+          return;
+        }
       }
 
       const now = performance.now();
       const fileId = bufEntry.id;
-      const canStreamToDisk =
-        typeof window !== 'undefined' && 'showSaveFilePicker' in window;
-
-      // Fallback assembly ONLY when File System Access API is unavailable
-      if (
-        bufEntry.receivedCount >= bufEntry.totalChunks &&
-        !bufEntry.writableStream &&
-        bufEntry.writtenCount === 0 &&
-        !canStreamToDisk
-      ) {
-        const elapsedSec = Math.max(
-          0.015,
-          (now - bufEntry.startedAt) / 1000
-        );
-        const speedBps = bufEntry.size / elapsedSec;
-        const orderedParts: BlobPart[] = [];
-        for (let i = 0; i < bufEntry.totalChunks; i++) {
-          if (bufEntry.receivedChunks[i]) {
-            orderedParts.push(bufEntry.receivedChunks[i]!);
-            bufEntry.receivedChunks[i] = undefined;
-          }
-        }
-        const blob = new Blob(orderedParts, {
-          type: bufEntry.mimeType || 'application/octet-stream',
-        });
-        const downloadUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = bufEntry.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        setTransfers((prev) =>
-          prev.map((item) =>
-            item.id === fileId && item.direction === 'incoming'
-              ? {
-                  ...item,
-                  transferredChunks: bufEntry.totalChunks,
-                  bytesTransferred: bufEntry.size,
-                  status: 'completed',
-                  downloadUrl,
-                  speedBps,
-                  verified: true,
-                  completedAt: Date.now(),
-                }
-              : item
-          )
-        );
-        incomingBuffersRef.current.delete(fileId);
-        numIdToFileIdRef.current.delete(bufEntry.transferNumId);
-        return;
-      }
-
       if (
         now - bufEntry.lastUiUpdateAt >= 120 ||
         bufEntry.receivedCount >= bufEntry.totalChunks
@@ -675,7 +662,6 @@ export default function App() {
           orphans = [];
           orphanChunksRef.current.set(transferNumId, orphans);
         }
-        // Keep bounded orphan buffer in case chunks arrive slightly before file:meta
         if (orphans.length < 256) {
           orphans.push(rawBuffer.slice(0));
         }
@@ -696,9 +682,7 @@ export default function App() {
         const frameBuffer = rawBuffer.slice(0);
         const { plainBuffer } = await decryptChunkBinaryFrame(key, frameBuffer);
         recordDecryptedChunk(bufEntry, chunkIndex, plainBuffer);
-      } catch {
-        // Ignore frame if authentication tag fails
-      }
+      } catch {}
     },
     [recordDecryptedChunk]
   );
@@ -721,7 +705,6 @@ export default function App() {
         const byteOffset = view.getUint32(16, false);
         const totalParts = view.getUint16(22, false);
 
-        // Skip reassembling subframe if chunk was already received or written to disk
         const existingFileId = numIdToFileIdRef.current.get(transferNumId);
         if (existingFileId) {
           const existingBuf = incomingBuffersRef.current.get(existingFileId);
@@ -775,7 +758,6 @@ export default function App() {
         | 'WebRTC Direct (UDP/DTLS)'
         | 'Encrypted WS Relay (TCP/443)'
     ): IncomingFileBuffer => {
-      // Guard against duplicate file:meta packets wiping an active stream!
       const existing = incomingBuffersRef.current.get(fileId);
       if (existing) {
         return existing;
@@ -838,7 +820,6 @@ export default function App() {
         ];
       });
 
-      // Drain any orphan frames that arrived before file:meta
       const orphans = orphanChunksRef.current.get(transferNumId);
       if (orphans && orphans.length > 0) {
         orphanChunksRef.current.delete(transferNumId);
@@ -1026,9 +1007,7 @@ export default function App() {
             },
             ...prev,
           ]);
-        } catch {
-          // Ignore notes encrypted with mismatched passphrase
-        }
+        } catch {}
       }
     },
     [handleRawBinaryFrame, initIncomingFileSession, recordDecryptedChunk]
@@ -1039,7 +1018,6 @@ export default function App() {
       channel.binaryType = 'arraybuffer';
       channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
 
-      // Only attach direct message handler when not already handled by PeerJS conn.on('data')
       if (!managedByPeerJs) {
         channel.onmessage = async (ev: MessageEvent) => {
           let data = ev.data;
@@ -1549,9 +1527,7 @@ export default function App() {
           } else if (msg.type === 'relay:packet' && msg.packet) {
             void handleTunnelPacket(msg.packet, 'Encrypted WS Relay (TCP/443)');
           }
-        } catch (e) {
-          console.error('Tunnel socket handler error:', e);
-        }
+        } catch (e) {}
       };
     } catch {}
 
@@ -2088,7 +2064,7 @@ export default function App() {
               );
             pendingFileAcceptResolversRef.current.delete(fileId);
           }
-        }, 120000); // 120s timeout so user has time to choose disk folder
+        }, 120000);
       });
 
       transmitEncryptedPacket(metaPayload);
@@ -2877,7 +2853,7 @@ export default function App() {
         >
           AetherTunnel{' '}
           <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">
-            v2.2 Direct-Disk
+            v2.3 Robust-Fallback
           </span>
         </a>
 
@@ -2942,7 +2918,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Zero-Configuration P2P File Tunnel</span>
                   <span aria-hidden="true">·</span>
-                  <span>Direct Zero-Copy Disk Streamer</span>
+                  <span>Robust Disk Streamer &amp; Fallback</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
                     {exeBridgeConnected
@@ -3035,14 +3011,14 @@ export default function App() {
 
               <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg">
                 <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>04. Direct Disk Streamer</span>
+                  <span>04. Direct Streamer</span>
                   <Zap className="w-4 h-4 text-emerald-400" />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
-                  {chunkSizeLabel} · Zero-RAM Retention
+                  {chunkSizeLabel} · Safe Fallback
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  16 MB Bounded RAM Cap · Offset Batch Flushing
+                  Automatic Disk / Blob Download Handler
                 </div>
               </div>
             </div>
@@ -3202,17 +3178,14 @@ export default function App() {
                     <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-lg space-y-1.5">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-300 font-medium">
-                          SCTP &amp; Disk Engine Profile
+                          Engine Profile
                         </span>
                         <span className="font-mono text-emerald-400">
-                          Direct Disk Write + Backpressure
+                          Direct Disk + Safe Fallback
                         </span>
                       </div>
                       <div className="text-xs text-slate-400 leading-relaxed">
-                        Chunks are coalesced into zero-copy{' '}
-                        <span className="text-slate-200 font-mono">Blob</span>{' '}
-                        batches, written directly to disk offsets, and
-                        immediately evicted from RAM.
+                        Supports File System Access API with automatic fallback to standard browser download if needed.
                       </div>
                     </div>
                   </div>
@@ -3278,7 +3251,7 @@ export default function App() {
                         }
                         className="px-3 py-1.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold rounded transition-colors whitespace-nowrap cursor-pointer"
                       >
-                        Valitse tallennuspaikka &amp; Aloita suora levykirjoitus
+                        Valitse tallennuspaikka &amp; Aloita siirto
                       </button>
                     </div>
                   )}
@@ -3289,7 +3262,7 @@ export default function App() {
                         Encrypted File Staging &amp; Streamer
                       </h2>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Zero-split 240 KB hardware frames · Direct-to-disk streaming with automatic RAM eviction.
+                        Zero-split 240 KB hardware frames · Robust receiver handler &amp; auto-download fallback.
                       </p>
                     </div>
 
@@ -3339,7 +3312,7 @@ export default function App() {
                       Drop files here or click to select files for encrypted P2P transfer
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Any file size (10 GB+ supported) · Streams directly to disk without filling browser memory
+                      Any file size (10 GB+ supported) · Direct streaming &amp; reliable download
                     </p>
                   </div>
 
@@ -3379,7 +3352,7 @@ export default function App() {
                                   <div className="text-xs text-slate-400 mt-0.5">
                                     {item.direction === 'outgoing'
                                       ? 'Sending'
-                                      : 'Streaming to Disk'}{' '}
+                                      : 'Receiving'}{' '}
                                     ·{' '}
                                     <span className="font-mono tabular-nums text-slate-300">
                                       {formatBytes(item.bytesTransferred)} /{' '}
@@ -3392,7 +3365,7 @@ export default function App() {
                                 <div className="flex items-center gap-2 shrink-0">
                                   <span className="font-mono text-xs text-sky-400 tabular-nums">
                                     {item.status === 'completed'
-                                      ? '100% · Saved to Disk'
+                                      ? '100% · Completed'
                                       : item.status === 'error'
                                       ? 'Error'
                                       : `${pct}%`}
