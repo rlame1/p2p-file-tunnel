@@ -47,9 +47,10 @@ import {
 } from './services/natProber';
 import { NatDiagnosticsView } from './components/NatDiagnosticsView';
 import { TransferLedgerView } from './components/TransferLedgerView';
+import { ClientInspectorView } from './components/ClientInspectorView';
 import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 
-type ActiveTab = 'studio' | 'diagnostics' | 'ledger';
+type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
 // Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
 const WIRE_CHUNK_BYTES = 240 * 1024;
@@ -139,6 +140,7 @@ export default function App() {
     new Map()
   );
   const numIdToFileIdRef = useRef<Map<number, string>>(new Map());
+  const orphanChunksRef = useRef<Map<number, ArrayBuffer[]>>(new Map());
   const laneRoundRobinRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const exeWsRef = useRef<WebSocket | null>(null);
@@ -309,7 +311,17 @@ export default function App() {
       const chunkIndex = headerView.getUint32(8, false);
 
       const fileId = numIdToFileIdRef.current.get(transferNumId);
-      if (!fileId) return;
+      if (!fileId) {
+        let orphans = orphanChunksRef.current.get(transferNumId);
+        if (!orphans) {
+          orphans = [];
+          orphanChunksRef.current.set(transferNumId, orphans);
+        }
+        if (orphans.length < 50000) {
+          orphans.push(frameBuffer);
+        }
+        return;
+      }
       const bufEntry = incomingBuffersRef.current.get(fileId);
       if (!bufEntry || bufEntry.receivedChunks[chunkIndex] !== undefined) {
         return;
@@ -450,6 +462,26 @@ export default function App() {
           startedAt: performance.now(),
           lastUiUpdateAt: 0,
         });
+
+        // Flush any buffered orphan chunks that arrived before file:meta
+        const orphans = orphanChunksRef.current.get(numId);
+        if (orphans && orphans.length > 0) {
+          orphanChunksRef.current.delete(numId);
+          const bufEntry = incomingBuffersRef.current.get(fileId);
+          if (bufEntry) {
+            for (const orphanBuf of orphans) {
+              const ohv = new DataView(orphanBuf);
+              const oChunkIndex = ohv.getUint32(8, false);
+              if (bufEntry.receivedChunks[oChunkIndex] === undefined) {
+                try {
+                  void decryptChunkBinaryFrame(key, orphanBuf).then(({ plainBuffer }) => {
+                    recordDecryptedChunk(bufEntry, oChunkIndex, plainBuffer);
+                  });
+                } catch {}
+              }
+            }
+          }
+        }
 
         setTransfers((prev) => {
           if (prev.some((t) => t.id === fileId && t.direction === 'incoming')) {
@@ -1466,15 +1498,6 @@ export default function App() {
       return realLanes;
     }
 
-    const peerJsOpen = peerJsConnsRef.current
-      .map((c) => c.dataChannel)
-      .filter((dc): dc is RTCDataChannel =>
-        Boolean(dc && dc.readyState === 'open')
-      );
-    if (peerJsOpen.length > 0) {
-      return peerJsOpen;
-    }
-
     return [];
   }, [transportStrategy]);
 
@@ -1683,6 +1706,9 @@ export default function App() {
         totalChunks,
         sha256: 'streaming-aes-256-gcm',
       });
+
+      // Brief 80ms stabilization pause to ensure file:meta reaches receiver before data chunks
+      await new Promise((r) => window.setTimeout(r, 80));
 
       // Compute SHA-256 asynchronously in the background without blocking streaming
       void file
@@ -2453,6 +2479,16 @@ export default function App() {
             Tunnel Studio
           </button>
           <button
+            onClick={() => setActiveTab('inspector')}
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
+              activeTab === 'inspector'
+                ? 'text-slate-100 border-sky-400'
+                : 'border-transparent hover:text-slate-200'
+            }`}
+          >
+            EXE vs Web Inspector
+          </button>
+          <button
             onClick={() => setActiveTab('diagnostics')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer border-b-2 ${
               activeTab === 'diagnostics'
@@ -3028,6 +3064,18 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === 'inspector' && (
+          <ClientInspectorView
+            roomCode={roomCode}
+            keyFingerprint={keyFingerprint}
+            exeBridgeConnected={exeBridgeConnected}
+            connectionState={connectionState}
+            natReport={natReport}
+            peers={peers}
+            transfers={transfers}
+          />
         )}
 
         {activeTab === 'diagnostics' && (
