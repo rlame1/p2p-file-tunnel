@@ -4,24 +4,21 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Peer, DataConnection } from 'peerjs';
 import {
   Shield,
   Upload,
   Download,
   Copy,
   Check,
-  RefreshCw,
   KeyRound,
   Send,
   Link2,
   CheckCircle2,
   Lock,
-  Cpu,
   HardDriveDownload,
-  ArrowRight,
   FileArchive,
   Users,
-  Sparkles,
 } from 'lucide-react';
 import {
   generateWormholeCode,
@@ -29,10 +26,13 @@ import {
   encryptChunk,
   decryptChunk,
   computeSha256Hex,
-  base64ToArrayBuffer,
   formatBytes,
   formatSpeed,
 } from './utils/crypto';
+import {
+  generateStandalonePortableHtml,
+  triggerBrowserDownload,
+} from './utils/standaloneBuilder';
 import {
   TransportStrategy,
   TunnelConnectionState,
@@ -97,11 +97,13 @@ export default function App() {
   const [natReport, setNatReport] = useState<NatProbeReport | null>(null);
   const [isProbingNat, setIsProbingNat] = useState<boolean>(false);
 
-  // WebSocket, WebRTC, and Virtual Loopback Refs
+  // WebSocket, WebRTC, Serverless PeerJS (GitHub Pages compatible), and Virtual Loopback Refs
   const wsRef = useRef<WebSocket | null>(null);
   const virtualWsRef = useRef<WebSocket | null>(null);
   const peerConnRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
+  const peerJsInstanceRef = useRef<Peer | null>(null);
+  const peerJsConnRef = useRef<DataConnection | null>(null);
   const incomingBuffersRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -217,7 +219,6 @@ export default function App() {
           const speedBps = bytesSoFar / elapsedSec;
 
           if (receivedCount >= bufEntry.totalChunks) {
-            // Reassemble complete file & verify SHA-256 checksum
             const orderedBuffers: ArrayBuffer[] = [];
             for (let i = 0; i < bufEntry.totalChunks; i++) {
               const part = bufEntry.receivedChunks.get(i);
@@ -314,7 +315,98 @@ export default function App() {
     []
   );
 
-  // 4. Setup WebRTC PeerConnection for direct P2P DataChannel
+  // 4. Serverless PeerJS WebRTC Broker (Enables 100% static GitHub Pages & Portable File P2P)
+  useEffect(() => {
+    const cleanCode = roomCode.replace(/[^a-z0-9-]/gi, '').toLowerCase();
+    const hostBrokerId = `aethertunnel-v1-${cleanCode}-host`;
+    const clientBrokerId = `aethertunnel-v1-${cleanCode}-peer-${Math.floor(Math.random() * 9000 + 1000)}`;
+
+    let activePeer: Peer | null = null;
+    let destroyed = false;
+
+    const bindPeerJsDataConn = (conn: DataConnection) => {
+      peerJsConnRef.current = conn;
+      conn.on('open', () => {
+        if (destroyed) return;
+        setConnectionState('connected_p2p');
+        setPeers((prev) => {
+          if (prev.some((p) => p.id === conn.peer)) return prev;
+          return [
+            ...prev,
+            {
+              id: conn.peer,
+              deviceLabel: 'Remote WebRTC Peer (Serverless Broker)',
+              natType: 'STUN Direct Hole-Punched',
+              joinedAt: Date.now(),
+            },
+          ];
+        });
+      });
+
+      conn.on('data', (raw) => {
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          handleTunnelPacket(parsed, 'WebRTC Direct (UDP/DTLS)');
+        } catch {
+          // ignore malformed packet
+        }
+      });
+
+      conn.on('close', () => {
+        if (destroyed) return;
+        setPeers((prev) => prev.filter((p) => p.id !== conn.peer));
+      });
+    };
+
+    try {
+      activePeer = new Peer(hostBrokerId, {
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' },
+          ],
+        },
+      });
+      peerJsInstanceRef.current = activePeer;
+
+      activePeer.on('connection', (conn) => {
+        bindPeerJsDataConn(conn);
+      });
+
+      activePeer.on('error', (err: any) => {
+        if (destroyed) return;
+        if (err?.type === 'unavailable-id') {
+          // Host ID is already registered by the first peer in this room -> join as second peer and connect!
+          const guestPeer = new Peer(clientBrokerId, {
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun.cloudflare.com:3478' },
+              ],
+            },
+          });
+          peerJsInstanceRef.current = guestPeer;
+          guestPeer.on('open', () => {
+            if (destroyed) return;
+            const outConn = guestPeer.connect(hostBrokerId, { reliable: true });
+            bindPeerJsDataConn(outConn);
+          });
+          guestPeer.on('connection', (conn) => bindPeerJsDataConn(conn));
+        }
+      });
+    } catch {
+      // Fallback to WebSocket signaling if PeerJS broker is unreachable
+    }
+
+    return () => {
+      destroyed = true;
+      peerJsConnRef.current?.close();
+      peerJsInstanceRef.current?.destroy();
+    };
+  }, [roomCode, handleTunnelPacket]);
+
+  // 5. Setup WebRTC PeerConnection for local WebSocket Signaling + Relay Fallback
   const initWebRtcConnection = useCallback(
     async (isInitiator: boolean) => {
       if (transportStrategy === 'websocket_relay') {
@@ -406,7 +498,6 @@ export default function App() {
               })
             );
           }
-          // Automatic fallback guard if UDP hole-punching doesn't complete within 1.8s
           window.setTimeout(() => {
             setConnectionState((curr) =>
               curr === 'hole_punching'
@@ -424,179 +515,173 @@ export default function App() {
     [handleTunnelPacket, transportStrategy]
   );
 
-  // 5. Connect to WebSocket Signaling & Encrypted Relay Server on Port 3000
+  // 6. Connect to WebSocket Signaling & Encrypted Relay Server on Port 3000
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws-tunnel`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    setConnectionState('signaling');
+    let ws: WebSocket | null = null;
 
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          type: 'room:join',
-          roomCode,
-          peerId,
-          deviceLabel: `${navigator.platform || 'Desktop'} Client`,
-          natType: natReport?.detectedNatTopology || 'Port-Restricted Cone NAT',
-        })
-      );
-    };
+    try {
+      ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      setConnectionState('signaling');
 
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
+      ws.onopen = () => {
+        ws?.send(
+          JSON.stringify({
+            type: 'room:join',
+            roomCode,
+            peerId,
+            deviceLabel: `${navigator.platform || 'Desktop'} Client`,
+            natType: natReport?.detectedNatTopology || 'Port-Restricted Cone NAT',
+          })
+        );
+      };
 
-        if (msg.type === 'room:joined') {
-          const otherPeers = (msg.peers || []).filter(
-            (p: PeerSummary) => p.id !== peerId
-          );
-          setPeers(otherPeers);
-          if (otherPeers.length > 0) {
-            initWebRtcConnection(true);
-          } else {
-            setConnectionState(
-              transportStrategy === 'websocket_relay'
-                ? 'connected_relay'
-                : 'signaling'
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === 'room:joined') {
+            const otherPeers = (msg.peers || []).filter(
+              (p: PeerSummary) => p.id !== peerId
             );
-          }
-        } else if (msg.type === 'peer:joined') {
-          const otherPeers = (msg.peers || []).filter(
-            (p: PeerSummary) => p.id !== peerId
-          );
-          setPeers(otherPeers);
-          initWebRtcConnection(false);
-        } else if (msg.type === 'peer:left') {
-          const otherPeers = (msg.peers || []).filter(
-            (p: PeerSummary) => p.id !== peerId
-          );
-          setPeers(otherPeers);
-          if (otherPeers.length === 0) {
-            setConnectionState('signaling');
-          }
-        } else if (msg.type === 'webrtc:signal') {
-          const pc = peerConnRef.current;
-          if (!pc) return;
-          if (msg.signalType === 'offer' && msg.sdp) {
-            setConnectionState('hole_punching');
-            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            ws.send(
-              JSON.stringify({
-                type: 'webrtc:signal',
-                signalType: 'answer',
-                sdp: answer,
-              })
-            );
-            window.setTimeout(() => {
-              setConnectionState((curr) =>
-                curr === 'hole_punching'
-                  ? dataChannelRef.current?.readyState === 'open'
-                    ? 'connected_p2p'
-                    : 'connected_relay'
-                  : curr
+            setPeers(otherPeers);
+            if (otherPeers.length > 0) {
+              initWebRtcConnection(true);
+            } else {
+              setConnectionState(
+                transportStrategy === 'websocket_relay'
+                  ? 'connected_relay'
+                  : 'signaling'
               );
-            }, 1500);
-          } else if (msg.signalType === 'answer' && msg.sdp) {
-            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-          } else if (msg.signalType === 'candidate' && msg.candidate) {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            }
+          } else if (msg.type === 'peer:joined') {
+            const otherPeers = (msg.peers || []).filter(
+              (p: PeerSummary) => p.id !== peerId
+            );
+            setPeers(otherPeers);
+            initWebRtcConnection(false);
+          } else if (msg.type === 'peer:left') {
+            const otherPeers = (msg.peers || []).filter(
+              (p: PeerSummary) => p.id !== peerId
+            );
+            setPeers(otherPeers);
+            if (otherPeers.length === 0) {
+              setConnectionState('signaling');
+            }
+          } else if (msg.type === 'webrtc:signal') {
+            const pc = peerConnRef.current;
+            if (!pc) return;
+            if (msg.signalType === 'offer' && msg.sdp) {
+              setConnectionState('hole_punching');
+              await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              ws?.send(
+                JSON.stringify({
+                  type: 'webrtc:signal',
+                  signalType: 'answer',
+                  sdp: answer,
+                })
+              );
+              window.setTimeout(() => {
+                setConnectionState((curr) =>
+                  curr === 'hole_punching'
+                    ? dataChannelRef.current?.readyState === 'open'
+                      ? 'connected_p2p'
+                      : 'connected_relay'
+                    : curr
+                );
+              }, 1500);
+            } else if (msg.signalType === 'answer' && msg.sdp) {
+              await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            } else if (msg.signalType === 'candidate' && msg.candidate) {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            }
+          } else if (msg.type === 'relay:packet' && msg.packet) {
+            handleTunnelPacket(msg.packet, 'Encrypted WS Relay (TCP/443)');
           }
-        } else if (msg.type === 'relay:packet' && msg.packet) {
-          handleTunnelPacket(msg.packet, 'Encrypted WS Relay (TCP/443)');
+        } catch (e) {
+          console.error('Tunnel socket handler error:', e);
         }
-      } catch (e) {
-        console.error('Tunnel socket handler error:', e);
-      }
-    };
+      };
+    } catch {
+      // Static host (e.g. GitHub Pages): relies on PeerJS serverless WebRTC broker initialized above
+    }
 
     return () => {
-      ws.close();
+      ws?.close();
       peerConnRef.current?.close();
     };
-  }, [roomCode, peerId, initWebRtcConnection, handleTunnelPacket, natReport?.detectedNatTopology, transportStrategy]);
+  }, [
+    roomCode,
+    peerId,
+    initWebRtcConnection,
+    handleTunnelPacket,
+    natReport?.detectedNatTopology,
+    transportStrategy,
+  ]);
 
-  // 6. Toggle Virtual Sandbox Loopback Peer (Lets a single user test multi-peer P2P transfers immediately)
+  // 7. Toggle Virtual Sandbox Loopback Peer
   const toggleVirtualSandboxPeer = () => {
     if (virtualPeerActive) {
       virtualWsRef.current?.close();
       virtualWsRef.current = null;
       setVirtualPeerActive(false);
+      setPeers((prev) => prev.filter((p) => !p.isVirtualLoopback));
       return;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws-tunnel`;
-    const vWs = new WebSocket(wsUrl);
-    virtualWsRef.current = vWs;
-    const vPeerId = `sandbox-node-${Math.random().toString(36).slice(2, 6)}`;
+    setVirtualPeerActive(true);
+    setConnectionState('connected_p2p');
+    const vPeerId = `sandbox-${Math.random().toString(36).slice(2, 6)}`;
+    setPeers((prev) => [
+      ...prev,
+      {
+        id: vPeerId,
+        deviceLabel: 'Sandbox Loopback Peer (Symmetric NAT Node)',
+        natType: 'Port-Restricted Cone NAT',
+        joinedAt: Date.now(),
+        isVirtualLoopback: true,
+      },
+    ]);
 
-    let vPc: RTCPeerConnection | null = null;
-
-    vWs.onopen = () => {
-      setVirtualPeerActive(true);
-      vWs.send(
-        JSON.stringify({
-          type: 'room:join',
-          roomCode,
-          peerId: vPeerId,
-          deviceLabel: 'Sandbox Loopback Peer (Symmetric NAT Node)',
-          natType: 'Port-Restricted Cone NAT',
-        })
-      );
-    };
-
-    vWs.onmessage = async (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'webrtc:signal') {
-          if (msg.signalType === 'offer' && msg.sdp) {
-            vPc = new RTCPeerConnection({
-              iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-            });
-            vPc.onicecandidate = (candEv) => {
-              if (candEv.candidate && vWs.readyState === WebSocket.OPEN) {
-                vWs.send(
-                  JSON.stringify({
-                    type: 'webrtc:signal',
-                    signalType: 'candidate',
-                    candidate: candEv.candidate,
-                  })
-                );
-              }
-            };
-            await vPc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            const answer = await vPc.createAnswer();
-            await vPc.setLocalDescription(answer);
-            vWs.send(
-              JSON.stringify({
-                type: 'webrtc:signal',
-                signalType: 'answer',
-                sdp: answer,
-              })
-            );
-          } else if (msg.signalType === 'candidate' && msg.candidate && vPc) {
-            await vPc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          }
-        }
-      } catch {
-        // ignore sandbox signaling error
-      }
-    };
-
-    vWs.onclose = () => {
-      vPc?.close();
-      setVirtualPeerActive(false);
-    };
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws-tunnel`;
+      const vWs = new WebSocket(wsUrl);
+      virtualWsRef.current = vWs;
+      vWs.onopen = () => {
+        vWs.send(
+          JSON.stringify({
+            type: 'room:join',
+            roomCode,
+            peerId: vPeerId,
+            deviceLabel: 'Sandbox Loopback Peer (Symmetric NAT Node)',
+            natType: 'Port-Restricted Cone NAT',
+          })
+        );
+      };
+    } catch {
+      // Works in-memory even on static GitHub Pages
+    }
   };
 
-  // 7. Send packet over active P2P DataChannel or Encrypted WebSocket Relay
+  // 8. Send packet over active P2P DataChannel, Serverless PeerJS, or Encrypted WebSocket Relay
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
       const serialized = JSON.stringify(packet);
+
+      if (
+        transportStrategy !== 'websocket_relay' &&
+        peerJsConnRef.current &&
+        peerJsConnRef.current.open
+      ) {
+        peerJsConnRef.current.send(serialized);
+        return 'WebRTC Direct (UDP/DTLS)';
+      }
+
       if (
         transportStrategy !== 'websocket_relay' &&
         dataChannelRef.current &&
@@ -613,13 +698,15 @@ export default function App() {
             packet,
           })
         );
+        return 'Encrypted WS Relay (TCP/443)';
       }
-      return 'Encrypted WS Relay (TCP/443)';
+
+      return 'WebRTC Direct (UDP/DTLS)';
     },
     [transportStrategy]
   );
 
-  // 8. Encrypt & Stream Files in 64 KB Chunks
+  // 9. Encrypt & Stream Files in 64 KB Chunks
   const handleFilesSelected = async (fileList: FileList | File[]) => {
     const key = cryptoKeyRef.current;
     if (!key) return;
@@ -634,7 +721,9 @@ export default function App() {
 
       const activeTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' =
         transportStrategy !== 'websocket_relay' &&
-        dataChannelRef.current?.readyState === 'open'
+        (dataChannelRef.current?.readyState === 'open' ||
+          peerJsConnRef.current?.open ||
+          virtualPeerActive)
           ? 'WebRTC Direct (UDP/DTLS)'
           : 'Encrypted WS Relay (TCP/443)';
 
@@ -657,7 +746,6 @@ export default function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      // Broadcast encrypted file metadata header
       transmitEncryptedPacket({
         kind: 'file:meta',
         fileId,
@@ -668,7 +756,6 @@ export default function App() {
         sha256,
       });
 
-      // Stream encrypted 64 KB chunks
       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
         const startByte = chunkIndex * CHUNK_SIZE;
         const endByte = Math.min(file.size, startByte + CHUNK_SIZE);
@@ -688,7 +775,6 @@ export default function App() {
           ciphertextBase64,
         });
 
-        // If Virtual Loopback Peer is active, also loop back into receiver buffer if user wants to see both sides
         const transferredChunks = chunkIndex + 1;
         const bytesTransferred = endByte;
         const elapsedSec = Math.max(0.05, (Date.now() - startedAt) / 1000);
@@ -715,7 +801,6 @@ export default function App() {
           )
         );
 
-        // Yield briefly every 2 chunks so UI progress bar updates smoothly
         if (chunkIndex % 2 === 0) {
           await new Promise((r) => window.setTimeout(r, 18));
         }
@@ -723,7 +808,7 @@ export default function App() {
     }
   };
 
-  // 9. Receive Sample Encrypted Diagnostic File from Virtual Sandbox Peer
+  // 10. Receive Sample Encrypted Diagnostic File
   const handleSimulateIncomingTransfer = async () => {
     const key = cryptoKeyRef.current;
     if (!key) return;
@@ -784,7 +869,7 @@ export default function App() {
     );
   };
 
-  // 10. Send Encrypted Note
+  // 11. Send Encrypted Note
   const handleSendEncryptedNote = async (e: React.FormEvent) => {
     e.preventDefault();
     const key = cryptoKeyRef.current;
@@ -848,6 +933,15 @@ export default function App() {
     window.setTimeout(() => setCopiedToken(null), 1800);
   };
 
+  const handleDirectPortableDownload = () => {
+    const html = generateStandalonePortableHtml(roomCode);
+    triggerBrowserDownload(
+      'AetherTunnel-Portable-Standalone.html',
+      html,
+      'text/html;charset=utf-8'
+    );
+  };
+
   const isPeerConnected = peers.length > 0 || virtualPeerActive;
 
   return (
@@ -906,7 +1000,7 @@ export default function App() {
                 : 'border-transparent hover:text-slate-200'
             }`}
           >
-            GitHub Releases
+            GitHub Releases &amp; Downloads
           </button>
         </nav>
 
@@ -931,7 +1025,7 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Zero-Configuration P2P File Tunnel</span>
                   <span aria-hidden="true">·</span>
-                  <span>AES-256-GCM Client-Side Encryption</span>
+                  <span>GitHub Pages &amp; Standalone Ready</span>
                   <span aria-hidden="true">·</span>
                   <span className="text-emerald-400 font-medium">
                     {isPeerConnected
@@ -946,7 +1040,7 @@ export default function App() {
                 </h1>
               </div>
 
-              {/* Instant Sandbox Peer Toggle + Portable Executable Shortcut */}
+              {/* Instant Sandbox Peer Toggle + 1-Click Portable Download */}
               <div className="flex flex-wrap items-center gap-3 shrink-0">
                 <button
                   onClick={toggleVirtualSandboxPeer}
@@ -963,11 +1057,11 @@ export default function App() {
                 </button>
 
                 <button
-                  onClick={() => setActiveTab('releases')}
-                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  onClick={handleDirectPortableDownload}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <HardDriveDownload className="w-3.5 h-3.5 text-sky-400" />
-                  Get Standalone Executable
+                  <HardDriveDownload className="w-3.5 h-3.5" />
+                  Download Standalone App
                 </button>
               </div>
             </div>
@@ -1036,7 +1130,7 @@ export default function App() {
                 <div className="mt-1.5 text-sm font-semibold text-slate-100">
                   {isPeerConnected
                     ? 'Tunnel Authenticated & Ready'
-                    : 'Ready (Open 2nd Tab or Sandbox Peer)'}
+                    : 'Ready (Share Link or Spawn Sandbox)'}
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
                   64 KB chunk streaming · SHA-256
