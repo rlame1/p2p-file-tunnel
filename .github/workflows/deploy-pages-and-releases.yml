@@ -1,4 +1,4 @@
-name: Auto-Build GitHub Pages & Standalone .EXE Release
+name: "Auto-Build GitHub Pages and Standalone EXE Release"
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - main
       - master
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
   workflow_dispatch:
 
 permissions:
@@ -15,17 +15,17 @@ permissions:
   id-token: write
 
 concurrency:
-  group: 'pages-and-releases'
+  group: "pages-and-releases"
   cancel-in-progress: false
 
 jobs:
   build-and-publish:
-    name: Build Web Page + Compile .EXE & Publish Release
+    name: "Build Web Page and Compile EXE Release"
     runs-on: ubuntu-24.04
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
-      - name: 1. Checkout Repository via Git
+      - name: "1. Checkout Repository via Git"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -34,19 +34,19 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout -f FETCH_HEAD
 
-      - name: 2. Install Dependencies & Build Static Web App
+      - name: "2. Install Dependencies and Build Static Web App"
         run: |
           npm install --legacy-peer-deps --no-audit --no-fund
           npm run build
           cp dist/index.html dist/404.html
           touch dist/.nojekyll
 
-      - name: 3. Compile Native Windows .EXE & Standalone Packages
+      - name: "3. Compile Native Windows EXE and Standalone Packages"
         run: |
           node scripts/build-desktop-entry.cjs
           ls -lh dist/downloads/
 
-      - name: 4. Publish AetherTunnel-win-x64.exe & Binaries to GitHub Releases
+      - name: "4. Publish AetherTunnel-win-x64.exe to GitHub Releases"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -63,15 +63,17 @@ jobs:
               --latest
           fi
 
-      - name: 5. Configure GitHub Pages
+      - name: "5. Configure GitHub Pages"
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
-      - name: 6. Upload Artifact for GitHub Pages (Source: GitHub Actions)
+      - name: "6. Upload Artifact for GitHub Pages"
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: "./dist"
 
-      - name: 7. Also Sync gh-pages Branch (Fallback)
+      - name: "7. Sync gh-pages Branch"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -81,19 +83,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b gh-pages
           git add -A
-          git commit -m "Deploy AetherTunnel Web App and Standalone .EXE"
+          git commit -m "Deploy AetherTunnel Web App and Standalone EXE"
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages:gh-pages
 
   deploy-pages:
-    name: Deploy Live Site to GitHub Pages
+    name: "Deploy Live Site to GitHub Pages"
     needs: build-and-publish
     runs-on: ubuntu-24.04
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: "Deploy to GitHub Pages"
         id: deployment
         uses: actions/deploy-pages@v4

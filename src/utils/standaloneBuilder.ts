@@ -255,23 +255,25 @@ jobs:
               --latest
           fi
 
-      - name: 5. Configure GitHub Pages
+      - name: "5. Configure GitHub Pages"
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
-      - name: 6. Upload Artifact for GitHub Pages (Source: GitHub Actions)
+      - name: "6. Upload Artifact for GitHub Pages"
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: "./dist"
 
   deploy-pages:
-    name: Deploy Live Site to GitHub Pages
+    name: "Deploy Live Site to GitHub Pages"
     needs: build-and-publish
     runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: \${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: "Deploy to GitHub Pages"
         id: deployment
         uses: actions/deploy-pages@v4
 `;
