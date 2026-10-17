@@ -1605,10 +1605,11 @@ export default function App() {
     [getOpenDataChannelLanes, trySendBinaryPacketSync]
   );
 
-  // 8. Send control packet over active P2P DataChannel, Serverless PeerJS, or Encrypted WebSocket Relay
+  // 8. Send control packet across all active transports (WebRTC DataChannels, PeerJS, and WebSocket Relay) simultaneously
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
       const serialized = JSON.stringify(packet);
+      let transportUsed: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' = 'WebRTC Direct (UDP/DTLS)';
 
       if (localBusRef.current && localBusPeersRef.current.length > 0) {
         try {
@@ -1637,37 +1638,35 @@ export default function App() {
       }
 
       const openLanes = getOpenDataChannelLanes();
-
-      if (openLanes.length > 0) {
-        try {
-          openLanes[0].send(serialized);
-          return 'WebRTC Direct (UDP/DTLS)';
-        } catch {
-          // fallback below
+      for (const dc of openLanes) {
+        if (dc.readyState === 'open') {
+          try {
+            dc.send(serialized);
+          } catch {}
         }
       }
 
-      const openPeerJsConn = peerJsConnsRef.current.find((c) => c.open);
-      if (transportStrategy !== 'websocket_relay' && openPeerJsConn) {
-        openPeerJsConn.send(serialized);
-        return 'WebRTC Direct (UDP/DTLS)';
+      for (const conn of peerJsConnsRef.current) {
+        if (conn.open) {
+          try {
+            conn.send(serialized);
+          } catch {}
+        }
       }
 
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'relay:packet',
-            packet,
-          })
-        );
-        return 'Encrypted WS Relay (TCP/443)';
+        try {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'relay:packet',
+              packet,
+            })
+          );
+          transportUsed = 'Encrypted WS Relay (TCP/443)';
+        } catch {}
       }
 
-      if (cloudWebPeersRef.current.length > 0) {
-        return 'Encrypted WS Relay (TCP/443)';
-      }
-
-      return 'WebRTC Direct (UDP/DTLS)';
+      return transportUsed;
     },
     [transportStrategy, getOpenDataChannelLanes]
   );
@@ -1736,8 +1735,8 @@ export default function App() {
 
       setTransfers((prev) => [newTransfer, ...prev]);
 
-      // Send file metadata immediately at t = 0ms
-      transmitEncryptedPacket({
+      // Send file metadata immediately at t = 0ms and again at 80ms to guarantee delivery
+      const metaPayload = {
         kind: 'file:meta',
         fileId,
         transferNumId,
@@ -1747,10 +1746,13 @@ export default function App() {
         mimeType: file.type || 'application/octet-stream',
         totalChunks,
         sha256: 'streaming-aes-256-gcm',
-      });
+      };
 
-      // Brief 80ms stabilization pause to ensure file:meta reaches receiver before data chunks
-      await new Promise((r) => window.setTimeout(r, 80));
+      transmitEncryptedPacket(metaPayload);
+
+      // Brief 100ms stabilization pause to ensure file:meta reaches receiver before data chunks
+      await new Promise((r) => window.setTimeout(r, 100));
+      transmitEncryptedPacket(metaPayload);
 
       // Compute SHA-256 asynchronously in the background without blocking streaming
       void file
