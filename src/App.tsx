@@ -905,8 +905,13 @@ export default function App() {
       };
 
       ws.onmessage = async (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          handleRawBinaryFrame(event.data);
+        let rawData = event.data;
+        if (rawData instanceof Blob) {
+          rawData = await rawData.arrayBuffer();
+        }
+
+        if (rawData instanceof ArrayBuffer) {
+          handleRawBinaryFrame(rawData);
           return;
         }
 
