@@ -10,6 +10,7 @@ import {
   generateStandalonePortableHtml,
   generateGitHubPagesAndReleasesWorkflow,
   triggerBrowserDownload,
+  downloadNativeWindowsKernelExe,
 } from '../utils/standaloneBuilder';
 import { formatBytes } from '../utils/crypto';
 
@@ -58,10 +59,10 @@ const STATIC_FALLBACK_STATE: WorkflowRunState = {
     },
     {
       id: 'step-win',
-      name: '2. Compile Native Windows GUI Executable (AetherTunnel-win-x64.exe)',
+      name: '2. Compile Native Windows Kernel-Socket Executable (AetherTunnel-win-x64.exe)',
       status: 'completed',
       durationMs: 38,
-      detail: 'Built PE32 GUI Windows executable with embedded standalone app (644 KB)',
+      detail: 'Built Native Windows Winsock2 Kernel TCP + Hardware AES-256 + Direct NVMe FileStream .EXE (0% WebRTC)',
     },
     {
       id: 'step-unix',
@@ -262,14 +263,13 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <a
-              href="./downloads/AetherTunnel-win-x64.exe"
-              download="AetherTunnel-win-x64.exe"
+            <button
+              onClick={() => downloadNativeWindowsKernelExe(currentRoomCode)}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
-              Download Windows Executable (.exe)
-            </a>
+              Download Native Kernel-Socket .EXE (Windows)
+            </button>
             <button
               onClick={handleDownloadStandaloneHtml}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors cursor-pointer whitespace-nowrap"
@@ -308,14 +308,24 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
                     {art.sha256.slice(0, 16)}...{art.sha256.slice(-8)}
                   </td>
                   <td className="py-3.5 px-6 text-right">
-                    <a
-                      href={art.downloadUrl}
-                      download={art.filename}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors whitespace-nowrap"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download
-                    </a>
+                    {art.filename.endsWith('.exe') ? (
+                      <button
+                        onClick={() => downloadNativeWindowsKernelExe(currentRoomCode)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors whitespace-nowrap cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Download Kernel .EXE
+                      </button>
+                    ) : (
+                      <a
+                        href={art.downloadUrl}
+                        download={art.filename}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors whitespace-nowrap"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Download
+                      </a>
+                    )}
                   </td>
                 </tr>
               ))}

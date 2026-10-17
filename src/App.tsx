@@ -48,6 +48,7 @@ import {
 import { NatDiagnosticsView } from './components/NatDiagnosticsView';
 import { GitHubReleaseStudio } from './components/GitHubReleaseStudio';
 import { TransferLedgerView } from './components/TransferLedgerView';
+import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 
 type ActiveTab = 'studio' | 'diagnostics' | 'ledger' | 'releases';
 
@@ -569,7 +570,7 @@ export default function App() {
             ...prev,
             {
               id: conn.peer,
-              deviceLabel: 'Remote WebRTC Peer (8-Connection Striped Pipe)',
+              deviceLabel: 'Remote WebRTC Peer (Dual-Lane Striped Pipe)',
               natType: 'STUN Direct Hole-Punched',
               joinedAt: Date.now(),
             },
@@ -1573,14 +1574,14 @@ export default function App() {
                     : 'Connect Local Sandbox Peer'}
                 </button>
 
-                <a
-                  href="./downloads/AetherTunnel-win-x64.exe"
-                  download="AetherTunnel-win-x64.exe"
+                <button
+                  onClick={() => downloadNativeWindowsKernelExe(roomCode)}
                   className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  title="Downloads the standalone Native Windows Kernel-Socket .EXE (Winsock2 Direct TCP · 0% WebRTC · 4 MB Blocks · Unlimited File Size)"
                 >
                   <HardDriveDownload className="w-3.5 h-3.5" />
-                  Download Windows .EXE
-                </a>
+                  Download Kernel-Socket .EXE
+                </button>
               </div>
             </div>
 
@@ -1645,7 +1646,7 @@ export default function App() {
                   {chunkSizeLabel} Stripe · {displayedLaneCount} Lanes
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  64 MB In-Flight Window · Zero-Copy Wire Frames
+                  16 MB In-Flight Window · Zero-Copy Wire Frames
                 </div>
               </div>
             </div>
