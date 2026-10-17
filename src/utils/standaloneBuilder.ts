@@ -193,12 +193,15 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 }
 
 export function generateGitHubPagesAndReleasesWorkflow(): string {
-  return `name: Deploy GitHub Pages & Build Standalone Executables
+  return `name: Auto-Build GitHub Pages & Standalone .EXE Release
 
 on:
   push:
-    branches: [main, master]
-    tags: ['v*.*.*']
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
@@ -206,66 +209,75 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: 'pages-and-releases'
+  cancel-in-progress: false
+
 jobs:
-  deploy-github-pages:
-    name: 1. Publish Live Web App to GitHub Pages
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: \${{ steps.deployment.outputs.page_url }}
+  build-and-release:
+    name: Build Web Page + Compile .EXE & Publish Release
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout Repository
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: 2. Setup Node.js 22 LTS (No lockfile required)
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
-      - name: Install & Build Static P2P Web App
+      - name: 3. Install Dependencies & Build Static Web App
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
           cp dist/index.html dist/404.html
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: 4. Compile Standalone .EXE, macOS & Linux Binaries
+        run: |
+          node scripts/build-desktop-entry.cjs
+          npx --yes @yao-pkg/pkg dist-bin/aethertunnel-desktop.cjs \\
+            --targets node18-win-x64,node18-macos-arm64,node18-linux-x64 \\
+            --output dist/downloads/AetherTunnel
+          cp dist/index.html dist/downloads/AetherTunnel-Portable-Standalone.html
+          cd dist/downloads
+          sha256sum * > SHA256SUMS.txt
 
-      - name: Upload Static Artifact
+      - name: 5. Publish Direct-Download .EXE & Binaries to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "AetherTunnel Standalone Release (Latest)"
+          files: |
+            dist/downloads/*
+          prerelease: false
+          make_latest: true
+
+      - name: 6. Upload Artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
 
+  deploy-pages:
+    name: Publish Live Web App to GitHub Pages
+    needs: build-and-release
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Enable & Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  build-standalone-executables:
-    name: 2. Build Direct-Download Executables (.exe, macOS, Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Build App & Package Single-File Executables
-        run: |
-          npm ci
-          npm run build
-          npx esbuild server.ts --bundle --platform=node --target=node18 --outfile=dist-bin/aethertunnel.cjs --external:vite
-          npx @yao-pkg/pkg dist-bin/aethertunnel.cjs \\
-            --targets node18-win-x64,node18-macos-arm64,node18-linux-x64 \\
-            --out-path release-assets
-
-      - name: Upload Binaries to GitHub Releases
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
-          generate_release_notes: true
 `;
 }
 
