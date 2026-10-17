@@ -52,13 +52,10 @@ import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
 
 type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
-// Optimal 240 KB native WebRTC SCTP wire frame (Zero JS splitting copy, Zero JS reassembly copy!)
+// Optimal 240 KB native WebRTC SCTP wire frame
 const WIRE_CHUNK_BYTES = 240 * 1024;
-// Single Dedicated RTCPeerConnection: 100% direct C++ webrtc_network_thread path with zero multi-connection lock overhead
 const MAX_PARALLEL_LANES = 1; 
-// 32 chunks per wave (~7.5 MB) fits 100% inside CPU L3 cache
 const CHUNKS_PER_WAVE = 32;
-// 8 MB high-water mark & 4 MB low-water mark per independent RTCPeerConnection
 const HIGH_WATER_MARK = 8 * 1024 * 1024;
 const LOW_WATER_MARK = 4 * 1024 * 1024;
 
@@ -83,9 +80,8 @@ interface IncomingFileBuffer {
   receivedCount: number;
   startedAt: number;
   lastUiUpdateAt: number;
-  // Streaming write properties
   nextChunkToWrite: number;
-  writableStream: any; // FileSystemWritableFileStream
+  writableStream: any;
   isWriting: boolean;
 }
 
@@ -130,7 +126,6 @@ async function saveFileArrayWithPrompt(defaultName: string, fileBytes: Uint8Arra
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('studio');
 
-  // Tunnel Session & Cryptographic State
   const [roomCode, setRoomCode] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get('room')?.toLowerCase().trim() || generateWormholeCode();
@@ -140,7 +135,6 @@ export default function App() {
   const [keyFingerprint, setKeyFingerprint] = useState<string>('Deriving...');
   const cryptoKeyRef = useRef<CryptoKey | null>(null);
 
-  // Connection & Peer State
   const [peerId] = useState<string>(
     () => `peer-${Math.random().toString(36).slice(2, 9)}`
   );
@@ -151,7 +145,6 @@ export default function App() {
   const [peers, setPeers] = useState<PeerSummary[]>([]);
   const [openPoolCount, setOpenPoolCount] = useState<number>(1);
 
-  // Transfers & Encrypted Notes
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const [notes, setNotes] = useState<EncryptedNote[]>([]);
   const [noteInput, setNoteInput] = useState<string>('');
@@ -160,11 +153,9 @@ export default function App() {
   const [incomingFileAlert, setIncomingFileAlert] = useState<string | null>(null);
   const [pendingIncomingFile, setPendingIncomingFile] = useState<{ fileId: string, name: string, size: number } | null>(null);
 
-  // NAT Diagnostic Prober State
   const [natReport, setNatReport] = useState<NatProbeReport | null>(null);
   const [isProbingNat, setIsProbingNat] = useState<boolean>(false);
 
-  // WebSocket, 8-Lane WebRTC Pool, Serverless PeerJS, and In-Browser 8-Lane Sandbox Loopback Refs
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnPoolRef = useRef<Map<number, RTCPeerConnection>>(new Map());
   const pendingIceCandidatesRef = useRef<Map<number, RTCIceCandidateInit[]>>(
@@ -200,7 +191,6 @@ export default function App() {
 
   const displayedLaneCount = 1;
 
-  // 1. Derive AES-256-GCM Key whenever roomCode or passphrase changes
   useEffect(() => {
     let cancelled = false;
     deriveTunnelKey(roomCode, passphrase).then(({ key, fingerprint }) => {
@@ -214,7 +204,6 @@ export default function App() {
     };
   }, [roomCode, passphrase]);
 
-  // 2. Run initial NAT & STUN diagnostic probe on load
   const executeNatProbe = useCallback(async () => {
     setIsProbingNat(true);
     try {
@@ -229,7 +218,6 @@ export default function App() {
     executeNatProbe();
   }, [executeNatProbe]);
 
-  // Automatically re-join WebSocket room when roomCode changes
   useEffect(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       try {
@@ -246,7 +234,7 @@ export default function App() {
     }
   }, [roomCode, peerId, natReport?.detectedNatTopology]);
 
-  // --- NEW: Streaming Write to Disk Logic ---
+  // --- Streaming Write to Disk Logic ---
   
   const flushChunksToDisk = async (bufEntry: IncomingFileBuffer) => {
     if (!bufEntry.writableStream || bufEntry.isWriting) return;
@@ -256,17 +244,14 @@ export default function App() {
       while (bufEntry.nextChunkToWrite < bufEntry.totalChunks) {
         const chunk = bufEntry.receivedChunks[bufEntry.nextChunkToWrite];
         if (chunk !== undefined) {
-          // Write straight to disk and free memory immediately
           await bufEntry.writableStream.write(chunk);
           bufEntry.receivedChunks[bufEntry.nextChunkToWrite] = undefined; 
           bufEntry.nextChunkToWrite++;
         } else {
-          // Wait for the next sequential chunk to arrive
           break; 
         }
       }
 
-      // If all chunks are written, close the file
       if (bufEntry.nextChunkToWrite >= bufEntry.totalChunks) {
         await bufEntry.writableStream.close();
         bufEntry.writableStream = null;
@@ -314,16 +299,58 @@ export default function App() {
         });
         const writable = await handle.createWritable();
         bufEntry.writableStream = writable;
-        setPendingIncomingFile(null); // Clear prompt
-        void flushChunksToDisk(bufEntry); // Start flushing already received chunks
+        setPendingIncomingFile(null); 
+        void flushChunksToDisk(bufEntry); 
       } catch (err: any) {
         if (err.name === 'AbortError') {
            setPendingIncomingFile(null);
+           // If they cancel, fallback to memory download so they don't lose the file
+           if (bufEntry.receivedCount === bufEntry.totalChunks) {
+                const elapsedSec = Math.max(0.015, (performance.now() - bufEntry.startedAt) / 1000);
+                const speedBps = bufEntry.size / elapsedSec;
+                const orderedParts: ArrayBuffer[] = [];
+                for (let i = 0; i < bufEntry.totalChunks; i++) {
+                  orderedParts.push(bufEntry.receivedChunks[i]!);
+                }
+                const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
+                const combinedFileArray = new Uint8Array(totalByteLength);
+                let offset = 0;
+                for (const part of orderedParts) {
+                  combinedFileArray.set(new Uint8Array(part), offset);
+                  offset += part.byteLength;
+                }
+                void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
+                  setTransfers((prev) =>
+                    prev.map((item) =>
+                      item.id === fileId && item.direction === 'incoming'
+                        ? { ...item, status: 'completed', downloadUrl, ... }
+                        : item
+                    )
+                  );
+                });
+                incomingBuffersRef.current.delete(fileId);
+           }
         }
       }
     } else {
-      setPendingIncomingFile(null);
-      // Fallback handled in recordDecryptedChunk
+        // Fallback for mobile browsers (no showSaveFilePicker)
+        setPendingIncomingFile(null);
+        if (bufEntry.receivedCount === bufEntry.totalChunks) {
+            // trigger memory download immediately
+            const orderedParts: ArrayBuffer[] = [];
+            for (let i = 0; i < bufEntry.totalChunks; i++) {
+              orderedParts.push(bufEntry.receivedChunks[i]!);
+            }
+            const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
+            const combinedFileArray = new Uint8Array(totalByteLength);
+            let offset = 0;
+            for (const part of orderedParts) {
+              combinedFileArray.set(new Uint8Array(part), offset);
+              offset += part.byteLength;
+            }
+            void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray);
+            incomingBuffersRef.current.delete(fileId);
+        }
     }
   };
 
@@ -340,7 +367,6 @@ export default function App() {
         }
       }
 
-      // Attempt to write to disk immediately if the stream is active
       void flushChunksToDisk(bufEntry);
 
       let filledCount = 0;
@@ -352,82 +378,52 @@ export default function App() {
 
       const now = performance.now();
       const fileId = bufEntry.id;
+      const canStreamToDisk = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 
       if (filledCount >= bufEntry.totalChunks && !bufEntry.writableStream && bufEntry.nextChunkToWrite === 0) {
-        // Fallback: If no stream was initialized, do the old memory-based approach
-        const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
-        const speedBps = bufEntry.size / elapsedSec;
-
-        const orderedParts: ArrayBuffer[] = [];
-        for (let i = 0; i < bufEntry.totalChunks; i++) {
-          orderedParts.push(bufEntry.receivedChunks[i]!);
-        }
-
-        const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
-        const combinedFileArray = new Uint8Array(totalByteLength);
-        let offset = 0;
-        for (const part of orderedParts) {
-          combinedFileArray.set(new Uint8Array(part), offset);
-          offset += part.byteLength;
-        }
-
-        bufEntry.receivedChunks.length = 0;
-
-        void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
-          setTransfers((prev) =>
-            prev.map((item) =>
-              item.id === fileId && item.direction === 'incoming'
-                ? {
-                    ...item,
-                    transferredChunks: bufEntry.totalChunks,
-                    bytesTransferred: bufEntry.size,
-                    speedBps,
-                    status: 'completed',
-                    verified: true,
-                    downloadUrl,
-                    completedAt: Date.now(),
-                  }
-                : item
-            )
-          );
-        });
-
-        const blob = new Blob([combinedFileArray.buffer as ArrayBuffer]);
-
-        if (exeWsRef.current && exeWsRef.current.readyState === WebSocket.OPEN) {
-          const exeWs = exeWsRef.current;
-          const exeChunkSize = 1024 * 1024;
-          void (async () => {
-            try {
-              exeWs.send(
-                JSON.stringify({
-                  kind: 'exe:file-start',
-                  fileId,
-                  name: bufEntry.name,
-                  size: bufEntry.size,
-                  chunkSize: exeChunkSize,
-                })
-              );
-              for (let off = 0; off < blob.size; off += exeChunkSize) {
-                const sliceBuf = await blob
-                  .slice(off, Math.min(blob.size, off + exeChunkSize))
-                  .arrayBuffer();
-                exeWs.send(sliceBuf);
-              }
-              exeWs.send(
-                JSON.stringify({
-                  kind: 'exe:file-end',
-                  fileId,
-                })
-              );
-            } catch {
-              // ignore bridge write errors
+        if (!canStreamToDisk) {
+            // Fallback for mobile: auto download
+            const elapsedSec = Math.max(0.015, (now - bufEntry.startedAt) / 1000);
+            const speedBps = bufEntry.size / elapsedSec;
+            const orderedParts: ArrayBuffer[] = [];
+            for (let i = 0; i < bufEntry.totalChunks; i++) {
+              orderedParts.push(bufEntry.receivedChunks[i]!);
             }
-          })();
-        }
+            const totalByteLength = orderedParts.reduce((sum, p) => sum + p.byteLength, 0);
+            const combinedFileArray = new Uint8Array(totalByteLength);
+            let offset = 0;
+            for (const part of orderedParts) {
+              combinedFileArray.set(new Uint8Array(part), offset);
+              offset += part.byteLength;
+            }
+            bufEntry.receivedChunks.length = 0;
 
-        incomingBuffersRef.current.delete(fileId);
-        numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+            void saveFileArrayWithPrompt(bufEntry.name, combinedFileArray).then((downloadUrl) => {
+              setTransfers((prev) =>
+                prev.map((item) =>
+                  item.id === fileId && item.direction === 'incoming'
+                    ? { ...item, status: 'completed', downloadUrl, ... }
+                    : item
+                )
+              );
+            });
+            incomingBuffersRef.current.delete(fileId);
+            numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+        } else {
+            // Desktop: wait for user to click button. Just update UI.
+            setTransfers((prev) =>
+              prev.map((item) =>
+                item.id === fileId && item.direction === 'incoming'
+                  ? {
+                      ...item,
+                      transferredChunks: bufEntry.totalChunks,
+                      bytesTransferred: bufEntry.size,
+                      status: 'transferring', // Will show 100% but not completed yet
+                    }
+                  : item
+              )
+            );
+        }
       } else if (now - bufEntry.lastUiUpdateAt >= 120) {
         bufEntry.lastUiUpdateAt = now;
         const bytesSoFar = Math.min(
@@ -454,7 +450,6 @@ export default function App() {
     []
   );
 
-  // Decrypt a complete 'AETH' Binary Frame (checks duplicate chunkIndex BEFORE running WebCrypto decrypt!)
   const handleCompleteAethFrame = useCallback(
     async (rawBuffer: ArrayBuffer) => {
       const key = cryptoKeyRef.current;
@@ -493,7 +488,6 @@ export default function App() {
     [recordDecryptedChunk]
   );
 
-  // Fast-path handler for Raw Binary Frame ('AETH') or Legacy Multi-Lane Sub-Frame ('AETP')
   const handleRawBinaryFrame = useCallback(
     (frameBuffer: ArrayBuffer): boolean => {
       if (frameBuffer.byteLength < 24) return false;
@@ -539,7 +533,6 @@ export default function App() {
     [handleCompleteAethFrame]
   );
 
-  // 3. Handle control packets and fallback JSON packets
   const handleTunnelPacket = useCallback(
     async (
       packet: any,
@@ -621,7 +614,6 @@ export default function App() {
           isWriting: false,
         });
 
-        // Prompt user for save location
         setPendingIncomingFile({ fileId, name, size });
         setIncomingFileAlert(
           `Incoming File Detected: ${name} (${formatBytes(size)}) — Click to save to disk.`
@@ -654,7 +646,6 @@ export default function App() {
         return;
       }
 
-      // ... (rest of the tunnel packet handling remains the same)
       if (packet.kind === 'file:sha256') {
         const { fileId, sha256 } = packet;
         setTransfers((prev) =>
@@ -717,7 +708,6 @@ export default function App() {
     [handleRawBinaryFrame, recordDecryptedChunk]
   );
 
-  // Register a raw RTCDataChannel into the Dual-SCTP Striped Pool
   const registerDataChannelLane = useCallback(
     (channel: RTCDataChannel, managedByPeerJs = false) => {
       channel.binaryType = 'arraybuffer';
@@ -777,7 +767,6 @@ export default function App() {
     [handleRawBinaryFrame, handleTunnelPacket]
   );
 
-  // 3b. Local High-Speed Tab Memory Bus (BroadcastChannel)
   useEffect(() => {
     if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') {
       return;
@@ -870,7 +859,6 @@ export default function App() {
     };
   }, [roomCode, peerId, handleRawBinaryFrame, handleTunnelPacket]);
 
-  // 4. Serverless PeerJS WebRTC Broker
   useEffect(() => {
     const cleanCode = roomCode.replace(/[^a-z0-9-]/gi, '').toLowerCase();
     const hostBrokerId = `aethertunnel-v1-${cleanCode}-host`;
@@ -965,9 +953,7 @@ export default function App() {
           guestPeer.on('connection', (conn) => bindPeerJsDataConn(conn));
         }
       });
-    } catch {
-      // Fallback
-    }
+    } catch {}
 
     return () => {
       destroyed = true;
@@ -979,7 +965,6 @@ export default function App() {
     };
   }, [roomCode, handleTunnelPacket, handleRawBinaryFrame, registerDataChannelLane]);
 
-  // 5. Setup WebRTC Connections for WebSocket Signaling
   const initWebRtcConnectionPool = useCallback(
     async (isInitiator: boolean, specificLaneIndex?: number) => {
       if (transportStrategy === 'websocket_relay') {
@@ -1064,15 +1049,12 @@ export default function App() {
               );
             }
           }
-        } catch {
-          // continue
-        }
+        } catch {}
       }
     },
     [registerDataChannelLane, transportStrategy]
   );
 
-  // 6. Connect to WebSocket Signaling
   useEffect(() => {
     if (isStaticHostEnvironment()) {
       return;
@@ -1150,7 +1132,6 @@ export default function App() {
               );
             }
           } else if (msg.type === 'peer:joined') {
-             // ... (same as original)
              const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
@@ -1176,7 +1157,6 @@ export default function App() {
               void initWebRtcConnectionPool(false);
             }
           } else if (msg.type === 'peer:left') {
-            // ... (same as original)
             const otherPeers: PeerSummary[] = (msg.peers || []).filter(
               (p: PeerSummary) => p.id !== peerId
             );
@@ -1198,7 +1178,6 @@ export default function App() {
               setExeBridgeConnected(false);
             }
           } else if (msg.type === 'webrtc:signal') {
-             // ... (same as original)
              const laneIdx = typeof msg.laneIdx === 'number' ? msg.laneIdx : 0;
             let pc = peerConnPoolRef.current.get(laneIdx);
             if (!pc) {
@@ -1248,9 +1227,7 @@ export default function App() {
           console.error('Tunnel socket handler error:', e);
         }
       };
-    } catch {
-      // Fallback
-    }
+    } catch {}
 
     return () => {
       ws?.close();
@@ -1269,7 +1246,6 @@ export default function App() {
     transportStrategy,
   ]);
 
-  // 6b. Sync Wormhole Room Code to Connected Windows Native .EXE Bridge
   useEffect(() => {
     if (exeWsRef.current && exeWsRef.current.readyState === WebSocket.OPEN) {
       try {
@@ -1283,12 +1259,7 @@ export default function App() {
     }
   }, [roomCode]);
 
-  // 6d. Universal WSS Cloud Wormhole Bridge
   useEffect(() => {
-    // ... (this is long, I'll keep it identical to the previous full file implementation)
-    // It handles cloudExeWsRef and handleTunnelPacket.
-    // I will paste the exact code from the previous full file here.
-    
     let unmounted = false;
     let ws: WebSocket | null = null;
     let hbTimer: number | null = null;
@@ -1644,7 +1615,6 @@ export default function App() {
     };
   }, [roomCode, handleTunnelPacket]);
 
-  // Get active open RTCDataChannel lanes
   const getOpenDataChannelLanes = useCallback((): RTCDataChannel[] => {
     if (transportStrategy === 'websocket_relay') return [];
 
@@ -1658,7 +1628,6 @@ export default function App() {
     return [];
   }, [transportStrategy]);
 
-  // Synchronous Zero-Await Fast Path
   const trySendBinaryPacketSync = useCallback(
     (packet: ArrayBuffer): boolean => {
       const openLanes = getOpenDataChannelLanes();
@@ -1695,7 +1664,6 @@ export default function App() {
     [getOpenDataChannelLanes]
   );
 
-  // Async Backpressure Fallback
   const sendBinaryPacketSafely = useCallback(
     async (packet: ArrayBuffer): Promise<void> => {
       if (trySendBinaryPacketSync(packet)) return;
@@ -1736,7 +1704,6 @@ export default function App() {
     [getOpenDataChannelLanes, trySendBinaryPacketSync]
   );
 
-  // 8. Send control packet across all active transports
   const transmitEncryptedPacket = useCallback(
     (packet: unknown): 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)' => {
       const serialized = JSON.stringify(packet);
@@ -1802,7 +1769,6 @@ export default function App() {
     [transportStrategy, getOpenDataChannelLanes]
   );
 
-  // 9. Direct 1-Connection Zero-Split Binary Streamer
   const handleFilesSelected = async (
     fileList: FileList | File[],
     skipExeBridge = false
@@ -1945,7 +1911,6 @@ export default function App() {
       };
 
       try {
-        // FAST PATH 0A: Local EXE Bridge only
         if (
           hasOpenLocalExeBridge &&
           !hasBrowserPeers &&
@@ -2034,7 +1999,6 @@ export default function App() {
           continue;
         }
 
-        // FAST PATH 0B: Cloud EXE Bridge only
         if (
           hasOpenCloudExeBridge &&
           cloudExeWsRef.current &&
@@ -2167,7 +2131,6 @@ export default function App() {
           continue;
         }
 
-        // FAST PATH 0C: Cloud Web Peer only
         if (
           cloudExeWsRef.current &&
           cloudExeWsRef.current.readyState === WebSocket.OPEN &&
@@ -2492,9 +2455,7 @@ export default function App() {
     }
   };
 
-  // 10. Receive Sample Encrypted Diagnostic File
   const handleSimulateIncomingTransfer = async () => {
-    // ... (Same as original)
     const key = cryptoKeyRef.current;
     if (!key) return;
 
@@ -2550,9 +2511,7 @@ export default function App() {
     handleRawBinaryFrame(binaryFrame);
   };
 
-  // 11. Send Encrypted Note
   const handleSendEncryptedNote = async (e: React.FormEvent) => {
-    // ... (Same as original)
     e.preventDefault();
     const key = cryptoKeyRef.current;
     if (!noteInput.trim() || !key) return;
@@ -3002,6 +2961,7 @@ export default function App() {
 
               <div className="lg:col-span-7 flex flex-col gap-6">
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-5">
+                  
                   {pendingIncomingFile && (
                     <div className="p-3.5 bg-sky-950/40 border border-sky-800/60 rounded-lg flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-sky-200">
                       <div className="flex items-center gap-2">
@@ -3016,7 +2976,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
-                  
+
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div>
                       <h2 className="text-base font-semibold text-slate-100">
@@ -3177,109 +3137,3 @@ export default function App() {
                       Encrypted Peer Scratchpad
                     </h2>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Exchange AES-256-GCM encrypted verification notes, archive passwords, or instructions across the tunnel.
-                    </p>
-
-                    <form onSubmit={handleSendEncryptedNote} className="mt-3 flex gap-2">
-                      <input
-                        type="text"
-                        value={noteInput}
-                        onChange={(e) => setNoteInput(e.target.value)}
-                        placeholder="Write an encrypted message to connected peers..."
-                        className="flex-1 px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
-                      />
-                      <button
-                        type="submit"
-                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        Send E2EE Note
-                      </button>
-                    </form>
-                  </div>
-
-                  {notes.length > 0 && (
-                    <div className="space-y-2 max-h-36 overflow-y-auto pt-2 border-t border-slate-800">
-                      {notes.map((n) => (
-                        <div
-                          key={n.id}
-                          className="p-2.5 bg-slate-950 border border-slate-800 rounded text-xs flex items-start justify-between gap-3"
-                        >
-                          <div>
-                            <span className="font-semibold text-sky-400">
-                              {n.senderLabel}:
-                            </span>{' '}
-                            <span className="text-slate-200">{n.text}</span>
-                          </div>
-                          <span className="font-mono text-[11px] text-slate-500 tabular-nums shrink-0">
-                            {new Date(n.timestamp).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              second: '2-digit',
-                            })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'inspector' && (
-          <ClientInspectorView
-            roomCode={roomCode}
-            keyFingerprint={keyFingerprint}
-            exeBridgeConnected={exeBridgeConnected}
-            connectionState={connectionState}
-            natReport={natReport}
-            peers={peers}
-            transfers={transfers}
-          />
-        )}
-
-        {activeTab === 'diagnostics' && (
-          <NatDiagnosticsView
-            report={natReport}
-            isProbing={isProbingNat}
-            onRunProbe={executeNatProbe}
-            selectedStrategy={transportStrategy}
-            onSelectStrategy={setTransportStrategy}
-          />
-        )}
-
-        {activeTab === 'ledger' && (
-          <TransferLedgerView
-            transfers={transfers}
-            onClearCompleted={() =>
-              setTransfers((prev) =>
-                prev.filter((t) => t.status !== 'completed')
-              )
-            }
-            onSwitchToStudio={() => setActiveTab('studio')}
-          />
-        )}
-
-
-      </main>
-
-      <footer className="border-t border-slate-800/80 py-4 px-6 text-xs text-slate-400">
-        <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div>
-            AetherTunnel — End-to-End Encrypted P2P File Transfer &amp; NAT Traversal Suite
-          </div>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setActiveTab('diagnostics')}
-              className="hover:text-slate-200 transition-colors cursor-pointer"
-            >
-              ICE / STUN Diagnostics
-            </button>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
-}
