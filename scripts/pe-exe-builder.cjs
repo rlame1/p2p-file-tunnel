@@ -29,6 +29,10 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Reflection;
+
+[assembly: AssemblyTitle("AetherTunnel P2P Engine")]
+[assembly: AssemblyProduct("AetherTunnel")]
 
 namespace AetherTunnelNative
 {
@@ -86,7 +90,6 @@ namespace AetherTunnelNative
 
         private TextBox txtRoomCode;
         private TextBox txtPassphrase;
-        private TextBox txtPeerEndpoint;
         private Panel pnlRoomPresence;
         private Label lblRoomPresence;
         private Label lblKeyFingerprint;
@@ -96,10 +99,7 @@ namespace AetherTunnelNative
         private Label lblProgressDetail;
         private ProgressBar progressBar;
         private ListBox lstLog;
-        private Button btnConnectPeer;
-        private Button btnLoopbackTest;
         private Button btnSendFile;
-        private ComboBox cmbSpeedCap;
         private FolderBrowserDialog folderDialog;
 
         private TcpListener tcpListener;
@@ -127,8 +127,8 @@ namespace AetherTunnelNative
         private volatile int udpPeerResumeChunk = 0;
         private volatile bool udpTransferDoneAcked = false;
         private volatile bool udpNeedStartResend = false;
-        private volatile int userSelectedSpeedCapMbps = 600; // Default 600 Mbit/s (~75 MB/s), adjustable live up to 5000 Mbit/s or Auto (-1)
-        private double dynamicUdpBitrateMbps = 600.0;
+        private double dynamicUdpBitrateMbps = 1.0; // Self-tuning Auto Dynamic P2P Pacer (1–5000 Mbit/s)
+        private volatile int lastNackReceivedTick = 0;
         private int pacingResetRequested = 0;
         private readonly object udpTxLock = new object();
         private readonly ConcurrentQueue<int> udpRetransmitQueue = new ConcurrentQueue<int>();
@@ -189,8 +189,8 @@ namespace AetherTunnelNative
 
             this.AutoScaleMode = AutoScaleMode.None;
             this.Text = "AetherTunnel v1.0 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
-            this.ClientSize = new Size(S(980), S(660));
-            this.MinimumSize = new Size(S(880), S(620));
+            this.ClientSize = new Size(S(980), S(540));
+            this.MinimumSize = new Size(S(880), S(510));
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(9, 13, 22);
             this.ForeColor = Color.FromArgb(241, 245, 249);
@@ -274,7 +274,7 @@ namespace AetherTunnelNative
             Panel leftCard = new Panel();
             leftCard.BackColor = bgCard;
             leftCard.Location = new Point(S(24), S(94));
-            leftCard.Size = new Size(S(436), S(544));
+            leftCard.Size = new Size(S(436), S(424));
             leftCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
 
             Label lblSec1 = CreateCleanLabel(
@@ -400,62 +400,14 @@ namespace AetherTunnelNative
             lblLocalEndpoint.Size = new Size(S(396), S(38));
             leftCard.Controls.Add(lblLocalEndpoint);
 
-            Label lblPeerTitle = CreateCleanLabel(
-                "Direct LAN .EXE Connect (Optional Remote IP:Port):",
-                null,
-                fgMuted,
-                new Point(S(20), S(310)),
-                true
-            );
-            leftCard.Controls.Add(lblPeerTitle);
-
-            txtPeerEndpoint = new TextBox();
-            txtPeerEndpoint.Text = "";
-            txtPeerEndpoint.Font = new Font("Consolas", 10f);
-            txtPeerEndpoint.BackColor = bgInput;
-            txtPeerEndpoint.ForeColor = Color.White;
-            txtPeerEndpoint.BorderStyle = BorderStyle.FixedSingle;
-            txtPeerEndpoint.Location = new Point(S(20), S(332));
-            txtPeerEndpoint.Size = new Size(S(260), S(28));
-            leftCard.Controls.Add(txtPeerEndpoint);
-
-            btnConnectPeer = new Button();
-            btnConnectPeer.UseMnemonic = false;
-            btnConnectPeer.Text = "Connect .EXE";
-            btnConnectPeer.FlatStyle = FlatStyle.Flat;
-            btnConnectPeer.BackColor = accentSky;
-            btnConnectPeer.ForeColor = Color.FromArgb(9, 13, 22);
-            btnConnectPeer.Font = new Font("Segoe UI Semibold", 9f, FontStyle.Bold);
-            btnConnectPeer.Location = new Point(S(288), S(331));
-            btnConnectPeer.Size = new Size(S(128), S(29));
-            btnConnectPeer.Click += delegate {
-                if (txtPeerEndpoint.Text.Trim().Length > 0)
-                    ConnectToPeerEndpoint(txtPeerEndpoint.Text.Trim());
-                else
-                    Log("Enter the other computer's IP:Port (or use the same Wormhole Code) to connect.");
-            };
-            leftCard.Controls.Add(btnConnectPeer);
-
-            btnLoopbackTest = new Button();
-            btnLoopbackTest.UseMnemonic = false;
-            btnLoopbackTest.Text = "Run Local NVMe Loopback Benchmark (Test Hardware Speed)";
-            btnLoopbackTest.FlatStyle = FlatStyle.Flat;
-            btnLoopbackTest.BackColor = Color.FromArgb(16, 48, 42);
-            btnLoopbackTest.ForeColor = accentEmerald;
-            btnLoopbackTest.Font = new Font("Segoe UI Semibold", 8.8f, FontStyle.Bold);
-            btnLoopbackTest.Location = new Point(S(20), S(370));
-            btnLoopbackTest.Size = new Size(S(396), S(32));
-            btnLoopbackTest.Click += delegate { ConnectToPeerEndpoint("127.0.0.1:" + listenPort.ToString()); };
-            leftCard.Controls.Add(btnLoopbackTest);
-
             Label lblSaveDir = CreateCleanLabel(
                 "Incoming files save to: " + downloadDirectory,
-                new Font("Segoe UI", 8.5f),
+                new Font("Segoe UI", 8.8f),
                 fgMuted,
-                new Point(S(20), S(412)),
+                new Point(S(20), S(318)),
                 false
             );
-            lblSaveDir.Size = new Size(S(396), S(34));
+            lblSaveDir.Size = new Size(S(396), S(36));
             leftCard.Controls.Add(lblSaveDir);
 
             Button btnChangeDir = new Button();
@@ -464,8 +416,8 @@ namespace AetherTunnelNative
             btnChangeDir.FlatStyle = FlatStyle.Flat;
             btnChangeDir.BackColor = Color.FromArgb(30, 41, 59);
             btnChangeDir.ForeColor = Color.White;
-            btnChangeDir.Location = new Point(S(20), S(454));
-            btnChangeDir.Size = new Size(S(190), S(32));
+            btnChangeDir.Location = new Point(S(20), S(362));
+            btnChangeDir.Size = new Size(S(190), S(36));
             btnChangeDir.Click += delegate {
                 if (folderDialog == null) folderDialog = new FolderBrowserDialog();
                 folderDialog.SelectedPath = downloadDirectory;
@@ -483,8 +435,8 @@ namespace AetherTunnelNative
             btnOpenDir.FlatStyle = FlatStyle.Flat;
             btnOpenDir.BackColor = Color.FromArgb(30, 41, 59);
             btnOpenDir.ForeColor = accentSky;
-            btnOpenDir.Location = new Point(S(222), S(454));
-            btnOpenDir.Size = new Size(S(194), S(32));
+            btnOpenDir.Location = new Point(S(222), S(362));
+            btnOpenDir.Size = new Size(S(194), S(36));
             btnOpenDir.Click += delegate {
                 try { Process.Start("explorer.exe", downloadDirectory); } catch { }
             };
@@ -495,85 +447,45 @@ namespace AetherTunnelNative
             Panel rightCard = new Panel();
             rightCard.BackColor = bgCard;
             rightCard.Location = new Point(S(478), S(94));
-            rightCard.Size = new Size(S(478), S(544));
+            rightCard.Size = new Size(S(478), S(424));
             rightCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
             Label lblSec2 = CreateCleanLabel(
                 "2. Direct File Streamer (.EXE <-> Browser & .EXE <-> .EXE)",
                 new Font("Segoe UI Semibold", 11f, FontStyle.Bold),
                 Color.White,
-                new Point(S(20), S(16)),
+                new Point(S(20), S(14)),
                 true
             );
             rightCard.Controls.Add(lblSec2);
 
             btnSendFile = new Button();
             btnSendFile.UseMnemonic = false;
-            btnSendFile.Text = "SELECT FILE OR DRAG & DROP HERE TO SEND\\n(Streams to Connected Chrome Browser or Remote .EXE Peer)";
+            btnSendFile.Text = "SELECT FILE(S) OR DRAG & DROP HERE TO SEND\\n(Auto Dynamic P2P Pacing · Resumable .part Streamer)";
             btnSendFile.FlatStyle = FlatStyle.Flat;
             btnSendFile.BackColor = Color.FromArgb(14, 28, 48);
             btnSendFile.ForeColor = accentSky;
             btnSendFile.Font = new Font("Segoe UI Semibold", 9.8f, FontStyle.Bold);
-            btnSendFile.Location = new Point(S(20), S(46));
+            btnSendFile.Location = new Point(S(20), S(44));
             btnSendFile.Size = new Size(S(438), S(82));
             btnSendFile.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnSendFile.Click += OnSelectFilesClicked;
             rightCard.Controls.Add(btnSendFile);
 
-            Label lblSpeedCapTitle = CreateCleanLabel(
-                "UDP P2P Speed Cap / Pacing (Live Adjustable 100–5000 Mbit/s):",
-                new Font("Segoe UI", 8.8f, FontStyle.Regular),
-                fgMuted,
-                new Point(S(20), S(136)),
-                true
-            );
-            rightCard.Controls.Add(lblSpeedCapTitle);
-
-            cmbSpeedCap = new ComboBox();
-            cmbSpeedCap.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbSpeedCap.Font = new Font("Consolas", 9.5f, FontStyle.Bold);
-            cmbSpeedCap.BackColor = bgInput;
-            cmbSpeedCap.ForeColor = accentSky;
-            cmbSpeedCap.FlatStyle = FlatStyle.Flat;
-            cmbSpeedCap.Location = new Point(S(20), S(156));
-            cmbSpeedCap.Size = new Size(S(438), S(28));
-            cmbSpeedCap.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            cmbSpeedCap.Items.Add("600 Mbit/s (75 MB/s — Optimal for 600 Mbit Receiver)");
-            cmbSpeedCap.Items.Add("Auto Dynamic (Adapts 100–5000 Mbit/s from Receiver ACK)");
-            cmbSpeedCap.Items.Add("5000 Mbit/s (625 MB/s — Uncapped Max Line Rate)");
-            cmbSpeedCap.Items.Add("2500 Mbit/s (312 MB/s — 2.5 Gbps)");
-            cmbSpeedCap.Items.Add("1000 Mbit/s (125 MB/s — 1 Gbps)");
-            cmbSpeedCap.Items.Add("300 Mbit/s (37.5 MB/s)");
-            cmbSpeedCap.Items.Add("100 Mbit/s (12.5 MB/s)");
-            cmbSpeedCap.SelectedIndex = 0;
-            cmbSpeedCap.SelectedIndexChanged += delegate {
-                int idx = cmbSpeedCap.SelectedIndex;
-                if (idx == 0) userSelectedSpeedCapMbps = 600;
-                else if (idx == 1) userSelectedSpeedCapMbps = -1;
-                else if (idx == 2) userSelectedSpeedCapMbps = 5000;
-                else if (idx == 3) userSelectedSpeedCapMbps = 2500;
-                else if (idx == 4) userSelectedSpeedCapMbps = 1000;
-                else if (idx == 5) userSelectedSpeedCapMbps = 300;
-                else if (idx == 6) userSelectedSpeedCapMbps = 100;
-                Interlocked.Exchange(ref pacingResetRequested, 1);
-                Log("UDP P2P Speed Cap set to: " + cmbSpeedCap.SelectedItem.ToString());
-            };
-            rightCard.Controls.Add(cmbSpeedCap);
-
             lblSpeedMetric = CreateCleanLabel(
                 "0.00 MB/s (0.00 Gbps)",
                 new Font("Consolas", 15f, FontStyle.Bold),
                 accentEmerald,
-                new Point(S(20), S(192)),
+                new Point(S(20), S(136)),
                 true
             );
             rightCard.Controls.Add(lblSpeedMetric);
 
             lblProgressDetail = CreateCleanLabel(
-                "Enter the same Wormhole Code in Chrome Browser and this .EXE to pair automatically.",
+                "Auto Dynamic P2P Pacing active — Enter shared Wormhole Code to pair automatically.",
                 null,
                 fgMuted,
-                new Point(S(20), S(222)),
+                new Point(S(20), S(166)),
                 false
             );
             lblProgressDetail.Size = new Size(S(438), S(22));
@@ -581,7 +493,7 @@ namespace AetherTunnelNative
             rightCard.Controls.Add(lblProgressDetail);
 
             progressBar = new ProgressBar();
-            progressBar.Location = new Point(S(20), S(248));
+            progressBar.Location = new Point(S(20), S(192));
             progressBar.Size = new Size(S(438), S(18));
             progressBar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             progressBar.Maximum = 1000;
@@ -591,7 +503,7 @@ namespace AetherTunnelNative
                 "Live Kernel Socket & Chrome Browser Wormhole Log:",
                 null,
                 fgMuted,
-                new Point(S(20), S(274)),
+                new Point(S(20), S(218)),
                 true
             );
             rightCard.Controls.Add(lblLogCap);
@@ -602,8 +514,8 @@ namespace AetherTunnelNative
             lstLog.Font = new Font("Consolas", 9f);
             lstLog.BorderStyle = BorderStyle.FixedSingle;
             lstLog.HorizontalScrollbar = true;
-            lstLog.Location = new Point(S(20), S(296));
-            lstLog.Size = new Size(S(438), S(226));
+            lstLog.Location = new Point(S(20), S(240));
+            lstLog.Size = new Size(S(438), S(164));
             lstLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lstLog);
 
@@ -1016,11 +928,14 @@ namespace AetherTunnelNative
                                 if (Int32.TryParse(parts[3], out rxMbits) && rxMbits > 0)
                                 {
                                     udpPeerMeasuredMbps = rxMbits;
-                                    if (userSelectedSpeedCapMbps == -1)
+                                    // Self-tuning Auto Dynamic Pacer: smoothly ramp up toward 5000 Mbit/s when no recent NACK loss
+                                    if (unchecked(Environment.TickCount - lastNackReceivedTick) > 260)
                                     {
-                                        // Smoothly ramp dynamic speed up when receiver is keeping up
-                                        double target = Math.Min(5000.0, Math.Max(150.0, rxMbits * 1.18));
-                                        dynamicUdpBitrateMbps = (dynamicUdpBitrateMbps * 0.6) + (target * 0.4);
+                                        double probed = rxMbits >= dynamicUdpBitrateMbps * 0.80
+                                            ? Math.Max(dynamicUdpBitrateMbps * 1.12, rxMbits * 1.18)
+                                            : Math.Max(15.0, rxMbits * 1.16);
+                                        double target = Math.Min(5000.0, probed);
+                                        dynamicUdpBitrateMbps = (dynamicUdpBitrateMbps * 0.50) + (target * 0.50);
                                     }
                                 }
                             }
@@ -1041,12 +956,10 @@ namespace AetherTunnelNative
                                     udpRetransmitQueue.Enqueue(missIdx);
                                 }
                             }
-                            if (userSelectedSpeedCapMbps == -1 && udpPeerMeasuredMbps > 0)
-                            {
-                                // Back off slightly to match receiver's true bottleneck capacity
-                                dynamicUdpBitrateMbps = Math.Max(100.0, Math.Min(dynamicUdpBitrateMbps * 0.92, udpPeerMeasuredMbps * 1.05));
-                                Interlocked.Exchange(ref pacingResetRequested, 1);
-                            }
+                            lastNackReceivedTick = Environment.TickCount;
+                            double receiverCap = udpPeerMeasuredMbps > 0 ? udpPeerMeasuredMbps * 1.02 : dynamicUdpBitrateMbps * 0.80;
+                            dynamicUdpBitrateMbps = Math.Max(1.0, Math.Min(dynamicUdpBitrateMbps * 0.80, receiverCap));
+                            Interlocked.Exchange(ref pacingResetRequested, 1);
                             udpAckEvent.Set();
                         }
                     }
@@ -2596,8 +2509,7 @@ namespace AetherTunnelNative
             MessageBox.Show(
                 "No peer is paired in Wormhole Room [" + txtRoomCode.Text.Trim() + "] yet.\\n\\n" +
                 "1. Open another AetherTunnel .EXE or Chrome Browser App and enter the same Wormhole Code: " + txtRoomCode.Text.Trim() + "\\n" +
-                "2. Within 1-2 seconds, the top-right status will turn green: PEER STATUS: CONNECTED.\\n" +
-                "3. Or click 'Run Local NVMe Loopback Benchmark' on the left to test local disk speed.",
+                "2. Within 1-2 seconds, the status badge will turn green: PEER STATUS: CONNECTED.",
                 "AetherTunnel v1.0 — Waiting for Peer Pairing",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information
@@ -2634,7 +2546,7 @@ namespace AetherTunnelNative
                 pacedBytesSinceEpoch = 0;
             }
 
-            double capMbps = userSelectedSpeedCapMbps > 0 ? (double)userSelectedSpeedCapMbps : dynamicUdpBitrateMbps;
+            double capMbps = dynamicUdpBitrateMbps;
             if (capMbps >= 5000.0) return; // Uncapped 5000 Mbit/s line rate
 
             // Reset token-bucket window every 250ms so any disk/OS hiccup never creates a multi-megabyte burst debt
@@ -2679,10 +2591,10 @@ namespace AetherTunnelNative
                     string fileName = fi.Name;
                     int totalChunks = (int)Math.Max(1L, (fileSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
 
-                    dynamicUdpBitrateMbps = 600.0;
-                    Log(String.Format("Streaming over High-Speed NAT-Punched UDP P2P -> {0}: {1} ({2}) [Cap: {3}]",
-                        targetEp.ToString(), fileName, FormatBytes(fileSize),
-                        userSelectedSpeedCapMbps > 0 ? (userSelectedSpeedCapMbps.ToString() + " Mbit/s") : "Auto Dynamic"));
+                    dynamicUdpBitrateMbps = 1.0;
+                    lastNackReceivedTick = 0;
+                    Log(String.Format("Streaming over High-Speed NAT-Punched UDP P2P -> {0}: {1} ({2}) [Auto Dynamic Pacing]",
+                        targetEp.ToString(), fileName, FormatBytes(fileSize)));
 
                     udpPeerResumeChunk = 0;
                     udpPeerAckedChunk = -1;
@@ -2814,8 +2726,9 @@ namespace AetherTunnelNative
                         }
 
                         // Send END and handle any remaining tail NACK retransmission requests until receiver confirms AETHER_UDP_DONE
+                        // Persistent retry (3000 rounds = ~4-6 mins) to survive unstable mobile connections and 0 Mbit/s zones
                         byte[] endBytes = Encoding.UTF8.GetBytes("AETHER_UDP_END|" + fileName);
-                        for (int retry = 0; retry < 150 && !udpTransferDoneAcked && isRunning; retry++)
+                        for (int retry = 0; retry < 3000 && !udpTransferDoneAcked && isRunning; retry++)
                         {
                             udpP2pClient.Send(endBytes, endBytes.Length, targetEp);
                             udpAckEvent.WaitOne(80);
@@ -3465,11 +3378,12 @@ function buildWindowsGuiExe(
     "$d=Join-Path $env:LOCALAPPDATA 'AetherTunnel';" +
     "New-Item -ItemType Directory -Force -Path $d|Out-Null;" +
     "$cs=Join-Path $d ('AT_'+$PID+'.cs');" +
-    "$bin=Join-Path $d ('AT_v10_'+$PID+'.exe');" +
+    "$bin=Join-Path $d 'AetherTunnel.exe';" +
     "[IO.File]::WriteAllText($cs,$s,[Text.Encoding]::UTF8);" +
     "$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';" +
     "if(-not(Test-Path $csc)){$csc=Join-Path $env:WINDIR 'Microsoft.NET\\Framework\\v4.0.30319\\csc.exe'};" +
     "& $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs;" +
+    "if($LASTEXITCODE -ne 0){$bin=Join-Path $d ('AetherTunnel_'+$PID+'.exe');& $csc /nologo /optimize+ /target:winexe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /out:$bin $cs};" +
     "Remove-Item $cs -Force -ErrorAction SilentlyContinue;" +
     "if(Test-Path $bin){Start-Process $bin}" +
     '"\0';
