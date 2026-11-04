@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to optimize P2P file transfer speed to >100 MB/s by increasing chunk size to 2 MB, wave size to 64 chunks, and SCTP high/low watermarks to 32 MB / 16 MB.",
-  "updatedAt": "2026-10-17T19:32:03.895359629Z",
+  "summary": "Suunnitelma AetherTunnel v1.0 Standalone .EXE:n P2P NAT-UDP -siirtonopeuden korjaamiseksi (0,64 MB/s jumiutumisen poisto, reaaliaikainen NACK, 100 ns tarkkuuden Token-Bucket -tahdistus, säädettävä nopeuskatto 100–5000 Mbit/s + dynaaminen säätö sekä CGNAT 100.64.0.0/10 -tunnistus).",
+  "updatedAt": "2026-11-04T13:57:15.788918600Z",
   "requestFeedback": true,
   "userFacing": true
 }

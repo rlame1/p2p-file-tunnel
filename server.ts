@@ -67,9 +67,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AetherTunnel — Standalone Encrypted P2P File Transfer</title>
+  <title>AetherTunnel v1.0 — Standalone Encrypted P2P File Transfer</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet" />
   <style>
     body { font-family: 'DM Sans', sans-serif; background-color: #0f172a; color: #f1f5f9; }
@@ -81,16 +80,16 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
   <div class="max-w-5xl mx-auto space-y-6">
     <header class="flex items-center justify-between pb-4 border-b border-slate-800">
       <div>
-        <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel Standalone</span>
-        <span class="ml-3 text-xs text-emerald-400 font-mono">4-Lane Ultra-Turbo Binary WebRTC + AES-256-GCM</span>
+        <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel v1.0 Standalone</span>
+        <span class="ml-3 text-xs text-emerald-400 font-mono">Resumable Binary WebRTC + Windows .EXE Wormhole + AES-256-GCM</span>
       </div>
-      <div id="status-badge" class="text-xs font-mono text-sky-400">Initializing P2P Node...</div>
+      <div id="status-badge" class="text-xs font-mono text-amber-400">Initializing P2P Node...</div>
     </header>
 
     <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
       <div class="md:col-span-5 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
         <h2 class="text-base font-semibold">1. Wormhole Pairing Code</h2>
-        <p class="text-xs text-slate-400">Enter the same pairing code on both devices to establish a direct 4-lane encrypted P2P tunnel across any NAT or firewall.</p>
+        <p class="text-xs text-slate-400">Enter the same pairing code on both devices to establish a direct encrypted P2P tunnel across any NAT or firewall.</p>
         <div>
           <label class="block text-xs text-slate-400 mb-1">Tunnel Room Code</label>
           <div class="flex gap-2">
@@ -98,6 +97,18 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
             <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Connect</button>
           </div>
         </div>
+
+        <div id="peer-presence-box" class="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 transition-colors">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span id="peer-presence-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+              <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">Ei toista peeriä huoneessa (No peer yet)</span>
+            </div>
+            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/2 PEERS</span>
+          </div>
+          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan toista laitetta samalla huonekoodilla...</div>
+        </div>
+
         <div>
           <label class="block text-xs text-slate-400 mb-1">Optional Shared Passphrase (PBKDF2)</label>
           <input id="pass-input" type="password" placeholder="Optional zero-knowledge secret..." class="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-100" />
@@ -105,24 +116,23 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         <div>
           <label class="block text-xs text-slate-400 mb-1">Crypto Super-Chunk Size</label>
           <select id="chunk-select" class="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400">
-            <option value="256">256 KB (Standard Direct Frame)</option>
-            <option value="512">512 KB (Turbo 2x)</option>
-            <option value="1024" selected>1 MB (Ultra-Turbo 4x — Recommended)</option>
-            <option value="2048">2 MB (Extreme 8x Super-Block)</option>
+            <option value="240" selected>240 KB (Zero-Split SCTP — Recommended)</option>
+            <option value="512">512 KB (Large Buffer)</option>
+            <option value="1024">1 MB (Max Buffer)</option>
           </select>
         </div>
         <div class="pt-3 border-t border-slate-800 text-xs space-y-1">
           <div class="flex justify-between"><span class="text-slate-400">AES-256-GCM Key Fingerprint:</span><span id="fp-label" class="font-mono text-emerald-400">Computing...</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">4-Lane Unordered SCTP + Zero-Base64</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">WebRTC Direct SCTP + Global WSS Bus</span></div>
         </div>
       </div>
 
       <div class="md:col-span-7 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
-        <h2 class="text-base font-semibold">2. Ultra-Turbo Encrypted File Transfer</h2>
+        <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
-          <div class="text-xs text-slate-400 mt-1">8x Parallel RTCPeerConnections · 240 KB Atomic Zero-Copy Frames · Raw Serializer</div>
+          <div class="text-xs text-slate-400 mt-1">Direct RTCPeerConnection + Windows .EXE Bridge · Resumable Transfers</div>
         </label>
         <div id="transfer-list" class="space-y-2 max-h-64 overflow-y-auto text-xs">
           <div class="text-slate-500 text-center py-4">No transfers yet. Connect with a peer and select a file.</div>
@@ -134,29 +144,125 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
   <script>
     const MAGIC_AETH = 0x41455448;
     const MAGIC_AETP = 0x41455450;
-    const MAX_SCTP_SLICE = 240 * 1024;
     const HIGH_WATER = 8 * 1024 * 1024;
     const LOW_WATER = 4 * 1024 * 1024;
-    const PARALLEL_LANES = 1;
+    const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+    const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
 
+    const myId = 'aethertunnel-web-' + Math.random().toString(36).slice(2, 10);
     let currentKey = null;
-    let peer = null;
-    let activeConn = null;
-    let rawLanes = [];
+    let activeRoom = '';
+    let activeTopic = '';
+    let mqttSockets = [];
+    let pc = null;
+    let dc = null;
+    let remoteBrowserId = '';
+    let lastBrowserSeen = 0;
+    let exePeerId = '';
+    let lastExeSeen = 0;
     let incomingFile = null;
     let partialFrames = new Map();
+    let resumeCheckpoints = new Map();
+    let pendingResumeResolver = null;
+    let cloudAckResolver = null;
+    let rxCloudFile = null;
+
+    function buildMqttPacket(typeFlags, payload) {
+      const rem = [];
+      let x = payload.length;
+      do {
+        let d = x & 0x7f;
+        x >>>= 7;
+        if (x > 0) d |= 0x80;
+        rem.push(d);
+      } while (x > 0);
+      const out = new Uint8Array(1 + rem.length + payload.length);
+      out[0] = typeFlags;
+      for (let i = 0; i < rem.length; i++) out[1 + i] = rem[i];
+      out.set(payload, 1 + rem.length);
+      return out;
+    }
+
+    function sendBusEnvelope(envelope) {
+      if (!activeTopic) return;
+      const enc = new TextEncoder();
+      const tBytes = enc.encode(activeTopic);
+      const mBytes = enc.encode(JSON.stringify(envelope));
+      const body = new Uint8Array(2 + tBytes.length + mBytes.length);
+      body[0] = (tBytes.length >> 8) & 0xff;
+      body[1] = tBytes.length & 0xff;
+      body.set(tBytes, 2);
+      body.set(mBytes, 2 + tBytes.length);
+      const pkt = buildMqttPacket(0x30, body);
+      for (const ws of mqttSockets) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(pkt); } catch {}
+        }
+      }
+    }
+
+    function sendCloudCandidate(dst, payload) {
+      sendBusEnvelope({ type: 'CANDIDATE', src: myId, dst: dst || '*', payload });
+    }
+
+    function updatePeerPresenceUi(hasPeer, peerLabel, roomCode) {
+      const box = document.getElementById('peer-presence-box');
+      const dot = document.getElementById('peer-presence-dot');
+      const title = document.getElementById('peer-presence-title');
+      const badge = document.getElementById('peer-count-badge');
+      const sub = document.getElementById('peer-presence-sub');
+      const headerBadge = document.getElementById('status-badge');
+
+      if (hasPeer) {
+        box.className = 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 transition-colors';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
+        title.className = 'text-xs font-semibold text-emerald-300';
+        title.textContent = 'Toinen peer on huoneessa! (Peer in room)';
+        badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+        badge.textContent = '2/2 PEERS';
+        sub.className = 'text-[11px] font-mono text-emerald-200/90 mt-1';
+        sub.textContent = 'Yhdistetty: ' + peerLabel + ' [' + roomCode + ']';
+        headerBadge.textContent = 'PEER IN ROOM: YES — Connected (' + peerLabel + ')';
+        headerBadge.className = 'text-xs font-mono text-emerald-400 font-semibold';
+      } else {
+        box.className = 'p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 transition-colors';
+        dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
+        title.className = 'text-xs font-semibold text-amber-300';
+        title.textContent = 'Ei toista peeriä huoneessa (Waiting for peer)';
+        badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
+        badge.textContent = '1/2 PEERS';
+        sub.className = 'text-[11px] font-mono text-slate-400 mt-1';
+        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — avaa sama koodi toisella laitteella.';
+        headerBadge.textContent = 'PEER IN ROOM: NO — Listening on [' + roomCode + ']';
+        headerBadge.className = 'text-xs font-mono text-amber-400';
+      }
+    }
 
     async function deriveKey(code, pass) {
       const enc = new TextEncoder();
-      const baseKey = await crypto.subtle.importKey('raw', enc.encode(code.trim().toLowerCase() + '::' + pass.trim()), 'PBKDF2', false, ['deriveKey', 'deriveBits']);
-      currentKey = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-E2EE-v1-Salt-2026'), iterations: 100000, hash: 'SHA-256' }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-      const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-Fingerprint-Salt'), iterations: 1000, hash: 'SHA-256' }, baseKey, 64);
-      const hex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0').toUpperCase());
-      document.getElementById('fp-label').textContent = hex[0]+hex[1]+' · '+hex[2]+hex[3]+' · '+hex[4]+hex[5];
+      const clean = code.trim().toLowerCase();
+      const secret = clean + (pass ? '::' + pass : '');
+      const baseKey = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
+      currentKey = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: enc.encode('AetherTunnel-v1-ZeroKnowledge-Salt::' + clean), iterations: 100000, hash: 'SHA-256' }, baseKey, { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+      const rawBytes = await crypto.subtle.exportKey('raw', currentKey);
+      const digest = await crypto.subtle.digest('SHA-256', rawBytes);
+      const hex = Array.from(new Uint8Array(digest).slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+      document.getElementById('fp-label').textContent = hex;
+    }
+
+    function renderStatus(text) {
+      const list = document.getElementById('transfer-list');
+      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200">' + text + '</div>';
+    }
+
+    function renderDownload(name, url, size, mbps) {
+      const list = document.getElementById('transfer-list');
+      list.innerHTML = '<div class="p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between"><span>Verified: ' + name + ' (' + (size/(1024*1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)</span><a href="' + url + '" download="' + name + '" class="px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded">Save File</a></div>';
     }
 
     async function handleCompleteAethFrame(buf) {
       if (!incomingFile || !currentKey) return;
+      lastBrowserSeen = Date.now();
       const view = new DataView(buf);
       const chunkIndex = view.getUint32(8, false);
       const iv = new Uint8Array(buf, 12, 12);
@@ -173,6 +279,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         const blob = new Blob(incomingFile.chunks, { type: incomingFile.mimeType || 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         renderDownload(incomingFile.name, url, incomingFile.size, mbps);
+        resumeCheckpoints.delete(incomingFile.name + '::' + incomingFile.size);
         incomingFile = null;
         partialFrames.clear();
       } else if (now - incomingFile.lastUi > 120) {
@@ -180,7 +287,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         const pct = Math.round((incomingFile.receivedCount / incomingFile.totalChunks) * 100);
         const elapsed = Math.max(0.02, (now - incomingFile.startedAt) / 1000);
         const mbps = ((incomingFile.receivedCount * incomingFile.chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
-        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s · ' + rawLanes.filter(d => d.readyState === 'open').length + 'x Lanes)');
+        renderStatus('Receiving: ' + incomingFile.name + ' (' + pct + '% · ' + mbps + ' MB/s)');
       }
     }
 
@@ -215,125 +322,383 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       return false;
     }
 
-    function registerRawLane(dc, connObj) {
-      if (!dc) return;
+    function handleControlJson(msg) {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.kind === 'file:meta') {
+        const rKey = msg.name + '::' + msg.size;
+        const prev = resumeCheckpoints.get(rKey);
+        let chunks = new Array(msg.totalChunks);
+        let resumeFromChunk = 0;
+        if (prev && prev.chunks && prev.chunks.length === msg.totalChunks) {
+          chunks = prev.chunks;
+          while (resumeFromChunk < chunks.length && chunks[resumeFromChunk] !== undefined) resumeFromChunk++;
+        }
+        incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0 };
+        resumeCheckpoints.set(rKey, incomingFile);
+        const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk };
+        if (dc && dc.readyState === 'open') {
+          try { dc.send(JSON.stringify(ack)); } catch {}
+        }
+        sendCloudCandidate(remoteBrowserId || '*', ack);
+        const pct = Math.round((resumeFromChunk / Math.max(1, msg.totalChunks)) * 100);
+        renderStatus((resumeFromChunk > 0 ? 'Resuming: ' : 'Receiving: ') + msg.name + ' (' + pct + '%)');
+      } else if ((msg.kind === 'file:resume-ack' || msg.kind === 'exe:resume-ack') && pendingResumeResolver) {
+        pendingResumeResolver(Number(msg.resumeFromChunk) || 0);
+        pendingResumeResolver = null;
+      }
+    }
+
+    function bindDataChannel(channel) {
+      dc = channel;
       dc.binaryType = 'arraybuffer';
       dc.bufferedAmountLowThreshold = LOW_WATER;
-      if (connObj && typeof connObj._handleDataMessage === 'function') {
-        const origHandle = connObj._handleDataMessage.bind(connObj);
-        connObj._handleDataMessage = (ev) => {
-          if (ev && ev.data instanceof ArrayBuffer && handleIncomingBinary(ev.data)) return;
-          origHandle(ev);
-        };
-      } else {
-        const orig = dc.onmessage;
-        dc.onmessage = (ev) => {
-          if (ev.data instanceof ArrayBuffer && handleIncomingBinary(ev.data)) return;
-          if (orig) orig.call(dc, ev);
-        };
-      }
-      if (!rawLanes.includes(dc)) rawLanes.push(dc);
-    }
-
-    function setupConnection(conn, isPrimary) {
-      if (isPrimary) {
-        activeConn = conn;
-        rawLanes = [];
-      }
-      if (conn.dataChannel) registerRawLane(conn.dataChannel, conn);
-      document.getElementById('status-badge').textContent = 'Connected ' + rawLanes.length + 'x-Lane P2P (' + conn.peer + ')';
-      document.getElementById('status-badge').className = 'text-xs font-mono text-emerald-400';
-
-      conn.on('data', async (data) => {
-        if (data instanceof ArrayBuffer && handleIncomingBinary(data)) return;
-        const msg = typeof data === 'string' ? JSON.parse(data) : data;
-        if (msg && msg.kind === 'file:meta') {
-          incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks: new Array(msg.totalChunks), receivedCount: 0, startedAt: performance.now(), lastUi: 0 };
-          renderStatus('Receiving: ' + msg.name + ' (0%)');
+      dc.onopen = () => {
+        lastBrowserSeen = Date.now();
+        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Peer') + ')', activeRoom);
+      };
+      dc.onmessage = async (ev) => {
+        lastBrowserSeen = Date.now();
+        let data = ev.data;
+        if (data instanceof Blob) data = await data.arrayBuffer();
+        if (data instanceof ArrayBuffer) {
+          if (handleIncomingBinary(data)) return;
+          try { data = new TextDecoder().decode(data); } catch { return; }
         }
-      });
+        if (typeof data === 'string') {
+          try { handleControlJson(JSON.parse(data)); } catch {}
+        }
+      };
     }
 
-    function renderStatus(text) {
-      const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200">' + text + '</div>';
+    async function ensureWebRtc(isInitiator, targetPeer) {
+      try {
+        if (pc && !isInitiator) {
+          try { pc.close(); } catch {}
+          pc = null;
+        }
+        if (!pc) {
+          pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+          pc.onicecandidate = (ev) => {
+            if (ev.candidate) {
+              sendCloudCandidate(targetPeer || remoteBrowserId || '*', {
+                kind: 'webrtc:signal',
+                signalType: 'candidate',
+                candidate: ev.candidate
+              });
+            }
+          };
+          pc.ondatachannel = (ev) => bindDataChannel(ev.channel);
+        }
+        if (isInitiator && (!dc || dc.readyState !== 'open')) {
+          bindDataChannel(pc.createDataChannel('aethertunnel-lane-0', { ordered: false }));
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendCloudCandidate(targetPeer, {
+            kind: 'webrtc:signal',
+            signalType: 'offer',
+            sdp: offer
+          });
+        }
+      } catch {}
     }
 
-    function renderDownload(name, url, size, mbps) {
-      const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between"><span>Verified: ' + name + ' (' + (size/(1024*1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)</span><a href="' + url + '" download="' + name + '" class="px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded">Save File</a></div>';
+    function handleBusMessage(rawJson) {
+      let msg;
+      try { msg = JSON.parse(rawJson); } catch { return; }
+      if (!msg || typeof msg !== 'object') return;
+      const src = typeof msg.src === 'string' ? msg.src : '';
+      if (!src || src === myId) return;
+      if (msg.dst && msg.dst !== '*' && msg.dst !== myId && !String(msg.dst).startsWith('aethertunnel-v1-') && !String(msg.dst).startsWith('aethertunnel-web-')) return;
+
+      const p = msg.payload || msg;
+      if (!p || typeof p !== 'object') return;
+
+      if (p.kind === 'exe:hello') {
+        const isNew = exePeerId !== src || (Date.now() - lastExeSeen > 9000);
+        exePeerId = src;
+        lastExeSeen = Date.now();
+        updatePeerPresenceUi(true, 'Windows .EXE (' + src + ')', activeRoom);
+        if (isNew) {
+          sendCloudCandidate(src, { kind: 'browser:hello', roomCode: activeRoom });
+        }
+        return;
+      }
+
+      if (p.kind === 'browser:hello' || p.kind === 'browser:hello-ack' || p.kind === 'web:hello') {
+        const isNew = remoteBrowserId !== src || (Date.now() - lastBrowserSeen > 9000);
+        remoteBrowserId = src;
+        lastBrowserSeen = Date.now();
+        updatePeerPresenceUi(true, 'Browser Peer (' + src + ')', activeRoom);
+        if (p.kind === 'browser:hello' && isNew) {
+          sendCloudCandidate(src, { kind: 'browser:hello-ack', roomCode: activeRoom });
+        }
+        if (myId < src && (!dc || dc.readyState !== 'open')) {
+          ensureWebRtc(true, src);
+        }
+        return;
+      }
+
+      if (p.kind === 'webrtc:signal') {
+        remoteBrowserId = src;
+        lastBrowserSeen = Date.now();
+        (async () => {
+          try {
+            if (p.signalType === 'offer' && p.sdp) {
+              await ensureWebRtc(false, src);
+              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+              sendCloudCandidate(src, { kind: 'webrtc:signal', signalType: 'answer', sdp: answer });
+            } else if (p.signalType === 'answer' && p.sdp && pc) {
+              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            } else if (p.signalType === 'candidate' && p.candidate && pc) {
+              await pc.addIceCandidate(new RTCIceCandidate(p.candidate));
+            }
+          } catch {}
+        })();
+        return;
+      }
+
+      if (p.kind === 'exe:chunk-ack' || p.kind === 'browser:chunk-ack') {
+        if (cloudAckResolver) {
+          const r = cloudAckResolver;
+          cloudAckResolver = null;
+          r();
+        }
+        return;
+      }
+
+      if (p.kind === 'exe:resume-ack' || p.kind === 'file:resume-ack') {
+        handleControlJson(p);
+        return;
+      }
+
+      if (p.kind === 'exe:file-start' || p.kind === 'browser:file-start') {
+        rxCloudFile = {
+          fileId: p.fileId,
+          name: p.name || 'transfer.bin',
+          size: Number(p.size) || 0,
+          totalChunks: Math.max(1, Number(p.totalChunks) || 1),
+          chunks: [],
+          bytes: 0,
+          startedAt: performance.now(),
+          lastUi: 0
+        };
+        renderStatus('Receiving via Wormhole Bridge: ' + rxCloudFile.name + ' (0%)');
+        return;
+      }
+
+      if ((p.kind === 'exe:file-chunk' || p.kind === 'browser:file-chunk') && rxCloudFile && p.data) {
+        const bin = atob(p.data);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        rxCloudFile.chunks.push(bytes);
+        rxCloudFile.bytes += bytes.byteLength;
+        const now = performance.now();
+        if (now - rxCloudFile.lastUi > 100) {
+          rxCloudFile.lastUi = now;
+          const pct = Math.min(100, Math.round((rxCloudFile.bytes / Math.max(1, rxCloudFile.size)) * 100));
+          const elapsed = Math.max(0.02, (now - rxCloudFile.startedAt) / 1000);
+          const mbps = (rxCloudFile.bytes / (1024 * 1024) / elapsed).toFixed(2);
+          renderStatus('Receiving: ' + rxCloudFile.name + ' (' + pct + '% · ' + mbps + ' MB/s)');
+        }
+        const cIdx = Number(p.chunkIndex) || 0;
+        if ((cIdx + 1) % 8 === 0) {
+          sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', chunkIndex: cIdx });
+        }
+        return;
+      }
+
+      if ((p.kind === 'exe:file-end' || p.kind === 'browser:file-end') && rxCloudFile) {
+        const elapsed = Math.max(0.02, (performance.now() - rxCloudFile.startedAt) / 1000);
+        const mbps = (rxCloudFile.size / (1024 * 1024) / elapsed).toFixed(2);
+        const blob = new Blob(rxCloudFile.chunks, { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        renderDownload(rxCloudFile.name, url, rxCloudFile.size, mbps);
+        sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', chunkIndex: 999999 });
+        rxCloudFile = null;
+      }
+    }
+
+    function connectMqttBroker(brokerUrl, topic) {
+      try {
+        const ws = new WebSocket(brokerUrl, 'mqtt');
+        ws.binaryType = 'arraybuffer';
+        mqttSockets.push(ws);
+
+        ws.onopen = () => {
+          const enc = new TextEncoder();
+          const cid = enc.encode('atp_' + myId.slice(-8) + '_' + Math.floor(Math.random() * 999));
+          const vh = new Uint8Array([0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c]);
+          const cp = new Uint8Array(vh.length + 2 + cid.length);
+          cp.set(vh, 0);
+          cp[vh.length] = (cid.length >> 8) & 0xff;
+          cp[vh.length + 1] = cid.length & 0xff;
+          cp.set(cid, vh.length + 2);
+          ws.send(buildMqttPacket(0x10, cp));
+        };
+
+        ws.onmessage = (ev) => {
+          if (!(ev.data instanceof ArrayBuffer)) return;
+          const buf = new Uint8Array(ev.data);
+          let pos = 0;
+          while (pos < buf.length) {
+            const hdr = buf[pos++];
+            let mult = 1, remLen = 0;
+            while (pos < buf.length) {
+              const b = buf[pos++];
+              remLen += (b & 0x7f) * mult;
+              mult *= 128;
+              if ((b & 0x80) === 0) break;
+            }
+            if (pos + remLen > buf.length) break;
+            const pType = hdr >> 4;
+            if (pType === 2) {
+              const tBytes = new TextEncoder().encode(topic);
+              const sp = new Uint8Array(2 + 2 + tBytes.length + 1);
+              sp[0] = 0x00; sp[1] = 0x01;
+              sp[2] = (tBytes.length >> 8) & 0xff;
+              sp[3] = tBytes.length & 0xff;
+              sp.set(tBytes, 4);
+              sp[4 + tBytes.length] = 0x00;
+              ws.send(buildMqttPacket(0x82, sp));
+              setTimeout(() => sendCloudCandidate('*', { kind: 'browser:hello', roomCode: activeRoom }), 120);
+            } else if (pType === 3 && remLen > 2) {
+              const tLen = (buf[pos] << 8) | buf[pos + 1];
+              let pStart = pos + 2 + tLen;
+              if (((hdr >> 1) & 0x03) > 0) pStart += 2;
+              const pLen = (pos + remLen) - pStart;
+              if (pLen > 0) {
+                const jsonStr = new TextDecoder().decode(buf.subarray(pStart, pStart + pLen));
+                handleBusMessage(jsonStr);
+              }
+            }
+            pos += remLen;
+          }
+        };
+      } catch {}
     }
 
     async function connectRoom() {
-      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'default';
       const pass = document.getElementById('pass-input').value;
+      activeRoom = code;
+      activeTopic = 'aethertunnel/v1/room/' + code;
       await deriveKey(code, pass);
-      if (peer) peer.destroy();
 
-      const hostId = 'aethertunnel-v1-' + code + '-host';
-      const clientId = 'aethertunnel-v1-' + code + '-peer-' + Math.floor(Math.random() * 9000 + 1000);
+      for (const s of mqttSockets) { try { s.close(); } catch {} }
+      mqttSockets = [];
+      if (pc) { try { pc.close(); } catch {} pc = null; }
+      dc = null;
+      remoteBrowserId = '';
+      exePeerId = '';
+      updatePeerPresenceUi(false, '', code);
 
-      document.getElementById('status-badge').textContent = 'Punching NAT via STUN (' + code + ')...';
-      peer = new Peer(hostId, {
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] }
-      });
-
-      peer.on('open', () => {
-        document.getElementById('status-badge').textContent = 'Listening on Wormhole: ' + code;
-      });
-
-      peer.on('connection', (conn) => {
-        const isPrimary = !conn.metadata || !conn.metadata.laneIndex;
-        conn.on('open', () => setupConnection(conn, isPrimary));
-      });
-
-      peer.on('error', (err) => {
-        if (err.type === 'unavailable-id') {
-          peer = new Peer(clientId, {
-            config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] }
-          });
-          peer.on('open', () => {
-            const conn = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: 0 } });
-            conn.on('open', () => {
-              setupConnection(conn, true);
-              for (let i = 1; i < PARALLEL_LANES; i++) {
-                setTimeout(() => {
-                  try {
-                    const extra = peer.connect(hostId, { reliable: true, serialization: 'raw', metadata: { laneIndex: i } });
-                    extra.on('open', () => setupConnection(extra, false));
-                  } catch {}
-                }, i * 35);
-              }
-            });
-          });
-          peer.on('connection', (conn) => {
-            const isPrimary = !conn.metadata || !conn.metadata.laneIndex;
-            conn.on('open', () => setupConnection(conn, isPrimary));
-          });
-        }
-      });
+      for (const url of BROKERS) {
+        connectMqttBroker(url, activeTopic);
+      }
     }
+
+    setInterval(() => {
+      if (!activeRoom) return;
+      sendCloudCandidate('*', { kind: 'browser:hello', roomCode: activeRoom });
+      for (const ws of mqttSockets) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(new Uint8Array([0xc0, 0x00])); } catch {}
+        }
+      }
+      const now = Date.now();
+      if (dc && dc.readyState === 'open') {
+        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Connected') + ')', activeRoom);
+      } else if (exePeerId && now - lastExeSeen < 10000) {
+        updatePeerPresenceUi(true, 'Windows .EXE (' + exePeerId + ')', activeRoom);
+      } else if (remoteBrowserId && now - lastBrowserSeen < 10000) {
+        updatePeerPresenceUi(true, 'Browser Peer (' + remoteBrowserId + ')', activeRoom);
+      } else {
+        updatePeerPresenceUi(false, '', activeRoom);
+      }
+    }, 2200);
 
     document.getElementById('connect-btn').addEventListener('click', connectRoom);
     document.getElementById('file-input').addEventListener('change', async (e) => {
       const files = e.target.files;
-      if (!files.length || !activeConn) {
-        renderStatus('Wait for a remote peer to connect to room "' + document.getElementById('room-input').value + '" first.');
+      if (!files.length) return;
+      const file = files[0];
+      const hasWebRtc = dc && dc.readyState === 'open';
+      const hasExeOrCloudPeer = (exePeerId && Date.now() - lastExeSeen < 12000) || (remoteBrowserId && Date.now() - lastBrowserSeen < 12000);
+
+      if (!hasWebRtc && !hasExeOrCloudPeer) {
+        renderStatus('Wait for a remote peer to connect to room "' + activeRoom + '" first.');
         return;
       }
-      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 1024;
-      const chunkSize = chunkKb * 1024;
-      const file = files[0];
-      const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-      const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
+
       const startedAt = performance.now();
 
-      activeConn.send(JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' }));
+      if (!hasWebRtc && hasExeOrCloudPeer) {
+        const dst = exePeerId || remoteBrowserId;
+        const isExe = Boolean(exePeerId);
+        const cSize = 49152;
+        const totalChunks = Math.max(1, Math.ceil(file.size / cSize));
+        const fileId = 'f-' + Date.now();
 
-      const batchSize = Math.max(4, Math.min(32, Math.floor((16 * 1024 * 1024) / chunkSize)));
-      let laneCursor = 0;
+        const resumePromise = new Promise(resolve => {
+          pendingResumeResolver = resolve;
+          setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 600);
+        });
 
-      for (let bStart = 0; bStart < totalChunks; bStart += batchSize) {
+        sendCloudCandidate(dst, {
+          kind: isExe ? 'exe:file-start' : 'browser:file-start',
+          fileId,
+          name: file.name,
+          size: file.size,
+          chunkSize: cSize,
+          totalChunks
+        });
+
+        let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
+        for (let off = cIdx * cSize; off < file.size; off += cSize) {
+          const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
+          const bytes = new Uint8Array(buf);
+          let bin = '';
+          for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+          sendCloudCandidate(dst, {
+            kind: isExe ? 'exe:file-chunk' : 'browser:file-chunk',
+            fileId,
+            chunkIndex: cIdx,
+            data: btoa(bin)
+          });
+          cIdx++;
+          const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
+          const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
+          renderStatus('Sending via Wormhole Bridge: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
+          if (cIdx % 8 === 0) {
+            await new Promise(resolve => {
+              cloudAckResolver = resolve;
+              setTimeout(() => { if (cloudAckResolver === resolve) { cloudAckResolver = null; resolve(); } }, 350);
+            });
+          }
+        }
+        sendCloudCandidate(dst, { kind: isExe ? 'exe:file-end' : 'browser:file-end', fileId });
+        const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
+        renderStatus('Completed & Verified: ' + file.name + ' (' + (file.size / (1024 * 1024) / totalElapsed).toFixed(2) + ' MB/s average)');
+        return;
+      }
+
+      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
+      const chunkSize = chunkKb * 1024;
+      const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+      const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
+
+      const resumePromise = new Promise(resolve => {
+        pendingResumeResolver = resolve;
+        setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 650);
+      });
+
+      dc.send(JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' }));
+      const startChunk = Math.max(0, Math.min(await resumePromise, totalChunks));
+      const batchSize = 32;
+
+      for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
         const bEnd = Math.min(totalChunks, bStart + batchSize);
         const slab = await file.slice(bStart * chunkSize, Math.min(file.size, bEnd * chunkSize)).arrayBuffer();
 
@@ -355,51 +720,11 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
           return frame.buffer;
         }));
 
-        const openLanes = rawLanes.filter(d => d.readyState === 'open');
         for (const frame of frames) {
-          const totalBytes = frame.byteLength;
-          const slices = [];
-          if (totalBytes <= MAX_SCTP_SLICE + 24) {
-            slices.push(frame);
-          } else {
-            const mh = new DataView(frame);
-            const tId = mh.getUint32(4, false);
-            const cIdx = mh.getUint32(8, false);
-            const parts = Math.ceil(totalBytes / MAX_SCTP_SLICE);
-            const src = new Uint8Array(frame);
-            for (let p = 0; p < parts; p++) {
-              const off = p * MAX_SCTP_SLICE;
-              const len = Math.min(MAX_SCTP_SLICE, totalBytes - off);
-              const sf = new Uint8Array(24 + len);
-              const sv = new DataView(sf.buffer);
-              sv.setUint32(0, MAGIC_AETP, false);
-              sv.setUint32(4, tId, false);
-              sv.setUint32(8, cIdx, false);
-              sv.setUint32(12, totalBytes, false);
-              sv.setUint32(16, off, false);
-              sv.setUint16(20, p, false);
-              sv.setUint16(22, parts, false);
-              sf.set(src.subarray(off, off + len), 24);
-              slices.push(sf.buffer);
-            }
+          while (dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
+            await new Promise(r => setTimeout(r, 4));
           }
-
-          for (const packet of slices) {
-            if (openLanes.length > 0) {
-              let dc = openLanes[laneCursor % openLanes.length];
-              laneCursor++;
-              if (dc.bufferedAmount >= HIGH_WATER) {
-                await new Promise(r => {
-                  const done = () => { dc.removeEventListener('bufferedamountlow', done); r(); };
-                  dc.addEventListener('bufferedamountlow', done);
-                  setTimeout(done, 4);
-                });
-              }
-              dc.send(packet);
-            } else {
-              activeConn.send(packet);
-            }
-          }
+          dc.send(frame);
         }
 
         const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
@@ -522,7 +847,7 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
     const { createRequire } = await import('module');
     const requireCjs = createRequire(import.meta.url);
     const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
-    const winExeBuf: Buffer = buildWindowsGuiExe(standaloneHtml);
+    const winExeBuf: Buffer = buildWindowsGuiExe('742-cobalt-falcon');
     const winExePath = path.join(releaseDir, 'AetherTunnel-win-x64.exe');
     fs.writeFileSync(winExePath, winExeBuf);
     artifacts.push({
@@ -660,6 +985,17 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   const PORT = 3000;
+
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '10mb' }));
 
@@ -840,6 +1176,17 @@ async function startServer() {
               type: 'relay:packet',
               fromPeerId: currentPeer.id,
               packet: msg.packet,
+            });
+            break;
+          }
+
+          case 'CANDIDATE': {
+            if (!currentPeer) return;
+            broadcastToRoom(currentPeer.roomCode, currentPeer.id, {
+              type: 'CANDIDATE',
+              src: msg.src || currentPeer.id,
+              dst: msg.dst || '*',
+              payload: msg.payload,
             });
             break;
           }

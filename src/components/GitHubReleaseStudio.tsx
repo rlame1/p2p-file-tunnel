@@ -285,7 +285,7 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
-              Download Native Kernel-Socket .EXE (v7 High-DPI)
+              Download Native Kernel-Socket .EXE (v1.0 High-DPI)
             </button>
             <button
               onClick={handleDownloadStandaloneHtml}
@@ -336,7 +336,7 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors whitespace-nowrap cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Download Kernel .EXE (v7)
+                        Download Kernel .EXE (v1.0)
                       </button>
                     ) : (
                       <a

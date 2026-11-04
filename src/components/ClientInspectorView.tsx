@@ -85,7 +85,7 @@ export const ClientInspectorView: React.FC<ClientInspectorViewProps> = ({
               </div>
               <div>
                 <h2 className="text-base font-semibold text-slate-100">Windows Native Desktop App</h2>
-                <span className="text-xs font-mono text-slate-400">AetherTunnel-win-x64.exe (v7 High-DPI)</span>
+                <span className="text-xs font-mono text-slate-400">AetherTunnel-win-x64.exe (v1.0 NAT-P2P High-DPI)</span>
               </div>
             </div>
             <span
