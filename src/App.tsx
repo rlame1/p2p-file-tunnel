@@ -1431,7 +1431,7 @@ export default function App() {
       for (const s of sockets) {
         if (s && s.readyState === WebSocket.OPEN) {
           try {
-            s.send(pkt);
+            s.send(pkt as any);
           } catch {}
         }
       }
@@ -1748,10 +1748,10 @@ export default function App() {
             30,
             ...encodeMqttStr(clientId),
           ];
-          socket.send(buildMqttPacket(0x10, connectBody));
+          socket.send(buildMqttPacket(0x10, connectBody) as any);
 
           const subBody = [0, 1, ...encodeMqttStr(mqttTopic), 0];
-          socket.send(buildMqttPacket(0x82, subBody));
+          socket.send(buildMqttPacket(0x82, subBody) as any);
 
           window.setTimeout(() => {
             broadcastBrowserHello();
