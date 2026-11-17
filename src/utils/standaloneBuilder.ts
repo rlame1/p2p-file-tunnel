@@ -2,6 +2,7 @@
 // that run directly from GitHub Pages, GitHub Releases, or local disk without any backend server.
 
 export function generateStandalonePortableHtml(defaultRoomCode: string): string {
+  const safeRoomAttr = String(defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase();
   return `<!doctype html>
 <html lang="en" class="dark">
 <head>
@@ -21,7 +22,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     <header class="flex items-center justify-between pb-4 border-b border-slate-800">
       <div>
         <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel Portable <span class="ml-1.5 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v1.0</span></span>
-        <span class="ml-3 text-xs text-emerald-400 font-mono">Direct WebRTC P2P + Windows .EXE Wormhole + AES-256-GCM</span>
+        <span class="ml-3 text-xs text-emerald-400 font-mono">Direct WebRTC Mesh (Max 8) + Windows .EXE Wormhole + AES-256-GCM</span>
       </div>
       <div id="status-badge" class="text-xs font-mono text-amber-400">Initializing P2P Node...</div>
     </header>
@@ -29,12 +30,12 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
       <div class="md:col-span-5 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
         <h2 class="text-base font-semibold">1. Wormhole Pairing Code</h2>
-        <p class="text-xs text-slate-400">Use the same pairing code on both devices (works across Web App, Portable HTML, and Windows .EXE).</p>
+        <p class="text-xs text-slate-400">Kirjoita tunnelin nimi ja paina Yhdistä (toimii ristiin Web Appin, Portable HTML:n ja Windows .EXE:n välillä).</p>
         <div>
-          <label class="block text-xs text-slate-400 mb-1">Tunnel Room Code</label>
+          <label class="block text-xs text-slate-400 mb-1">Tunnelin nimi</label>
           <div class="flex gap-2">
-            <input id="room-input" type="text" value="${defaultRoomCode}" class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
-            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Connect</button>
+            <input id="room-input" type="text" value="${safeRoomAttr}" placeholder="Kirjoita tunnelin nimi..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
+            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Yhdistä</button>
           </div>
         </div>
 
@@ -42,11 +43,11 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span id="peer-presence-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-              <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">Ei toista peeriä huoneessa (No peer yet)</span>
+              <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">Ei toista käyttäjää huoneessa (Waiting)</span>
             </div>
-            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/2 PEERS</span>
+            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/8 KÄYTTÄJÄÄ</span>
           </div>
-          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan toista laitetta samalla huonekoodilla...</div>
+          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan muita käyttäjiä samalla tunnelinimellä (max 8)...</div>
         </div>
 
         <div>
@@ -62,20 +63,29 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           </select>
         </div>
         <div class="pt-3 border-t border-slate-800 text-xs space-y-1">
-          <div class="flex justify-between"><span class="text-slate-400">AES-256-GCM Key Fingerprint:</span><span id="fp-label" class="font-mono text-emerald-400">Computing...</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">WebRTC Direct SCTP + Global WSS Bus</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">AES-256-GCM Key Fingerprint:</span><span id="fp-label" class="font-mono text-emerald-400">Odottaa tunnelin nimeä...</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">WebRTC Mesh (Max 8) + Global WSS Bus</span></div>
         </div>
       </div>
 
       <div class="md:col-span-7 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
-        <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
+          <button id="pause-btn" type="button" class="px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer">Pysäytä</button>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-950 border border-slate-800 rounded-lg">
+          <label for="target-peer-select" class="text-xs font-medium text-slate-300 whitespace-nowrap">Kenelle lähetetään:</label>
+          <select id="target-peer-select" class="flex-1 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg font-mono text-sky-300">
+            <option value="*">Kaikki huoneessa (0 käyttäjää)</option>
+          </select>
+        </div>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
-          <div class="text-xs text-slate-400 mt-1">Direct RTCPeerConnection + Windows .EXE Bridge · Resumable Transfers</div>
+          <div class="text-xs text-slate-400 mt-1">Direct RTCPeerConnection Mesh + Windows .EXE Bridge · Resumable Transfers</div>
         </label>
         <div id="transfer-list" class="space-y-2 max-h-64 overflow-y-auto text-xs">
-          <div class="text-slate-500 text-center py-4">No transfers yet. Connect with a peer and select a file.</div>
+          <div class="text-slate-500 text-center py-4">No transfers yet. Connect with peers and select a file.</div>
         </div>
       </div>
     </div>
@@ -86,6 +96,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     const MAGIC_AETP = 0x41455450;
     const HIGH_WATER = 8 * 1024 * 1024;
     const LOW_WATER = 4 * 1024 * 1024;
+    const MAX_ROOM_PEERS = 8;
     const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
     const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
 
@@ -94,18 +105,37 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     let activeRoom = '';
     let activeTopic = '';
     let mqttSockets = [];
-    let pc = null;
-    let dc = null;
-    let remoteBrowserId = '';
-    let lastBrowserSeen = 0;
-    let exePeerId = '';
-    let lastExeSeen = 0;
+    const peersMap = new Map();
     let incomingFile = null;
     let partialFrames = new Map();
     let resumeCheckpoints = new Map();
     let pendingResumeResolver = null;
     let cloudAckResolver = null;
     let rxCloudFile = null;
+    let transferPaused = false;
+
+    function togglePauseState() {
+      transferPaused = !transferPaused;
+      const btn = document.getElementById('pause-btn');
+      if (btn) {
+        if (transferPaused) {
+          btn.textContent = 'Jatka';
+          btn.className = 'px-3 py-1.5 text-xs font-semibold bg-emerald-400 text-slate-950 rounded-lg hover:bg-emerald-300 cursor-pointer';
+        } else {
+          btn.textContent = 'Pysäytä';
+          btn.className = 'px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer';
+        }
+      }
+    }
+
+    async function waitWhilePaused(onPauseMs) {
+      if (!transferPaused) return;
+      const pStart = performance.now();
+      while (transferPaused) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (onPauseMs) onPauseMs(performance.now() - pStart);
+    }
 
     function buildMqttPacket(typeFlags, payload) {
       const rem = [];
@@ -145,6 +175,30 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       sendBusEnvelope({ type: 'CANDIDATE', src: myId, dst: dst || '*', payload });
     }
 
+    function syncTargetSelectorUi() {
+      const sel = document.getElementById('target-peer-select');
+      if (!sel) return;
+      const prevVal = sel.value || '*';
+      const activeList = Array.from(peersMap.values());
+      sel.innerHTML = '';
+      const allOpt = document.createElement('option');
+      allOpt.value = '*';
+      allOpt.textContent = 'Kaikki huoneessa (' + activeList.length + ' käyttäjää)';
+      sel.appendChild(allOpt);
+      for (const p of activeList) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const via = p.dc && p.dc.readyState === 'open' ? 'WebRTC P2P' : (p.type === 'exe' ? 'Windows .EXE' : 'Cloud Bridge');
+        opt.textContent = (p.label || p.id.slice(-8)) + ' (' + via + ')';
+        sel.appendChild(opt);
+      }
+      if (prevVal !== '*' && peersMap.has(prevVal)) {
+        sel.value = prevVal;
+      } else {
+        sel.value = '*';
+      }
+    }
+
     function updatePeerPresenceUi(hasPeer, peerLabel, roomCode) {
       const box = document.getElementById('peer-presence-box');
       const dot = document.getElementById('peer-presence-dot');
@@ -152,30 +206,32 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       const badge = document.getElementById('peer-count-badge');
       const sub = document.getElementById('peer-presence-sub');
       const headerBadge = document.getElementById('status-badge');
+      const totalUsers = activeRoom ? Math.min(MAX_ROOM_PEERS, peersMap.size + 1) : 0;
 
-      if (hasPeer) {
+      if (hasPeer || peersMap.size > 0) {
         box.className = 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
         title.className = 'text-xs font-semibold text-emerald-300';
-        title.textContent = 'Toinen peer on huoneessa! (Peer in room)';
+        title.textContent = peersMap.size + ' käyttäjää huoneessa! (Max ' + MAX_ROOM_PEERS + ')';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
-        badge.textContent = '2/2 PEERS';
+        badge.textContent = totalUsers + '/' + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
         sub.className = 'text-[11px] font-mono text-emerald-200/90 mt-1';
-        sub.textContent = 'Yhdistetty: ' + peerLabel + ' [' + roomCode + ']';
-        headerBadge.textContent = 'PEER IN ROOM: YES — Connected (' + peerLabel + ')';
+        sub.textContent = 'Yhdistetty: ' + (peerLabel || (peersMap.size + ' peeriä')) + ' [' + roomCode + ']';
+        headerBadge.textContent = 'HUONE [' + roomCode + ']: ' + totalUsers + '/' + MAX_ROOM_PEERS + ' käyttäjää';
         headerBadge.className = 'text-xs font-mono text-emerald-400 font-semibold';
       } else {
         box.className = 'p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
         title.className = 'text-xs font-semibold text-amber-300';
-        title.textContent = 'Ei toista peeriä huoneessa (Waiting for peer)';
+        title.textContent = 'Ei toista käyttäjää huoneessa (Waiting for peers)';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
-        badge.textContent = '1/2 PEERS';
+        badge.textContent = (activeRoom ? '1/' : '0/') + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
         sub.className = 'text-[11px] font-mono text-slate-400 mt-1';
-        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — avaa sama koodi toisella laitteella.';
-        headerBadge.textContent = 'PEER IN ROOM: NO — Listening on [' + roomCode + ']';
+        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — max ' + MAX_ROOM_PEERS + ' käyttäjää.';
+        headerBadge.textContent = activeRoom ? ('LISTENING ON [' + roomCode + '] · 1/' + MAX_ROOM_PEERS) : 'Odottaa tunnelin nimeä';
         headerBadge.className = 'text-xs font-mono text-amber-400';
       }
+      syncTargetSelectorUi();
     }
 
     async function deriveKey(code, pass) {
@@ -202,7 +258,6 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
     async function handleCompleteAethFrame(buf) {
       if (!incomingFile || !currentKey) return;
-      lastBrowserSeen = Date.now();
       const view = new DataView(buf);
       const chunkIndex = view.getUint32(8, false);
       const iv = new Uint8Array(buf, 12, 12);
@@ -262,7 +317,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       return false;
     }
 
-    function handleControlJson(msg) {
+    function handleControlJson(msg, srcPeer) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.kind === 'file:meta') {
         const rKey = msg.name + '::' + msg.size;
@@ -276,10 +331,11 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0 };
         resumeCheckpoints.set(rKey, incomingFile);
         const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk };
-        if (dc && dc.readyState === 'open') {
-          try { dc.send(JSON.stringify(ack)); } catch {}
+        const peerObj = srcPeer ? peersMap.get(srcPeer) : null;
+        if (peerObj && peerObj.dc && peerObj.dc.readyState === 'open') {
+          try { peerObj.dc.send(JSON.stringify(ack)); } catch {}
         }
-        sendCloudCandidate(remoteBrowserId || '*', ack);
+        sendCloudCandidate(srcPeer || '*', ack);
         const pct = Math.round((resumeFromChunk / Math.max(1, msg.totalChunks)) * 100);
         renderStatus((resumeFromChunk > 0 ? 'Resuming: ' : 'Receiving: ') + msg.name + ' (' + pct + '%)');
       } else if ((msg.kind === 'file:resume-ack' || msg.kind === 'exe:resume-ack') && pendingResumeResolver) {
@@ -288,16 +344,20 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       }
     }
 
-    function bindDataChannel(channel) {
-      dc = channel;
-      dc.binaryType = 'arraybuffer';
-      dc.bufferedAmountLowThreshold = LOW_WATER;
-      dc.onopen = () => {
-        lastBrowserSeen = Date.now();
-        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Peer') + ')', activeRoom);
+    function bindDataChannel(channel, peerEntry) {
+      peerEntry.dc = channel;
+      channel.binaryType = 'arraybuffer';
+      channel.bufferedAmountLowThreshold = LOW_WATER;
+      channel.onopen = () => {
+        peerEntry.lastSeen = Date.now();
+        updatePeerPresenceUi(true, peerEntry.label, activeRoom);
       };
-      dc.onmessage = async (ev) => {
-        lastBrowserSeen = Date.now();
+      channel.onclose = () => {
+        if (peerEntry.dc === channel) peerEntry.dc = null;
+        syncTargetSelectorUi();
+      };
+      channel.onmessage = async (ev) => {
+        peerEntry.lastSeen = Date.now();
         let data = ev.data;
         if (data instanceof Blob) data = await data.arrayBuffer();
         if (data instanceof ArrayBuffer) {
@@ -305,34 +365,38 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           try { data = new TextDecoder().decode(data); } catch { return; }
         }
         if (typeof data === 'string') {
-          try { handleControlJson(JSON.parse(data)); } catch {}
+          try { handleControlJson(JSON.parse(data), peerEntry.id); } catch {}
         }
       };
     }
 
     async function ensureWebRtc(isInitiator, targetPeer) {
+      if (!targetPeer) return;
+      const peerEntry = peersMap.get(targetPeer);
+      if (!peerEntry) return;
       try {
-        if (pc && !isInitiator) {
-          try { pc.close(); } catch {}
-          pc = null;
+        if (peerEntry.pc && !isInitiator) {
+          try { peerEntry.pc.close(); } catch {}
+          peerEntry.pc = null;
         }
-        if (!pc) {
-          pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        if (!peerEntry.pc) {
+          const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+          peerEntry.pc = pc;
           pc.onicecandidate = (ev) => {
             if (ev.candidate) {
-              sendCloudCandidate(targetPeer || remoteBrowserId || '*', {
+              sendCloudCandidate(targetPeer, {
                 kind: 'webrtc:signal',
                 signalType: 'candidate',
                 candidate: ev.candidate
               });
             }
           };
-          pc.ondatachannel = (ev) => bindDataChannel(ev.channel);
+          pc.ondatachannel = (ev) => bindDataChannel(ev.channel, peerEntry);
         }
-        if (isInitiator && (!dc || dc.readyState !== 'open')) {
-          bindDataChannel(pc.createDataChannel('aethertunnel-lane-0', { ordered: false }));
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
+        if (isInitiator && (!peerEntry.dc || peerEntry.dc.readyState !== 'open')) {
+          bindDataChannel(peerEntry.pc.createDataChannel('aethertunnel-lane-0', { ordered: false }), peerEntry);
+          const offer = await peerEntry.pc.createOffer();
+          await peerEntry.pc.setLocalDescription(offer);
           sendCloudCandidate(targetPeer, {
             kind: 'webrtc:signal',
             signalType: 'offer',
@@ -342,57 +406,71 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       } catch {}
     }
 
+    function upsertRoomPeer(src, type, label) {
+      let existing = peersMap.get(src);
+      if (!existing) {
+        if (peersMap.size >= MAX_ROOM_PEERS - 1) {
+          return null;
+        }
+        existing = { id: src, type, label: label || src.slice(-8), lastSeen: Date.now(), pc: null, dc: null };
+        peersMap.set(src, existing);
+        return { peer: existing, isNew: true };
+      }
+      existing.lastSeen = Date.now();
+      if (label) existing.label = label;
+      return { peer: existing, isNew: false };
+    }
+
     function handleBusMessage(rawJson) {
       let msg;
       try { msg = JSON.parse(rawJson); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
       const src = typeof msg.src === 'string' ? msg.src : '';
       if (!src || src === myId) return;
-      if (msg.dst && msg.dst !== '*' && msg.dst !== myId && !String(msg.dst).startsWith('aethertunnel-v1-') && !String(msg.dst).startsWith('aethertunnel-web-')) return;
+      if (msg.dst && msg.dst !== '*' && msg.dst !== myId) return;
 
       const p = msg.payload || msg;
       if (!p || typeof p !== 'object') return;
 
-      if (p.kind === 'exe:hello') {
-        const isNew = exePeerId !== src || (Date.now() - lastExeSeen > 9000);
-        exePeerId = src;
-        lastExeSeen = Date.now();
-        updatePeerPresenceUi(true, 'Windows .EXE (' + src + ')', activeRoom);
-        if (isNew) {
+      if (p.kind === 'exe:hello' || p.kind === 'exe:hello-reply') {
+        const res = upsertRoomPeer(src, 'exe', p.displayName || ('Windows .EXE (' + src.slice(-6) + ')'));
+        if (!res) return;
+        updatePeerPresenceUi(true, res.peer.label, activeRoom);
+        if (p.kind === 'exe:hello' && res.isNew) {
           sendCloudCandidate(src, { kind: 'browser:hello', roomCode: activeRoom });
         }
         return;
       }
 
       if (p.kind === 'browser:hello' || p.kind === 'browser:hello-ack' || p.kind === 'web:hello') {
-        const isNew = remoteBrowserId !== src || (Date.now() - lastBrowserSeen > 9000);
-        remoteBrowserId = src;
-        lastBrowserSeen = Date.now();
-        updatePeerPresenceUi(true, 'Browser Peer (' + src + ')', activeRoom);
-        if (p.kind === 'browser:hello' && isNew) {
+        const res = upsertRoomPeer(src, 'browser', p.displayName || ('Selain (' + src.slice(-6) + ')'));
+        if (!res) return;
+        updatePeerPresenceUi(true, res.peer.label, activeRoom);
+        if (p.kind === 'browser:hello' && res.isNew) {
           sendCloudCandidate(src, { kind: 'browser:hello-ack', roomCode: activeRoom });
         }
-        if (myId < src && (!dc || dc.readyState !== 'open')) {
+        if (myId < src && (!res.peer.dc || res.peer.dc.readyState !== 'open')) {
           ensureWebRtc(true, src);
         }
         return;
       }
 
       if (p.kind === 'webrtc:signal') {
-        remoteBrowserId = src;
-        lastBrowserSeen = Date.now();
+        const res = upsertRoomPeer(src, 'browser', 'Selain (' + src.slice(-6) + ')');
+        if (!res) return;
+        const peerEntry = res.peer;
         (async () => {
           try {
             if (p.signalType === 'offer' && p.sdp) {
               await ensureWebRtc(false, src);
-              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
+              await peerEntry.pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+              const answer = await peerEntry.pc.createAnswer();
+              await peerEntry.pc.setLocalDescription(answer);
               sendCloudCandidate(src, { kind: 'webrtc:signal', signalType: 'answer', sdp: answer });
-            } else if (p.signalType === 'answer' && p.sdp && pc) {
-              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
-            } else if (p.signalType === 'candidate' && p.candidate && pc) {
-              await pc.addIceCandidate(new RTCIceCandidate(p.candidate));
+            } else if (p.signalType === 'answer' && p.sdp && peerEntry.pc) {
+              await peerEntry.pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            } else if (p.signalType === 'candidate' && p.candidate && peerEntry.pc) {
+              await peerEntry.pc.addIceCandidate(new RTCIceCandidate(p.candidate));
             }
           } catch {}
         })();
@@ -408,8 +486,8 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         return;
       }
 
-      if (p.kind === 'exe:resume-ack' || p.kind === 'file:resume-ack') {
-        handleControlJson(p);
+      if (p.kind === 'exe:resume-ack' || p.kind === 'file:resume-ack' || p.kind === 'browser:resume-ack') {
+        handleControlJson(p, src);
         return;
       }
 
@@ -520,7 +598,13 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     }
 
     async function connectRoom() {
-      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'default';
+      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (!code) {
+        activeRoom = '';
+        activeTopic = '';
+        document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+        return;
+      }
       const pass = document.getElementById('pass-input').value;
       activeRoom = code;
       activeTopic = 'aethertunnel/v1/room/' + code;
@@ -528,10 +612,10 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
       for (const s of mqttSockets) { try { s.close(); } catch {} }
       mqttSockets = [];
-      if (pc) { try { pc.close(); } catch {} pc = null; }
-      dc = null;
-      remoteBrowserId = '';
-      exePeerId = '';
+      for (const p of peersMap.values()) {
+        try { if (p.pc) p.pc.close(); } catch {}
+      }
+      peersMap.clear();
       updatePeerPresenceUi(false, '', code);
 
       for (const url of BROKERS) {
@@ -548,38 +632,108 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         }
       }
       const now = Date.now();
-      if (dc && dc.readyState === 'open') {
-        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Connected') + ')', activeRoom);
-      } else if (exePeerId && now - lastExeSeen < 10000) {
-        updatePeerPresenceUi(true, 'Windows .EXE (' + exePeerId + ')', activeRoom);
-      } else if (remoteBrowserId && now - lastBrowserSeen < 10000) {
-        updatePeerPresenceUi(true, 'Browser Peer (' + remoteBrowserId + ')', activeRoom);
-      } else {
+      let pruned = false;
+      for (const [pid, peer] of peersMap.entries()) {
+        const dcOpen = peer.dc && peer.dc.readyState === 'open';
+        if (!dcOpen && now - peer.lastSeen > 12000) {
+          try { if (peer.pc) peer.pc.close(); } catch {}
+          peersMap.delete(pid);
+          pruned = true;
+        }
+      }
+      if (peersMap.size > 0) {
+        updatePeerPresenceUi(true, peersMap.size + ' käyttäjää', activeRoom);
+      } else if (pruned || peersMap.size === 0) {
         updatePeerPresenceUi(false, '', activeRoom);
       }
     }, 2200);
 
     document.getElementById('connect-btn').addEventListener('click', connectRoom);
+    document.getElementById('pause-btn').addEventListener('click', togglePauseState);
     document.getElementById('file-input').addEventListener('change', async (e) => {
       const files = e.target.files;
       if (!files.length) return;
       const file = files[0];
-      const hasWebRtc = dc && dc.readyState === 'open';
-      const hasExeOrCloudPeer = (exePeerId && Date.now() - lastExeSeen < 12000) || (remoteBrowserId && Date.now() - lastBrowserSeen < 12000);
+      const targetId = (document.getElementById('target-peer-select') && document.getElementById('target-peer-select').value) || '*';
+      const targetPeers = targetId === '*'
+        ? Array.from(peersMap.values())
+        : (peersMap.has(targetId) ? [peersMap.get(targetId)] : []);
 
-      if (!hasWebRtc && !hasExeOrCloudPeer) {
-        renderStatus('Wait for a remote peer to connect to room "' + activeRoom + '" first.');
+      if (targetPeers.length === 0) {
+        renderStatus('Valittu vastaanottaja ei ole paikalla huoneessa "' + activeRoom + '".');
         return;
       }
 
-      const startedAt = performance.now();
+      const webrtcPeers = targetPeers.filter(p => p.dc && p.dc.readyState === 'open');
+      const bridgePeers = targetPeers.filter(p => !(p.dc && p.dc.readyState === 'open'));
 
-      if (!hasWebRtc && hasExeOrCloudPeer) {
-        const dst = exePeerId || remoteBrowserId;
-        const isExe = Boolean(exePeerId);
+      let startedAt = performance.now();
+
+      if (webrtcPeers.length > 0) {
+        const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
+        const chunkSize = chunkKb * 1024;
+        const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+        const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
+
+        const resumePromise = new Promise(resolve => {
+          pendingResumeResolver = resolve;
+          setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 650);
+        });
+
+        const metaMsg = JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' });
+        for (const p of webrtcPeers) {
+          try { p.dc.send(metaMsg); } catch {}
+        }
+        const startChunk = Math.max(0, Math.min(await resumePromise, totalChunks));
+        const batchSize = 32;
+
+        for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
+          if (transferPaused) {
+            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((bStart / totalChunks) * 100) + '%)');
+            await waitWhilePaused((ms) => { startedAt += ms; });
+          }
+          const bEnd = Math.min(totalChunks, bStart + batchSize);
+          const slab = await file.slice(bStart * chunkSize, Math.min(file.size, bEnd * chunkSize)).arrayBuffer();
+
+          const frames = await Promise.all(Array.from({ length: bEnd - bStart }, async (_, idx) => {
+            const cIdx = bStart + idx;
+            const lStart = idx * chunkSize;
+            const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
+            const iv = new Uint8Array(12);
+            crypto.getRandomValues(iv);
+            new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
+            const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
+            const frame = new Uint8Array(24 + enc.byteLength);
+            const hv = new DataView(frame.buffer);
+            hv.setUint32(0, MAGIC_AETH, false);
+            hv.setUint32(4, transferNumId >>> 0, false);
+            hv.setUint32(8, cIdx >>> 0, false);
+            frame.set(iv, 12);
+            frame.set(new Uint8Array(enc), 24);
+            return frame.buffer;
+          }));
+
+          for (const frame of frames) {
+            for (const p of webrtcPeers) {
+              while (p.dc && p.dc.readyState === 'open' && p.dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
+                await new Promise(r => setTimeout(r, 4));
+              }
+              try { if (p.dc && p.dc.readyState === 'open') p.dc.send(frame.slice(0)); } catch {}
+            }
+          }
+
+          const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
+          const mbps = (Math.min(file.size, bEnd * chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
+          renderStatus('Streaming Encrypted (' + webrtcPeers.length + ' peers): ' + file.name + ' (' + Math.round((bEnd / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
+        }
+      }
+
+      for (const bp of bridgePeers) {
+        const dst = bp.id;
+        const isExe = bp.type === 'exe';
         const cSize = 49152;
         const totalChunks = Math.max(1, Math.ceil(file.size / cSize));
-        const fileId = 'f-' + Date.now();
+        const fileId = 'f-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5);
 
         const resumePromise = new Promise(resolve => {
           pendingResumeResolver = resolve;
@@ -597,6 +751,10 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
         let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
         for (let off = cIdx * cSize; off < file.size; off += cSize) {
+          if (transferPaused) {
+            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '%)');
+            await waitWhilePaused((ms) => { startedAt += ms; });
+          }
           const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
           const bytes = new Uint8Array(buf);
           let bin = '';
@@ -610,7 +768,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           cIdx++;
           const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
           const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
-          renderStatus('Sending via Wormhole Bridge: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
+          renderStatus('Sending to ' + bp.label + ': ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
           if (cIdx % 8 === 0) {
             await new Promise(resolve => {
               cloudAckResolver = resolve;
@@ -619,57 +777,6 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           }
         }
         sendCloudCandidate(dst, { kind: isExe ? 'exe:file-end' : 'browser:file-end', fileId });
-        const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
-        renderStatus('Completed & Verified: ' + file.name + ' (' + (file.size / (1024 * 1024) / totalElapsed).toFixed(2) + ' MB/s average)');
-        return;
-      }
-
-      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
-      const chunkSize = chunkKb * 1024;
-      const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-      const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
-
-      const resumePromise = new Promise(resolve => {
-        pendingResumeResolver = resolve;
-        setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 650);
-      });
-
-      dc.send(JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' }));
-      const startChunk = Math.max(0, Math.min(await resumePromise, totalChunks));
-      const batchSize = 32;
-
-      for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
-        const bEnd = Math.min(totalChunks, bStart + batchSize);
-        const slab = await file.slice(bStart * chunkSize, Math.min(file.size, bEnd * chunkSize)).arrayBuffer();
-
-        const frames = await Promise.all(Array.from({ length: bEnd - bStart }, async (_, idx) => {
-          const cIdx = bStart + idx;
-          const lStart = idx * chunkSize;
-          const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
-          const iv = new Uint8Array(12);
-          crypto.getRandomValues(iv);
-          new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
-          const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
-          const frame = new Uint8Array(24 + enc.byteLength);
-          const hv = new DataView(frame.buffer);
-          hv.setUint32(0, MAGIC_AETH, false);
-          hv.setUint32(4, transferNumId >>> 0, false);
-          hv.setUint32(8, cIdx >>> 0, false);
-          frame.set(iv, 12);
-          frame.set(new Uint8Array(enc), 24);
-          return frame.buffer;
-        }));
-
-        for (const frame of frames) {
-          while (dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
-            await new Promise(r => setTimeout(r, 4));
-          }
-          dc.send(frame);
-        }
-
-        const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
-        const mbps = (Math.min(file.size, bEnd * chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
-        renderStatus('Streaming Encrypted: ' + file.name + ' (' + Math.round((bEnd / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
       }
 
       const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
@@ -677,7 +784,11 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       renderStatus('Completed & Verified: ' + file.name + ' (' + finalMbps + ' MB/s average)');
     });
 
-    connectRoom();
+    if (document.getElementById('room-input').value.trim()) {
+      connectRoom();
+    } else {
+      document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+    }
   </script>
 </body>
 </html>`;
@@ -793,10 +904,10 @@ export function triggerBrowserDownload(
 // - Dual Browser Bridge: Localhost Kernel WebSocket (127.0.0.1:45889) + Universal WSS Wormhole Cloud Bridge (wss://0.peerjs.com)
 // - Direct Winsock2 Kernel TCP (.EXE <-> .EXE, 4 MB blocks, 4x Parallel AES-NI)
 export function downloadNativeWindowsKernelExe(
-  defaultRoomCode: string = '742-cobalt-falcon',
+  defaultRoomCode: string = '',
   _cloudWsUrl?: string
 ) {
-  const safeRoom = (defaultRoomCode || '742-cobalt-falcon').replace(/[^a-z0-9-]/gi, '').toLowerCase() || '742-cobalt-falcon';
+  const safeRoom = (defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase();
   const fallbackWs = typeof window !== 'undefined' && window.location && window.location.origin
     ? window.location.origin.replace(/^http/, 'ws') + '/ws-tunnel'
     : '';
@@ -880,14 +991,19 @@ namespace AetherTunnelNative
         private const int CLOUD_CHUNK_SIZE = 49152; // 48 KB Binary / 64 KB Base64 Frame for WSS Cloud Bridge
         private const int PARALLEL_WORKERS = 4; // 4x Parallel Hardware AES-NI Workers per Wave
         private const int UDP_DISCOVERY_PORT = 45888;
+        private const int MAX_ROOM_PEERS = 8;
 
         private readonly string instanceId = Guid.NewGuid().ToString("N").Substring(0, 12);
         private const string DEFAULT_CLOUD_WS_URL = "${safeCloudWs}";
         private volatile string currentRoomCode = "${safeRoom}";
+        private volatile string localDisplayName = "";
+        private volatile string selectedTargetPeerId = "*";
+        private volatile bool roomFullRejected = false;
         private bool suppressRoomBroadcast = false;
         private float dpiScale = 1.0f;
 
         private TextBox txtRoomCode;
+        private TextBox txtDisplayName;
         private TextBox txtPassphrase;
         private Panel pnlRoomPresence;
         private Label lblRoomPresence;
@@ -895,11 +1011,22 @@ namespace AetherTunnelNative
         private Label lblStatusBadge;
         private Label lblLocalEndpoint;
         private Label lblSpeedMetric;
+        private Label lblTransferStats;
         private Label lblProgressDetail;
         private ProgressBar progressBar;
+        private ComboBox cmbTargetPeer;
+        private readonly List<string> targetPeerIds = new List<string>();
+        private Label lblQueueSummary;
+        private ListBox lstQueue;
+        private Button btnRemoveQueue;
+        private Button btnClearQueue;
+        private Button btnPauseResume;
+        private CheckBox chkAutoAccept;
         private ListBox lstLog;
         private Button btnSendFile;
+        private Button btnSendFolder;
         private FolderBrowserDialog folderDialog;
+        private FolderBrowserDialog folderPickDialog;
 
         private TcpListener tcpListener;
         private UdpClient udpDiscovery;
@@ -934,6 +1061,9 @@ namespace AetherTunnelNative
         private NetworkStream activePeerStream;
         private readonly object streamWriteLock = new object();
         private volatile int kernelTcpResumeChunk = 0;
+        private volatile bool kernelTcpWaitAccept = false;
+        private volatile bool kernelTcpRejected = false;
+        private volatile bool kernelTcpResumeReceived = false;
         private readonly AutoResetEvent kernelTcpResumeEvent = new AutoResetEvent(false);
 
         // 1B. Native .EXE <-> .EXE STUN NAT-Punched Direct UDP Peer (Token-Bucket Paced 600-5000 Mbit/s + Real-Time NACK)
@@ -944,8 +1074,18 @@ namespace AetherTunnelNative
         private volatile int udpPeerUniqueAcked = 0;
         private volatile int udpPeerMeasuredMbps = 0;
         private volatile int udpPeerResumeChunk = 0;
-        private volatile bool udpPeerDoneConfirmed = false;
+        private volatile bool udpTransferDoneAcked = false;
         private volatile bool udpNeedStartResend = false;
+        private volatile bool udpWaitAcceptReceived = false;
+        private volatile bool udpTransferRejected = false;
+        private volatile bool udpResumeReceived = false;
+        private volatile int udpPromptState = 0; // 0=idle, 1=prompting, 2=accepted, 3=rejected
+        private volatile string udpPromptKey = "";
+        private volatile string udpPromptAcceptedKey = "";
+        private int udpPromptRejectTick = 0;
+        private volatile bool udpPendingAcceptOpen = false;
+        private volatile string udpPendingAcceptHeader = "";
+        private IPEndPoint udpPendingAcceptEp = null;
         private double dynamicUdpBitrateMbps = 1.0; // Self-tuning Auto Dynamic P2P Pacer (1–5000 Mbit/s)
         private double udpBestRxMbps = 1.0;
         private double udpCongestionCeilingMbps = 0.0;
@@ -962,9 +1102,54 @@ namespace AetherTunnelNative
         private readonly ConcurrentDictionary<int, int> udpSenderChunkLastSentTick = new ConcurrentDictionary<int, int>();
         private readonly AutoResetEvent udpAckEvent = new AutoResetEvent(false);
         private readonly AutoResetEvent udpResumeEvent = new AutoResetEvent(false);
-        private readonly AutoResetEvent udpNackEvent = new AutoResetEvent(false);
         private readonly ConcurrentQueue<byte[]> udpRxDataQueue = new ConcurrentQueue<byte[]>();
         private readonly AutoResetEvent udpRxDataEvent = new AutoResetEvent(false);
+        private volatile bool udpRxStartPending = false;
+        private volatile bool udpRxEndPending = false;
+        private volatile string udpPendingStartHeader = "";
+        private IPEndPoint udpPendingStartEp = null;
+        private volatile bool autoAcceptAllIncoming = false;
+        private readonly object incomingPromptLock = new object();
+        private sealed class TransferQueueEntry
+        {
+            public string Id;
+            public string FullPath;
+            public string DisplayName;
+            public long FileSize;
+            public string Status;
+            public string TargetPeerId;
+            public string TargetLabel;
+        }
+        private sealed class RoomPeerInfo
+        {
+            public string PeerId;
+            public string DisplayName;
+            public string ClientType;
+            public string CloudPeerId;
+            public string WanUdpEp;
+            public string LanUdpEp;
+            public string WanV6UdpEp;
+            public string PredWanUdpEp;
+            public string LanTcpEp;
+            public int NatSym;
+            public int NatDelta;
+            public int UpnpTcp;
+            public IPEndPoint ActiveUdpEp;
+            public DateTime LastUdpSeen = DateTime.MinValue;
+            public TcpClient TcpClientConn;
+            public NetworkStream TcpStream;
+            public DateTime LastTcpSeen = DateTime.MinValue;
+            public SignalingChannel PreferredCloudChannel;
+            public DateTime LastCloudSeen = DateTime.MinValue;
+        }
+        private readonly ConcurrentDictionary<string, RoomPeerInfo> roomPeers = new ConcurrentDictionary<string, RoomPeerInfo>();
+        private readonly List<TransferQueueEntry> transferQueue = new List<TransferQueueEntry>();
+        private readonly object transferQueueLock = new object();
+        private readonly AutoResetEvent transferQueueEvent = new AutoResetEvent(false);
+        private readonly HashSet<string> cancelledQueueIds = new HashSet<string>();
+        private volatile string activeQueueTransferId = "";
+        private volatile bool transferPaused = false;
+        private readonly ManualResetEvent transferResumeEvent = new ManualResetEvent(true);
         private readonly HashSet<string> attemptedAutoTcpEndpoints = new HashSet<string>();
         private readonly ThreadLocal<AesCryptoServiceProvider> threadLocalAes = new ThreadLocal<AesCryptoServiceProvider>(delegate() {
             AesCryptoServiceProvider a = new AesCryptoServiceProvider();
@@ -1044,9 +1229,10 @@ namespace AetherTunnelNative
         private string cloudOutPath = "";
         private long cloudExpectedSize = 0;
         private long cloudReceivedBytes = 0;
+        private long cloudSessionStartBytes = 0;
         private Stopwatch cloudRxSw = null;
-        private string activeCloudTopic = "";
         private string activeCloudMyId = "";
+        private string activeCloudTopic = "aethertunnel/v1/room/default";
         private string activeCloudBrowserPeerId = "";
         private string activeCloudExePeerId = "";
         private DateTime lastCloudBrowserSeen = DateTime.MinValue;
@@ -1054,6 +1240,10 @@ namespace AetherTunnelNative
         private volatile bool cloudReconnectRequested = false;
         private readonly AutoResetEvent cloudAckEvent = new AutoResetEvent(false);
         private volatile int cloudResumeChunk = 0;
+        private volatile bool cloudWaitAcceptReceived = false;
+        private volatile bool cloudTransferRejected = false;
+        private volatile bool cloudResumeReceived = false;
+        private volatile string cloudRejectedFileId = "";
         private readonly AutoResetEvent cloudResumeEvent = new AutoResetEvent(false);
 
         private byte[] aesKey = new byte[32];
@@ -1075,14 +1265,21 @@ namespace AetherTunnelNative
 
             this.AutoScaleMode = AutoScaleMode.None;
             this.Text = "AetherTunnel v1.0 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
-            this.ClientSize = new Size(S(980), S(540));
-            this.MinimumSize = new Size(S(880), S(510));
+            this.ClientSize = new Size(S(1020), S(668));
+            this.MinimumSize = new Size(S(920), S(600));
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(9, 13, 22);
             this.ForeColor = Color.FromArgb(241, 245, 249);
             this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
             this.AllowDrop = true;
             this.DoubleBuffered = true;
+            try
+            {
+                string comp = Environment.MachineName;
+                if (!String.IsNullOrEmpty(comp)) localDisplayName = SanitizeJsonText(comp);
+            }
+            catch { }
+            if (String.IsNullOrEmpty(localDisplayName)) localDisplayName = "WinEXE-" + instanceId.Substring(0, 4);
 
             downloadDirectory = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -1160,7 +1357,7 @@ namespace AetherTunnelNative
             Panel leftCard = new Panel();
             leftCard.BackColor = bgCard;
             leftCard.Location = new Point(S(24), S(94));
-            leftCard.Size = new Size(S(436), S(424));
+            leftCard.Size = new Size(S(436), S(552));
             leftCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
 
             Label lblSec1 = CreateCleanLabel(
@@ -1173,7 +1370,7 @@ namespace AetherTunnelNative
             leftCard.Controls.Add(lblSec1);
 
             Label lblCodeTitle = CreateCleanLabel(
-                "Shared Wormhole Code (Pairs with Chrome Browser & LAN .EXE):",
+                "Tunnelin nimi (Kirjoita nimi ja paina Yhdistä):",
                 null,
                 fgMuted,
                 new Point(S(20), S(42)),
@@ -1188,39 +1385,38 @@ namespace AetherTunnelNative
             txtRoomCode.ForeColor = accentSky;
             txtRoomCode.BorderStyle = BorderStyle.FixedSingle;
             txtRoomCode.Location = new Point(S(20), S(64));
-            txtRoomCode.Size = new Size(S(285), S(28));
-            txtRoomCode.TextChanged += delegate {
-                currentRoomCode = txtRoomCode.Text.Trim().ToLowerInvariant();
-                lock (attemptedAutoTcpEndpoints) { attemptedAutoTcpEndpoints.Clear(); }
-                activeUdpPeerEndpoint = null;
-                activeCloudExePeerId = "";
-                activeCloudBrowserPeerId = "";
-                lastCloudExeSeen = DateTime.MinValue;
-                lastCloudBrowserSeen = DateTime.MinValue;
-                remotePeerWanUdp = "";
-                remotePeerLanUdp = "";
-                remotePeerWanV6Udp = "";
-                remotePeerLanTcp = "";
-                remotePeerPredictedWanUdp = "";
-                remotePeerNatSym = 0;
-                remotePeerNatDelta = 0;
-                remotePeerUpnpTcp = 0;
-                lastLoggedPunchTarget = "";
-                DeriveCryptographicKey();
-                BroadcastUdpPresence();
-                if (!suppressRoomBroadcast) NotifyBrowserRoomCode();
-                cloudReconnectRequested = true;
+            txtRoomCode.Size = new Size(S(222), S(28));
+            txtRoomCode.KeyDown += delegate(object sKey, KeyEventArgs eKey) {
+                if (eKey.KeyCode == Keys.Enter)
+                {
+                    eKey.SuppressKeyPress = true;
+                    ConnectToEnteredRoom();
+                }
             };
             leftCard.Controls.Add(txtRoomCode);
 
+            Button btnConnectRoom = new Button();
+            btnConnectRoom.UseMnemonic = false;
+            btnConnectRoom.Text = "Yhdistä";
+            btnConnectRoom.FlatStyle = FlatStyle.Flat;
+            btnConnectRoom.BackColor = accentSky;
+            btnConnectRoom.ForeColor = Color.FromArgb(9, 13, 22);
+            btnConnectRoom.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            btnConnectRoom.Location = new Point(S(248), S(63));
+            btnConnectRoom.Size = new Size(S(88), S(29));
+            btnConnectRoom.Click += delegate {
+                ConnectToEnteredRoom();
+            };
+            leftCard.Controls.Add(btnConnectRoom);
+
             Button btnNewCode = new Button();
             btnNewCode.UseMnemonic = false;
-            btnNewCode.Text = "New Code";
+            btnNewCode.Text = "Arvo";
             btnNewCode.FlatStyle = FlatStyle.Flat;
             btnNewCode.BackColor = Color.FromArgb(30, 41, 59);
             btnNewCode.ForeColor = Color.White;
-            btnNewCode.Location = new Point(S(313), S(63));
-            btnNewCode.Size = new Size(S(103), S(29));
+            btnNewCode.Location = new Point(S(342), S(63));
+            btnNewCode.Size = new Size(S(74), S(29));
             btnNewCode.Click += delegate {
                 string[] words = new string[] { "cobalt", "falcon", "nebula", "quartz", "vortex", "cipher", "zenith", "aurora", "photon", "obsidian" };
                 Random r = new Random();
@@ -1235,8 +1431,8 @@ namespace AetherTunnelNative
             pnlRoomPresence.Size = new Size(S(396), S(36));
 
             lblRoomPresence = CreateCleanLabel(
-                "[1/2 PEERS] Ei toista peeriä huoneessa — Odotetaan paria...",
-                new Font("Consolas", 8.8f, FontStyle.Bold),
+                String.IsNullOrEmpty("${safeRoom}") ? "Kirjoita tunnelin nimi ja paina Yhdistä" : "[1/8 KÄYTTÄJÄÄ] Ei muita käyttäjiä huoneessa...",
+                new Font("Consolas", 8.6f, FontStyle.Bold),
                 Color.FromArgb(251, 191, 36),
                 new Point(S(8), S(9)),
                 true
@@ -1244,11 +1440,34 @@ namespace AetherTunnelNative
             pnlRoomPresence.Controls.Add(lblRoomPresence);
             leftCard.Controls.Add(pnlRoomPresence);
 
+            Label lblNameTitle = CreateCleanLabel(
+                "Oma näyttönimi huoneessa (max 8 käyttäjää):",
+                null,
+                fgMuted,
+                new Point(S(20), S(140)),
+                true
+            );
+            leftCard.Controls.Add(lblNameTitle);
+
+            txtDisplayName = new TextBox();
+            txtDisplayName.Text = localDisplayName;
+            txtDisplayName.Font = new Font("Segoe UI", 9.2f);
+            txtDisplayName.BackColor = bgInput;
+            txtDisplayName.ForeColor = Color.White;
+            txtDisplayName.BorderStyle = BorderStyle.FixedSingle;
+            txtDisplayName.Location = new Point(S(20), S(160));
+            txtDisplayName.Size = new Size(S(396), S(25));
+            txtDisplayName.TextChanged += delegate {
+                string clean = SanitizeJsonText(txtDisplayName.Text);
+                localDisplayName = clean.Length > 0 ? clean : ("WinEXE-" + instanceId.Substring(0, 4));
+            };
+            leftCard.Controls.Add(txtDisplayName);
+
             Label lblPassTitle = CreateCleanLabel(
                 "Optional E2EE Passphrase (PBKDF2-HMAC-SHA256 Salt):",
                 null,
                 fgMuted,
-                new Point(S(20), S(142)),
+                new Point(S(20), S(192)),
                 true
             );
             leftCard.Controls.Add(lblPassTitle);
@@ -1259,8 +1478,8 @@ namespace AetherTunnelNative
             txtPassphrase.BackColor = bgInput;
             txtPassphrase.ForeColor = Color.White;
             txtPassphrase.BorderStyle = BorderStyle.FixedSingle;
-            txtPassphrase.Location = new Point(S(20), S(164));
-            txtPassphrase.Size = new Size(S(396), S(26));
+            txtPassphrase.Location = new Point(S(20), S(212));
+            txtPassphrase.Size = new Size(S(396), S(25));
             txtPassphrase.TextChanged += delegate { DeriveCryptographicKey(); };
             leftCard.Controls.Add(txtPassphrase);
 
@@ -1268,7 +1487,7 @@ namespace AetherTunnelNative
                 "E2EE Key Fingerprint (Matches Chrome Browser 1:1):",
                 null,
                 fgMuted,
-                new Point(S(20), S(198)),
+                new Point(S(20), S(244)),
                 true
             );
             leftCard.Controls.Add(lblFpCaption);
@@ -1277,7 +1496,7 @@ namespace AetherTunnelNative
                 "Deriving...",
                 new Font("Consolas", 11f, FontStyle.Bold),
                 accentEmerald,
-                new Point(S(20), S(218)),
+                new Point(S(20), S(264)),
                 true
             );
             leftCard.Controls.Add(lblKeyFingerprint);
@@ -1286,29 +1505,29 @@ namespace AetherTunnelNative
                 "Your Direct Kernel TCP & Local Browser Bridge Address:",
                 null,
                 fgMuted,
-                new Point(S(20), S(248)),
+                new Point(S(20), S(292)),
                 true
             );
             leftCard.Controls.Add(lblLocalCaption);
 
             lblLocalEndpoint = CreateCleanLabel(
                 "Starting Winsock2 listener...",
-                new Font("Consolas", 9.2f, FontStyle.Bold),
+                new Font("Consolas", 9.0f, FontStyle.Bold),
                 Color.FromArgb(226, 232, 240),
-                new Point(S(20), S(268)),
+                new Point(S(20), S(312)),
                 false
             );
-            lblLocalEndpoint.Size = new Size(S(396), S(38));
+            lblLocalEndpoint.Size = new Size(S(396), S(36));
             leftCard.Controls.Add(lblLocalEndpoint);
 
             Label lblSaveDir = CreateCleanLabel(
                 "Incoming files save to: " + downloadDirectory,
-                new Font("Segoe UI", 8.8f),
+                new Font("Segoe UI", 8.6f),
                 fgMuted,
-                new Point(S(20), S(318)),
+                new Point(S(20), S(354)),
                 false
             );
-            lblSaveDir.Size = new Size(S(396), S(36));
+            lblSaveDir.Size = new Size(S(396), S(34));
             leftCard.Controls.Add(lblSaveDir);
 
             Button btnChangeDir = new Button();
@@ -1317,8 +1536,8 @@ namespace AetherTunnelNative
             btnChangeDir.FlatStyle = FlatStyle.Flat;
             btnChangeDir.BackColor = Color.FromArgb(30, 41, 59);
             btnChangeDir.ForeColor = Color.White;
-            btnChangeDir.Location = new Point(S(20), S(362));
-            btnChangeDir.Size = new Size(S(190), S(36));
+            btnChangeDir.Location = new Point(S(20), S(394));
+            btnChangeDir.Size = new Size(S(190), S(34));
             btnChangeDir.Click += delegate {
                 if (folderDialog == null) folderDialog = new FolderBrowserDialog();
                 folderDialog.SelectedPath = downloadDirectory;
@@ -1336,19 +1555,43 @@ namespace AetherTunnelNative
             btnOpenDir.FlatStyle = FlatStyle.Flat;
             btnOpenDir.BackColor = Color.FromArgb(30, 41, 59);
             btnOpenDir.ForeColor = accentSky;
-            btnOpenDir.Location = new Point(S(222), S(362));
-            btnOpenDir.Size = new Size(S(194), S(36));
+            btnOpenDir.Location = new Point(S(222), S(394));
+            btnOpenDir.Size = new Size(S(194), S(34));
             btnOpenDir.Click += delegate {
                 try { Process.Start("explorer.exe", downloadDirectory); } catch { }
             };
             leftCard.Controls.Add(btnOpenDir);
+
+            chkAutoAccept = new CheckBox();
+            chkAutoAccept.UseMnemonic = false;
+            chkAutoAccept.Text = "Hyväksy saapuvat siirrot automaattisesti";
+            chkAutoAccept.ForeColor = Color.FromArgb(203, 213, 225);
+            chkAutoAccept.BackColor = bgCard;
+            chkAutoAccept.Font = new Font("Segoe UI", 9.0f, FontStyle.Regular);
+            chkAutoAccept.Location = new Point(S(20), S(438));
+            chkAutoAccept.Size = new Size(S(396), S(26));
+            chkAutoAccept.Checked = false;
+            chkAutoAccept.CheckedChanged += delegate {
+                autoAcceptAllIncoming = chkAutoAccept.Checked;
+            };
+            leftCard.Controls.Add(chkAutoAccept);
+
+            Label lblConfirmHint = CreateCleanLabel(
+                "Kun pois päältä, jokainen saapuva tiedosto vaatii vastaanottajan hyväksynnän.",
+                new Font("Segoe UI", 8.2f),
+                fgMuted,
+                new Point(S(20), S(466)),
+                false
+            );
+            lblConfirmHint.Size = new Size(S(396), S(32));
+            leftCard.Controls.Add(lblConfirmHint);
 
             this.Controls.Add(leftCard);
 
             Panel rightCard = new Panel();
             rightCard.BackColor = bgCard;
             rightCard.Location = new Point(S(478), S(94));
-            rightCard.Size = new Size(S(478), S(424));
+            rightCard.Size = new Size(S(518), S(552));
             rightCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
             Label lblSec2 = CreateCleanLabel(
@@ -1362,49 +1605,163 @@ namespace AetherTunnelNative
 
             btnSendFile = new Button();
             btnSendFile.UseMnemonic = false;
-            btnSendFile.Text = "SELECT FILE(S) OR DRAG & DROP HERE TO SEND\\n(Auto Dynamic P2P Pacing · Resumable .part Streamer)";
+            btnSendFile.Text = "+ Lisää tiedosto(ja) jonoon\\n(Tai raahaa & pudota tiedostoja / kansioita tähän)";
             btnSendFile.FlatStyle = FlatStyle.Flat;
             btnSendFile.BackColor = Color.FromArgb(14, 28, 48);
             btnSendFile.ForeColor = accentSky;
-            btnSendFile.Font = new Font("Segoe UI Semibold", 9.8f, FontStyle.Bold);
-            btnSendFile.Location = new Point(S(20), S(44));
-            btnSendFile.Size = new Size(S(438), S(82));
+            btnSendFile.Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold);
+            btnSendFile.Location = new Point(S(20), S(40));
+            btnSendFile.Size = new Size(S(248), S(52));
             btnSendFile.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnSendFile.Click += OnSelectFilesClicked;
             rightCard.Controls.Add(btnSendFile);
 
+            btnSendFolder = new Button();
+            btnSendFolder.UseMnemonic = false;
+            btnSendFolder.Text = "+ Lisää kansio jonoon\\n(Kaikki alikansiot)";
+            btnSendFolder.FlatStyle = FlatStyle.Flat;
+            btnSendFolder.BackColor = Color.FromArgb(16, 36, 42);
+            btnSendFolder.ForeColor = accentEmerald;
+            btnSendFolder.Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold);
+            btnSendFolder.Location = new Point(S(276), S(40));
+            btnSendFolder.Size = new Size(S(222), S(52));
+            btnSendFolder.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnSendFolder.Click += OnSelectFolderClicked;
+            rightCard.Controls.Add(btnSendFolder);
+
+            Label lblTargetCap = CreateCleanLabel(
+                "Kenelle lähetetään:",
+                new Font("Segoe UI", 8.8f, FontStyle.Bold),
+                fgMuted,
+                new Point(S(20), S(101)),
+                true
+            );
+            rightCard.Controls.Add(lblTargetCap);
+
+            cmbTargetPeer = new ComboBox();
+            cmbTargetPeer.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbTargetPeer.FlatStyle = FlatStyle.Flat;
+            cmbTargetPeer.BackColor = bgInput;
+            cmbTargetPeer.ForeColor = accentSky;
+            cmbTargetPeer.Font = new Font("Consolas", 9.0f, FontStyle.Bold);
+            cmbTargetPeer.Location = new Point(S(148), S(98));
+            cmbTargetPeer.Size = new Size(S(350), S(24));
+            cmbTargetPeer.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            cmbTargetPeer.Items.Add("Kaikki huoneessa (0 käyttäjää)");
+            targetPeerIds.Clear();
+            targetPeerIds.Add("*");
+            cmbTargetPeer.SelectedIndex = 0;
+            cmbTargetPeer.SelectedIndexChanged += delegate {
+                int idx = cmbTargetPeer.SelectedIndex;
+                if (idx >= 0 && idx < targetPeerIds.Count)
+                {
+                    selectedTargetPeerId = targetPeerIds[idx];
+                }
+            };
+            rightCard.Controls.Add(cmbTargetPeer);
+
             lblSpeedMetric = CreateCleanLabel(
                 "0.00 MB/s (0.00 Gbps)",
-                new Font("Consolas", 15f, FontStyle.Bold),
+                new Font("Consolas", 14.0f, FontStyle.Bold),
                 accentEmerald,
-                new Point(S(20), S(136)),
+                new Point(S(20), S(130)),
                 true
             );
             rightCard.Controls.Add(lblSpeedMetric);
+
+            btnPauseResume = new Button();
+            btnPauseResume.UseMnemonic = false;
+            btnPauseResume.Text = "Pysäytä";
+            btnPauseResume.FlatStyle = FlatStyle.Flat;
+            btnPauseResume.BackColor = Color.FromArgb(45, 34, 14);
+            btnPauseResume.ForeColor = Color.FromArgb(251, 191, 36);
+            btnPauseResume.Font = new Font("Segoe UI Semibold", 8.8f, FontStyle.Bold);
+            btnPauseResume.Location = new Point(S(366), S(128));
+            btnPauseResume.Size = new Size(S(132), S(26));
+            btnPauseResume.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnPauseResume.Click += OnPauseResumeClicked;
+            rightCard.Controls.Add(btnPauseResume);
+
+            lblTransferStats = CreateCleanLabel(
+                "Siirretty: 0 B / 0 B  |  Keskinopeus: 0.00 MB/s (0.00 Gbps)",
+                new Font("Consolas", 9.0f, FontStyle.Bold),
+                Color.FromArgb(125, 211, 252),
+                new Point(S(20), S(159)),
+                false
+            );
+            lblTransferStats.Size = new Size(S(478), S(20));
+            lblTransferStats.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            rightCard.Controls.Add(lblTransferStats);
 
             lblProgressDetail = CreateCleanLabel(
                 "Auto Dynamic P2P Pacing active — Enter shared Wormhole Code to pair automatically.",
                 null,
                 fgMuted,
-                new Point(S(20), S(166)),
+                new Point(S(20), S(181)),
                 false
             );
-            lblProgressDetail.Size = new Size(S(438), S(22));
+            lblProgressDetail.Size = new Size(S(478), S(20));
             lblProgressDetail.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lblProgressDetail);
 
             progressBar = new ProgressBar();
-            progressBar.Location = new Point(S(20), S(192));
-            progressBar.Size = new Size(S(438), S(18));
+            progressBar.Location = new Point(S(20), S(204));
+            progressBar.Size = new Size(S(478), S(15));
             progressBar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             progressBar.Maximum = 1000;
             rightCard.Controls.Add(progressBar);
+
+            lblQueueSummary = CreateCleanLabel(
+                "Siirtojono (0 odottaa · 0 valmis)",
+                new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold),
+                Color.White,
+                new Point(S(20), S(227)),
+                true
+            );
+            rightCard.Controls.Add(lblQueueSummary);
+
+            btnRemoveQueue = new Button();
+            btnRemoveQueue.UseMnemonic = false;
+            btnRemoveQueue.Text = "Poista valittu";
+            btnRemoveQueue.FlatStyle = FlatStyle.Flat;
+            btnRemoveQueue.BackColor = Color.FromArgb(30, 41, 59);
+            btnRemoveQueue.ForeColor = Color.FromArgb(248, 113, 113);
+            btnRemoveQueue.Font = new Font("Segoe UI", 8.2f);
+            btnRemoveQueue.Location = new Point(S(304), S(224));
+            btnRemoveQueue.Size = new Size(S(92), S(23));
+            btnRemoveQueue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnRemoveQueue.Click += OnRemoveSelectedQueueClicked;
+            rightCard.Controls.Add(btnRemoveQueue);
+
+            btnClearQueue = new Button();
+            btnClearQueue.UseMnemonic = false;
+            btnClearQueue.Text = "Tyhjennä valmiit";
+            btnClearQueue.FlatStyle = FlatStyle.Flat;
+            btnClearQueue.BackColor = Color.FromArgb(30, 41, 59);
+            btnClearQueue.ForeColor = fgMuted;
+            btnClearQueue.Font = new Font("Segoe UI", 8.2f);
+            btnClearQueue.Location = new Point(S(402), S(224));
+            btnClearQueue.Size = new Size(S(96), S(23));
+            btnClearQueue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnClearQueue.Click += OnClearQueueClicked;
+            rightCard.Controls.Add(btnClearQueue);
+
+            lstQueue = new ListBox();
+            lstQueue.BackColor = bgInput;
+            lstQueue.ForeColor = Color.FromArgb(226, 232, 240);
+            lstQueue.Font = new Font("Consolas", 8.6f);
+            lstQueue.BorderStyle = BorderStyle.FixedSingle;
+            lstQueue.HorizontalScrollbar = true;
+            lstQueue.Location = new Point(S(20), S(250));
+            lstQueue.Size = new Size(S(478), S(106));
+            lstQueue.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            rightCard.Controls.Add(lstQueue);
 
             Label lblLogCap = CreateCleanLabel(
                 "Live Kernel Socket & Chrome Browser Wormhole Log:",
                 null,
                 fgMuted,
-                new Point(S(20), S(218)),
+                new Point(S(20), S(364)),
                 true
             );
             rightCard.Controls.Add(lblLogCap);
@@ -1412,11 +1769,11 @@ namespace AetherTunnelNative
             lstLog = new ListBox();
             lstLog.BackColor = bgInput;
             lstLog.ForeColor = Color.FromArgb(203, 213, 225);
-            lstLog.Font = new Font("Consolas", 9f);
+            lstLog.Font = new Font("Consolas", 8.8f);
             lstLog.BorderStyle = BorderStyle.FixedSingle;
             lstLog.HorizontalScrollbar = true;
-            lstLog.Location = new Point(S(20), S(240));
-            lstLog.Size = new Size(S(438), S(164));
+            lstLog.Location = new Point(S(20), S(384));
+            lstLog.Size = new Size(S(478), S(150));
             lstLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lstLog);
 
@@ -1435,6 +1792,7 @@ namespace AetherTunnelNative
             if (lstLog.Items.Count > 250) lstLog.Items.RemoveAt(lstLog.Items.Count - 1);
         }
 
+        // Exact RFC 2898 PBKDF2-HMAC-SHA256 matching WebCrypto deriveTunnelKey() in src/utils/crypto.ts
         private static byte[] Pbkdf2Sha256(byte[] password, byte[] salt, int iterations, int outputBytes)
         {
             using (HMACSHA256 hmac = new HMACSHA256(password))
@@ -1473,11 +1831,227 @@ namespace AetherTunnelNative
             }
         }
 
+        private static string SanitizeJsonText(string raw)
+        {
+            if (String.IsNullOrEmpty(raw)) return "";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < raw.Length && sb.Length < 36; i++)
+            {
+                char c = raw[i];
+                if (c != '"' && c != '\\\\' && c != '\\r' && c != '\\n' && c != '|')
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString().Trim();
+        }
+
+        private RoomPeerInfo UpsertRoomPeer(string key, string displayName, string clientType, out bool isNew, out bool rejectedFull)
+        {
+            isNew = false;
+            rejectedFull = false;
+            if (String.IsNullOrEmpty(key)) return null;
+            RoomPeerInfo existing;
+            if (roomPeers.TryGetValue(key, out existing))
+            {
+                if (!String.IsNullOrEmpty(displayName)) existing.DisplayName = displayName;
+                if (!String.IsNullOrEmpty(clientType)) existing.ClientType = clientType;
+                return existing;
+            }
+            if (roomPeers.Count >= MAX_ROOM_PEERS - 1)
+            {
+                rejectedFull = true;
+                return null;
+            }
+            RoomPeerInfo created = new RoomPeerInfo();
+            created.PeerId = key;
+            created.DisplayName = !String.IsNullOrEmpty(displayName) ? displayName : key;
+            created.ClientType = !String.IsNullOrEmpty(clientType) ? clientType : "exe";
+            if (roomPeers.TryAdd(key, created))
+            {
+                isNew = true;
+                return created;
+            }
+            roomPeers.TryGetValue(key, out existing);
+            return existing;
+        }
+
+        private RoomPeerInfo FindPeerByEndpointOrInstance(string cleanCode, string remoteInst, IPEndPoint remoteEp)
+        {
+            if (!String.IsNullOrEmpty(cleanCode) && !String.IsNullOrEmpty(remoteInst))
+            {
+                string canon = "aethertunnel-exe-" + cleanCode + "-" + remoteInst;
+                RoomPeerInfo byCanon;
+                if (roomPeers.TryGetValue(canon, out byCanon)) return byCanon;
+            }
+            if (remoteEp != null)
+            {
+                string epStr = remoteEp.ToString();
+                string ipOnly = remoteEp.Address.ToString();
+                foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+                {
+                    RoomPeerInfo p = kv.Value;
+                    if (p == null) continue;
+                    if (p.ActiveUdpEp != null && p.ActiveUdpEp.Equals(remoteEp)) return p;
+                    if (p.WanUdpEp == epStr || p.LanUdpEp == epStr) return p;
+                    if (!String.IsNullOrEmpty(ipOnly) && ((p.LanTcpEp != null && p.LanTcpEp.StartsWith(ipOnly + ":")) || (p.WanUdpEp != null && p.WanUdpEp.StartsWith(ipOnly + ":"))))
+                        return p;
+                }
+            }
+            return null;
+        }
+
+        private bool IsPeerActive(RoomPeerInfo p, DateTime utcNow)
+        {
+            if (p == null) return false;
+            bool tcpOk = (p.TcpClientConn != null && p.TcpClientConn.Connected && p.TcpStream != null);
+            bool udpOk = (p.ActiveUdpEp != null && (utcNow - p.LastUdpSeen).TotalSeconds < 14);
+            bool cloudOk = (!String.IsNullOrEmpty(p.CloudPeerId) && !activeSignalingChannels.IsEmpty && (utcNow - p.LastCloudSeen).TotalSeconds < 14);
+            bool localBrOk = (p.ClientType == "local_browser" && activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null);
+            return tcpOk || udpOk || cloudOk || localBrOk;
+        }
+
+        private string GetPeerTransportSummary(RoomPeerInfo p, DateTime utcNow)
+        {
+            if (p == null) return "";
+            if (p.TcpClientConn != null && p.TcpClientConn.Connected && p.TcpStream != null) return "TCP";
+            if (p.ActiveUdpEp != null && (utcNow - p.LastUdpSeen).TotalSeconds < 14) return "UDP P2P";
+            if (p.ClientType == "local_browser" && activeBrowserWsClient != null && activeBrowserWsClient.Connected) return "Localhost WS";
+            if (!String.IsNullOrEmpty(p.CloudPeerId) && (utcNow - p.LastCloudSeen).TotalSeconds < 14) return "Cloud Bridge";
+            return "Yhdistetty";
+        }
+
+        private string GetCurrentTargetLabel(string targetId)
+        {
+            if (String.IsNullOrEmpty(targetId) || targetId == "*") return "Kaikki huoneessa";
+            RoomPeerInfo p;
+            if (roomPeers.TryGetValue(targetId, out p) && !String.IsNullOrEmpty(p.DisplayName))
+                return p.DisplayName;
+            return targetId;
+        }
+
+        private void SyncTargetPeerDropdown()
+        {
+            try
+            {
+                if (cmbTargetPeer == null || this.IsDisposed) return;
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(new Action(SyncTargetPeerDropdown));
+                    return;
+                }
+                DateTime now = DateTime.UtcNow;
+                List<RoomPeerInfo> activeList = new List<RoomPeerInfo>();
+                foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+                {
+                    if (IsPeerActive(kv.Value, now)) activeList.Add(kv.Value);
+                }
+                activeList.Sort(delegate(RoomPeerInfo a, RoomPeerInfo b) {
+                    return String.Compare(a.DisplayName ?? a.PeerId, b.DisplayName ?? b.PeerId, StringComparison.OrdinalIgnoreCase);
+                });
+
+                List<string> newIds = new List<string>();
+                List<string> newLabels = new List<string>();
+                newIds.Add("*");
+                newLabels.Add("Kaikki huoneessa (" + activeList.Count.ToString() + " muuta)");
+                for (int i = 0; i < activeList.Count; i++)
+                {
+                    RoomPeerInfo p = activeList[i];
+                    newIds.Add(p.PeerId);
+                    string kindTag = (p.ClientType == "exe") ? ".EXE" : (p.ClientType == "local_browser" ? "Selain 127.0.0.1" : "Selain");
+                    newLabels.Add(p.DisplayName + " [" + kindTag + " · " + GetPeerTransportSummary(p, now) + "]");
+                }
+
+                bool changed = (newIds.Count != targetPeerIds.Count || newLabels.Count != cmbTargetPeer.Items.Count);
+                if (!changed)
+                {
+                    for (int i = 0; i < newIds.Count; i++)
+                    {
+                        if (targetPeerIds[i] != newIds[i] || !Object.Equals(cmbTargetPeer.Items[i], newLabels[i]))
+                        {
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+                if (!changed) return;
+
+                string prevSel = selectedTargetPeerId;
+                targetPeerIds.Clear();
+                targetPeerIds.AddRange(newIds);
+                cmbTargetPeer.BeginUpdate();
+                cmbTargetPeer.Items.Clear();
+                for (int i = 0; i < newLabels.Count; i++) cmbTargetPeer.Items.Add(newLabels[i]);
+                int selIdx = 0;
+                if (!String.IsNullOrEmpty(prevSel) && prevSel != "*")
+                {
+                    int found = targetPeerIds.IndexOf(prevSel);
+                    if (found >= 0) selIdx = found;
+                }
+                if (cmbTargetPeer.Items.Count > 0) cmbTargetPeer.SelectedIndex = selIdx;
+                selectedTargetPeerId = (selIdx >= 0 && selIdx < targetPeerIds.Count) ? targetPeerIds[selIdx] : "*";
+                cmbTargetPeer.EndUpdate();
+            }
+            catch { }
+        }
+
+        private void ConnectToEnteredRoom()
+        {
+            string clean = CleanRoomCode(txtRoomCode != null ? txtRoomCode.Text : "");
+            if (txtRoomCode != null && txtRoomCode.Text != clean)
+            {
+                txtRoomCode.Text = clean;
+            }
+            currentRoomCode = clean;
+            roomFullRejected = false;
+            lock (attemptedAutoTcpEndpoints) { attemptedAutoTcpEndpoints.Clear(); }
+            foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+            {
+                try { if (kv.Value != null && kv.Value.TcpClientConn != null) kv.Value.TcpClientConn.Close(); } catch { }
+            }
+            roomPeers.Clear();
+            selectedTargetPeerId = "*";
+            activeUdpPeerEndpoint = null;
+            activeCloudExePeerId = "";
+            activeCloudBrowserPeerId = "";
+            lastCloudExeSeen = DateTime.MinValue;
+            lastCloudBrowserSeen = DateTime.MinValue;
+            remotePeerWanUdp = "";
+            remotePeerLanUdp = "";
+            remotePeerWanV6Udp = "";
+            remotePeerLanTcp = "";
+            remotePeerPredictedWanUdp = "";
+            remotePeerNatSym = 0;
+            remotePeerNatDelta = 0;
+            remotePeerUpnpTcp = 0;
+            lastLoggedPunchTarget = "";
+            DeriveCryptographicKey();
+            SyncTargetPeerDropdown();
+            cloudReconnectRequested = true;
+            if (clean.Length == 0)
+            {
+                UpdateStatusBadge("PEER STATUS: EI YHDISTETTY — Kirjoita tunnelin nimi ja paina Yhdistä");
+                Log("Tunneli katkaistu. Kirjoita tunnelin nimi ja paina Yhdistä.");
+                return;
+            }
+            UpdateStatusBadge("PEER STATUS: WAITING FOR PEER [" + clean + "]");
+            BroadcastUdpPresence();
+            if (!suppressRoomBroadcast) NotifyBrowserRoomCode();
+            Log("Yhdistetään tunneliin [" + clean + "] (max " + MAX_ROOM_PEERS.ToString() + " käyttäjää)...");
+        }
+
         private void DeriveCryptographicKey()
         {
             try
             {
-                string cleanRoom = txtRoomCode.Text.Trim().ToLowerInvariant();
+                string cleanRoom = CleanRoomCode(currentRoomCode);
+                if (cleanRoom.Length == 0)
+                {
+                    aesKey = new byte[32];
+                    currentFingerprint = "Odottaa tunnelin nimeä...";
+                    if (lblKeyFingerprint != null) lblKeyFingerprint.Text = currentFingerprint;
+                    return;
+                }
                 string pass = txtPassphrase.Text;
                 string normalizedSecret = cleanRoom + (pass.Length > 0 ? "::" + pass : "");
                 byte[] passwordBytes = Encoding.UTF8.GetBytes(normalizedSecret);
@@ -1530,12 +2104,7 @@ namespace AetherTunnelNative
                     udpP2pClient = new UdpClient(new IPEndPoint(IPAddress.Any, up));
                     udpP2pClient.Client.ReceiveBufferSize = 64 * 1024 * 1024;
                     udpP2pClient.Client.SendBufferSize = 64 * 1024 * 1024;
-                    try
-                    {
-                        // Disable SIO_UDP_CONNRESET (-1744830452) so ICMP Port Unreachable never resets the UDP socket
-                        udpP2pClient.Client.IOControl((IOControlCode)(-1744830452), new byte[] { 0, 0, 0, 0 }, null);
-                    }
-                    catch { }
+                    try { udpP2pClient.Client.IOControl((IOControlCode)(-1744830452), new byte[] { 0, 0, 0, 0 }, null); } catch { }
                     udpP2pPort = up;
                     break;
                 }
@@ -1572,7 +2141,7 @@ namespace AetherTunnelNative
 
             string localIps = GetLocalIpList();
             lblLocalEndpoint.Text = "LAN: " + localIps + "  |  STUN WAN: Probing...";
-            Log("AetherTunnel v1.0 High-DPI active [BDP-Safe v7 · SSD-Safe 128MB/2GB · Multi-NAT P2P] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
+            Log("AetherTunnel v1.0 High-DPI active [BDP-Safe v8 · Queue & Confirmation · SSD-Safe] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
 
             Thread stunThread = new Thread(StunAndUpnpProbeLoop);
             stunThread.IsBackground = true;
@@ -1600,6 +2169,10 @@ namespace AetherTunnelNative
             p2pUdpWriterThread.IsBackground = true;
             p2pUdpWriterThread.Priority = ThreadPriority.BelowNormal;
             p2pUdpWriterThread.Start();
+
+            Thread queueWorkerThread = new Thread(TransferQueueWorkerLoop);
+            queueWorkerThread.IsBackground = true;
+            queueWorkerThread.Start();
 
             Thread hbMonitorThread = new Thread(PeerHeartbeatMonitorLoop);
             hbMonitorThread.IsBackground = true;
@@ -1673,7 +2246,7 @@ namespace AetherTunnelNative
                     }
                 }
                 catch { }
-                int sleepLoops = (publicWanUdpEndpoint.Length == 0) ? 10 : 75;
+                int sleepLoops = (publicWanUdpEndpoint.Length == 0) ? 10 : 75; // 2s retry until resolved, then 15s NAT keepalive
                 for (int i = 0; i < sleepLoops && isRunning; i++) Thread.Sleep(200);
             }
         }
@@ -1925,7 +2498,7 @@ namespace AetherTunnelNative
             return false;
         }
 
-        private void InitiateUdpHolePunch(string remoteEndpointStr, bool withPortSpray = false)
+        private void InitiateUdpHolePunch(string remoteEndpointStr, bool withPortSpray = false, bool forcePunch = false)
         {
             if (String.IsNullOrEmpty(remoteEndpointStr)) return;
             ThreadPool.QueueUserWorkItem(delegate {
@@ -1936,18 +2509,18 @@ namespace AetherTunnelNative
                     if (IsOwnLocalEndpoint(targetEp.Address, targetEp.Port)) return;
 
                     string room = CleanRoomCode(currentRoomCode);
-                    byte[] punchBytes = Encoding.UTF8.GetBytes("AETHER_PUNCH|" + room + "|" + instanceId);
+                    byte[] punchBytes = Encoding.UTF8.GetBytes("AETHER_PUNCH|" + room + "|" + instanceId + "|" + SanitizeJsonText(localDisplayName));
 
-                    for (int burst = 0; burst < 4 && isRunning && activeUdpPeerEndpoint == null; burst++)
+                    for (int burst = 0; burst < 4 && isRunning && (forcePunch || activeUdpPeerEndpoint == null); burst++)
                     {
                         try { SendUdpP2pPacket(punchBytes, punchBytes.Length, targetEp); } catch { }
                         Thread.Sleep(70);
                     }
 
-                    if (withPortSpray && targetEp.AddressFamily == AddressFamily.InterNetwork && activeUdpPeerEndpoint == null)
+                    if (withPortSpray && targetEp.AddressFamily == AddressFamily.InterNetwork && (forcePunch || activeUdpPeerEndpoint == null))
                     {
                         int basePort = targetEp.Port;
-                        for (int delta = -6; delta <= 16 && isRunning && activeUdpPeerEndpoint == null; delta++)
+                        for (int delta = -6; delta <= 16 && isRunning && (forcePunch || activeUdpPeerEndpoint == null); delta++)
                         {
                             if (delta == 0) continue;
                             int candPort = basePort + delta;
@@ -1963,36 +2536,6 @@ namespace AetherTunnelNative
                 catch { }
             });
         }
-
-        private FileStream udpOutFile = null;
-        private readonly object udpFileLock = new object();
-        private string udpFileName = "";
-        private string lastCompletedUdpFileName = "";
-        private string udpPartPath = "";
-        private string udpFinalPath = "";
-        private long udpExpectedSize = 0;
-        private int udpTotalExpectedChunks = 0;
-        private long udpReceivedBytes = 0;
-        private long udpSessionStartBytes = 0;
-        private long udpReadyCompletedBytes = 0;
-        private int udpLastQueuedCkptContig = -1;
-        private int udpLastContigAdvanceTick = 0;
-        private readonly Dictionary<int, UdpStagePage> udpStagedPages = new Dictionary<int, UdpStagePage>(512);
-        private readonly List<int> udpFlushKeysBuf = new List<int>(512);
-        private bool[] udpReceivedChunkMap = null;
-        private readonly Dictionary<int, int> udpChunkLastNackTick = new Dictionary<int, int>();
-        private int udpHighestContiguousChunk = -1;
-        private int udpHighestSeenChunk = -1;
-        private int udpUniqueReceivedCount = 0;
-        private volatile bool udpRxEndPending = false;
-        private Stopwatch udpRxSw = null;
-        private long udpAckWindowBytes = 0;
-        private long udpUiWindowBytes = 0;
-        private double udpSmoothedUiRxMbps = 0.0;
-        private int udpPacketsSinceLastAck = 0;
-        private Stopwatch udpAckWindowSw = Stopwatch.StartNew();
-        private Stopwatch udpUiWindowSw = Stopwatch.StartNew();
-        private Stopwatch udpDupResumeSw = Stopwatch.StartNew();
 
         private void UdpP2pReceiveLoop()
         {
@@ -2038,11 +2581,23 @@ namespace AetherTunnelNative
             {
                     if (data == null || data.Length == 0) return;
 
-                    // Fast-path: enqueue binary P2P UDP encrypted data frame immediately (< 1us), up to 2 GB process hard RAM cap
+                    if (data.Length >= 20 && data[0] == 0x01 && data[1] == 0x01 && data[4] == 0x21 && data[5] == 0x12)
+                    {
+                        ParseStunBindingResponse(data, data.Length, remoteEp);
+                        return;
+                    }
+
+                    // FAST PATH: Enqueue binary P2P UDP encrypted data frame immediately (< 1us), up to 2 GB process hard RAM cap
                     if (data.Length >= 28 && BitConverter.ToUInt32(data, 0) == MAGIC_UDP_DATA)
                     {
                         activeUdpPeerEndpoint = remoteEp;
                         lastUdpPeerSeen = DateTime.UtcNow;
+                        RoomPeerInfo dataPeer = FindPeerByEndpointOrInstance(CleanRoomCode(currentRoomCode), "", remoteEp);
+                        if (dataPeer != null)
+                        {
+                            dataPeer.ActiveUdpEp = remoteEp;
+                            dataPeer.LastUdpSeen = DateTime.UtcNow;
+                        }
                         if (Interlocked.Read(ref totalAppBufferedBytes) < HARD_RAM_CAP_BYTES &&
                             ((rxCapCheckSeq++ & 255) != 0 || GC.GetTotalMemory(false) < 1920L * 1024L * 1024L))
                         {
@@ -2054,15 +2609,155 @@ namespace AetherTunnelNative
                         return;
                     }
 
-                    // Check if STUN Binding Response (starts with 0x01 0x01 and magic cookie 0x2112A442)
-                    if (data.Length >= 20 && data[0] == 0x01 && data[1] == 0x01 && data[4] == 0x21 && data[5] == 0x12)
-                    {
-                        ParseStunBindingResponse(data, data.Length, remoteEp);
-                        return;
-                    }
-
                     string text = Encoding.UTF8.GetString(data);
-                    if (text.StartsWith("AETHER_UDP_ACK|"))
+                    if (text.StartsWith("AETHER_PUNCH|"))
+                    {
+                        string[] parts = text.Split('|');
+                        string myCleanRoom = CleanRoomCode(currentRoomCode);
+                        if (parts.Length >= 3 && parts[2] != instanceId && myCleanRoom.Length > 0 && parts[1] == myCleanRoom)
+                        {
+                            string rInst = parts[2];
+                            string rDName = (parts.Length >= 4 && parts[3].Trim().Length > 0) ? parts[3].Trim() : ("Windows .EXE (" + rInst.Substring(0, Math.Min(4, rInst.Length)) + ")");
+                            RoomPeerInfo udpPeer = FindPeerByEndpointOrInstance(myCleanRoom, rInst, remoteEp);
+                            bool isNewRoomPeer = false;
+                            bool fullRej = false;
+                            if (udpPeer == null)
+                            {
+                                udpPeer = UpsertRoomPeer("aethertunnel-exe-" + myCleanRoom + "-" + rInst, rDName, "exe", out isNewRoomPeer, out fullRej);
+                            }
+                            if (fullRej || udpPeer == null) return;
+                            bool wasUdpInactive = (udpPeer.ActiveUdpEp == null || !udpPeer.ActiveUdpEp.Equals(remoteEp) || (DateTime.UtcNow - udpPeer.LastUdpSeen).TotalSeconds > 8);
+                            udpPeer.ActiveUdpEp = remoteEp;
+                            udpPeer.LastUdpSeen = DateTime.UtcNow;
+                            if (parts.Length >= 4 && parts[3].Trim().Length > 0) udpPeer.DisplayName = parts[3].Trim();
+
+                            bool staleOrEmpty = (activeUdpPeerEndpoint == null || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6);
+                            if (staleOrEmpty || activeUdpPeerEndpoint.Equals(remoteEp))
+                            {
+                                activeUdpPeerEndpoint = remoteEp;
+                                lastUdpPeerSeen = DateTime.UtcNow;
+                            }
+                            byte[] ack = Encoding.UTF8.GetBytes("AETHER_PUNCH_ACK|" + parts[1] + "|" + instanceId + "|" + SanitizeJsonText(localDisplayName));
+                            SendUdpP2pPacket(ack, ack.Length, remoteEp);
+                            if (isNewRoomPeer || wasUdpInactive)
+                            {
+                                SyncTargetPeerDropdown();
+                                UpdateStatusBadge("PEER STATUS: CONNECTED — P2P NAT-UDP (" + remoteEp.ToString() + ")");
+                                Log("NAT Hole Punch SUCCEEDED! Direct P2P UDP tunnel active with " + udpPeer.DisplayName + " (" + remoteEp.ToString() + ")");
+                            }
+                        }
+                    }
+                    else if (text.StartsWith("AETHER_PUNCH_ACK|") || text.StartsWith("AETHER_PONG|"))
+                    {
+                        string[] parts = text.Split('|');
+                        string myCleanRoom = CleanRoomCode(currentRoomCode);
+                        string rInst = "";
+                        string rDName = "";
+                        if (text.StartsWith("AETHER_PUNCH_ACK|") && parts.Length >= 3)
+                        {
+                            rInst = parts[2];
+                            if (parts.Length >= 4) rDName = parts[3].Trim();
+                        }
+                        else if (text.StartsWith("AETHER_PONG|") && parts.Length >= 2)
+                        {
+                            rInst = parts[1];
+                            if (parts.Length >= 3) rDName = parts[2].Trim();
+                        }
+
+                        RoomPeerInfo udpPeer = FindPeerByEndpointOrInstance(myCleanRoom, rInst, remoteEp);
+                        bool isNewRoomPeer = false;
+                        bool fullRej = false;
+                        if (udpPeer == null && myCleanRoom.Length > 0 && rInst.Length > 0)
+                        {
+                            udpPeer = UpsertRoomPeer("aethertunnel-exe-" + myCleanRoom + "-" + rInst, rDName.Length > 0 ? rDName : ("Windows .EXE (" + rInst.Substring(0, Math.Min(4, rInst.Length)) + ")"), "exe", out isNewRoomPeer, out fullRej);
+                        }
+                        if (udpPeer != null && !fullRej)
+                        {
+                            bool wasUdpInactive = (udpPeer.ActiveUdpEp == null || !udpPeer.ActiveUdpEp.Equals(remoteEp) || (DateTime.UtcNow - udpPeer.LastUdpSeen).TotalSeconds > 8);
+                            udpPeer.ActiveUdpEp = remoteEp;
+                            udpPeer.LastUdpSeen = DateTime.UtcNow;
+                            if (rDName.Length > 0) udpPeer.DisplayName = rDName;
+                            if (isNewRoomPeer || wasUdpInactive)
+                            {
+                                SyncTargetPeerDropdown();
+                                Log("Verified Direct P2P NAT-Punched UDP connection with " + udpPeer.DisplayName + " (" + remoteEp.ToString() + ")");
+                            }
+                        }
+
+                        bool staleOrEmpty = (activeUdpPeerEndpoint == null || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6);
+                        bool isNew = (activeUdpPeerEndpoint == null || (staleOrEmpty && !activeUdpPeerEndpoint.Equals(remoteEp)) || ((DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 8));
+                        if (staleOrEmpty || activeUdpPeerEndpoint.Equals(remoteEp))
+                        {
+                            activeUdpPeerEndpoint = remoteEp;
+                            lastUdpPeerSeen = DateTime.UtcNow;
+                            if (isNew && udpPeer == null)
+                            {
+                                UpdateStatusBadge("PEER STATUS: CONNECTED — P2P NAT-UDP (" + remoteEp.ToString() + ")");
+                                Log("Verified Direct P2P NAT-Punched UDP connection with " + remoteEp.ToString());
+                            }
+                        }
+                    }
+                    else if (text.StartsWith("AETHER_PING|"))
+                    {
+                        string[] parts = text.Split('|');
+                        string rInst = parts.Length >= 2 ? parts[1] : "";
+                        RoomPeerInfo udpPeer = FindPeerByEndpointOrInstance(CleanRoomCode(currentRoomCode), rInst, remoteEp);
+                        if (udpPeer != null)
+                        {
+                            udpPeer.ActiveUdpEp = remoteEp;
+                            udpPeer.LastUdpSeen = DateTime.UtcNow;
+                        }
+                        if (activeUdpPeerEndpoint == null || activeUdpPeerEndpoint.Equals(remoteEp) || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6)
+                        {
+                            activeUdpPeerEndpoint = remoteEp;
+                            lastUdpPeerSeen = DateTime.UtcNow;
+                        }
+                        byte[] pong = Encoding.UTF8.GetBytes("AETHER_PONG|" + instanceId + "|" + SanitizeJsonText(localDisplayName));
+                        SendUdpP2pPacket(pong, pong.Length, remoteEp);
+                    }
+                    else if (text.StartsWith("AETHER_UDP_START|"))
+                    {
+                        activeUdpPeerEndpoint = remoteEp;
+                        lastUdpPeerSeen = DateTime.UtcNow;
+                        RoomPeerInfo startPeer = FindPeerByEndpointOrInstance(CleanRoomCode(currentRoomCode), "", remoteEp);
+                        if (startPeer != null)
+                        {
+                            startPeer.ActiveUdpEp = remoteEp;
+                            startPeer.LastUdpSeen = DateTime.UtcNow;
+                        }
+                        udpPendingStartEp = remoteEp;
+                        udpPendingStartHeader = text;
+                        udpRxStartPending = true;
+                        udpRxDataEvent.Set();
+                    }
+                    else if (text.StartsWith("AETHER_UDP_WAIT_ACCEPT|"))
+                    {
+                        udpWaitAcceptReceived = true;
+                        udpResumeEvent.Set();
+                    }
+                    else if (text.StartsWith("AETHER_UDP_REJECT|"))
+                    {
+                        udpTransferRejected = true;
+                        udpResumeEvent.Set();
+                        udpAckEvent.Set();
+                    }
+                    else if (text.StartsWith("AETHER_UDP_RESUME|"))
+                    {
+                        string[] parts = text.Split('|');
+                        if (parts.Length >= 2)
+                        {
+                            int rChunk = 0;
+                            if (Int32.TryParse(parts[1], out rChunk) && rChunk >= 0)
+                            {
+                                if (rChunk > udpPeerResumeChunk) udpPeerResumeChunk = rChunk;
+                                if (rChunk - 1 > udpPeerContiguousChunk) udpPeerContiguousChunk = rChunk - 1;
+                                udpResumeReceived = true;
+                                udpResumeEvent.Set();
+                                udpAckEvent.Set();
+                            }
+                        }
+                    }
+                    else if (text.StartsWith("AETHER_UDP_ACK|"))
                     {
                         string[] parts = text.Split('|');
                         if (parts.Length >= 2)
@@ -2242,7 +2937,6 @@ namespace AetherTunnelNative
                                 dynamicUdpBitrateMbps = Math.Max(1.0, reduced);
                                 Interlocked.Exchange(ref pacingResetRequested, 1);
                             }
-                            udpNackEvent.Set();
                             udpAckEvent.Set();
                         }
                     }
@@ -2253,206 +2947,16 @@ namespace AetherTunnelNative
                     }
                     else if (text.StartsWith("AETHER_UDP_DONE|"))
                     {
-                        udpPeerDoneConfirmed = true;
-                        udpNackEvent.Set();
+                        udpTransferDoneAcked = true;
                         udpAckEvent.Set();
-                    }
-                    else if (text.StartsWith("AETHER_PUNCH|"))
-                    {
-                        string[] parts = text.Split('|');
-                        if (parts.Length >= 3 && parts[2] != instanceId)
-                        {
-                            bool staleOrEmpty = (activeUdpPeerEndpoint == null || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6);
-                            bool isNew = (activeUdpPeerEndpoint == null || (staleOrEmpty && !activeUdpPeerEndpoint.Equals(remoteEp)) || ((DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 8));
-                            if (staleOrEmpty || activeUdpPeerEndpoint.Equals(remoteEp))
-                            {
-                                activeUdpPeerEndpoint = remoteEp;
-                                lastUdpPeerSeen = DateTime.UtcNow;
-                            }
-                            byte[] ack = Encoding.UTF8.GetBytes("AETHER_PUNCH_ACK|" + parts[1] + "|" + instanceId);
-                            SendUdpP2pPacket(ack, ack.Length, remoteEp);
-                            if (isNew && activeUdpPeerEndpoint != null && activeUdpPeerEndpoint.Equals(remoteEp))
-                            {
-                                UpdateStatusBadge("PEER STATUS: CONNECTED — P2P NAT-UDP (" + remoteEp.ToString() + ")");
-                                Log("NAT Hole Punch SUCCEEDED! Direct P2P UDP tunnel active with " + remoteEp.ToString());
-                            }
-                        }
-                    }
-                    else if (text.StartsWith("AETHER_PUNCH_ACK|") || text.StartsWith("AETHER_PONG|"))
-                    {
-                        bool staleOrEmpty = (activeUdpPeerEndpoint == null || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6);
-                        bool isNew = (activeUdpPeerEndpoint == null || (staleOrEmpty && !activeUdpPeerEndpoint.Equals(remoteEp)) || ((DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 8));
-                        if (staleOrEmpty || activeUdpPeerEndpoint.Equals(remoteEp))
-                        {
-                            activeUdpPeerEndpoint = remoteEp;
-                            lastUdpPeerSeen = DateTime.UtcNow;
-                            if (isNew)
-                            {
-                                UpdateStatusBadge("PEER STATUS: CONNECTED — P2P NAT-UDP (" + remoteEp.ToString() + ")");
-                                Log("Verified Direct P2P NAT-Punched UDP connection with " + remoteEp.ToString());
-                            }
-                        }
-                    }
-                    else if (text.StartsWith("AETHER_PING|"))
-                    {
-                        if (activeUdpPeerEndpoint == null || activeUdpPeerEndpoint.Equals(remoteEp) || (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds > 6)
-                        {
-                            activeUdpPeerEndpoint = remoteEp;
-                            lastUdpPeerSeen = DateTime.UtcNow;
-                        }
-                        byte[] pong = Encoding.UTF8.GetBytes("AETHER_PONG|" + instanceId);
-                        SendUdpP2pPacket(pong, pong.Length, remoteEp);
-                    }
-                    else if (text.StartsWith("AETHER_UDP_START|"))
-                    {
-                        string[] parts = text.Split('|');
-                        if (parts.Length >= 3)
-                        {
-                            lock (udpFileLock)
-                            {
-                                string newFileName = parts[1];
-                                long newExpectedSize = 0;
-                                Int64.TryParse(parts[2], out newExpectedSize);
-
-                                if (udpOutFile != null && newFileName == udpFileName && newExpectedSize == udpExpectedSize)
-                                {
-                                    int curResume = Math.Max(0, udpHighestContiguousChunk + 1);
-                                    byte[] resumeReply = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + curResume.ToString());
-                                    for (int k = 0; k < 3; k++)
-                                    {
-                                        try { SendUdpP2pPacket(resumeReply, resumeReply.Length, remoteEp); } catch { }
-                                    }
-                                }
-                                else
-                                {
-                                    udpFileName = newFileName;
-                                    lastCompletedUdpFileName = "";
-                                    udpExpectedSize = newExpectedSize;
-                                    udpTotalExpectedChunks = (int)Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
-                                    if (parts.Length >= 4) Int32.TryParse(parts[3], out udpTotalExpectedChunks);
-                                    udpFinalPath = Path.Combine(downloadDirectory, "AetherTunnel_" + udpFileName);
-                                    udpPartPath = udpFinalPath + ".part";
-
-                                    if (udpOutFile != null)
-                                    {
-                                        DispatchStagedPagesToDiskQueue(true);
-                                        WaitForDiskIoDrain(15000);
-                                        lock (diskFileStreamLock)
-                                        {
-                                            try { udpOutFile.Flush(false); udpOutFile.Close(); } catch { }
-                                            udpOutFile = null;
-                                        }
-                                    }
-                                    foreach (UdpStagePage remP in udpStagedPages.Values)
-                                    {
-                                        ReleaseStageBuffer(remP.Data);
-                                    }
-                                    udpStagedPages.Clear();
-                                    udpReadyCompletedBytes = 0;
-                                    long existingLen = 0;
-                                    bool partExists = File.Exists(udpPartPath);
-                                    if (partExists)
-                                    {
-                                        existingLen = new FileInfo(udpPartPath).Length;
-                                    }
-                                    int resumeChunk = 0;
-                                    string ckptPath = udpPartPath + ".ckpt";
-                                    if (partExists && File.Exists(ckptPath))
-                                    {
-                                        try
-                                        {
-                                            string ckptRaw = File.ReadAllText(ckptPath).Trim();
-                                            string[] ckptParts = ckptRaw.Split('|');
-                                            int ckptChunk = 0;
-                                            if (Int32.TryParse(ckptParts[0], out ckptChunk) && ckptChunk >= 0)
-                                            {
-                                                if (ckptParts.Length >= 2)
-                                                {
-                                                    long ckptExpSize = 0;
-                                                    if (Int64.TryParse(ckptParts[1], out ckptExpSize) && ckptExpSize == udpExpectedSize && existingLen >= (long)ckptChunk * UDP_CHUNK_SIZE)
-                                                    {
-                                                        resumeChunk = Math.Min(ckptChunk, Math.Max(0, udpTotalExpectedChunks - 1));
-                                                    }
-                                                }
-                                                else if (existingLen > 0 && existingLen < udpExpectedSize)
-                                                {
-                                                    resumeChunk = Math.Min(ckptChunk, (int)(existingLen / UDP_CHUNK_SIZE));
-                                                }
-                                            }
-                                        }
-                                        catch { }
-                                    }
-                                    else if (partExists && existingLen > 0 && existingLen < udpExpectedSize)
-                                    {
-                                        resumeChunk = (int)(existingLen / UDP_CHUNK_SIZE);
-                                    }
-                                    long alignedBytes = (long)resumeChunk * UDP_CHUNK_SIZE;
-
-                                    udpReceivedChunkMap = new bool[udpTotalExpectedChunks];
-                                    udpChunkLastNackTick.Clear();
-                                    for (int c = 0; c < resumeChunk && c < udpTotalExpectedChunks; c++) udpReceivedChunkMap[c] = true;
-                                    udpHighestContiguousChunk = resumeChunk - 1;
-                                    udpLastQueuedCkptContig = resumeChunk - 1;
-                                    udpHighestSeenChunk = resumeChunk - 1;
-                                    udpUniqueReceivedCount = resumeChunk;
-                                    udpAckWindowBytes = 0;
-                                    udpUiWindowBytes = 0;
-                                    udpSmoothedUiRxMbps = 0.0;
-                                    udpPacketsSinceLastAck = 0;
-                                    udpRxEndPending = false;
-                                    udpLastContigAdvanceTick = Environment.TickCount;
-                                    lastDiskWriteMs = 0;
-                                    diskSequentialNextPage = resumeChunk / CHUNKS_PER_STAGE_PAGE;
-                                    int boundarySlot = resumeChunk % CHUNKS_PER_STAGE_PAGE;
-                                    udpResumeBoundaryPage = (boundarySlot > 0) ? (resumeChunk / CHUNKS_PER_STAGE_PAGE) : -1;
-                                    udpResumeBoundarySlot = boundarySlot;
-
-                                    udpOutFile = new FileStream(udpPartPath, (partExists && resumeChunk > 0) ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
-                                    try { if (udpExpectedSize > 0 && udpOutFile.Length != udpExpectedSize) udpOutFile.SetLength(udpExpectedSize); } catch { }
-                                    if (alignedBytes > 0) udpOutFile.Seek(alignedBytes, SeekOrigin.Begin);
-                                    udpReceivedBytes = alignedBytes;
-                                    udpSessionStartBytes = alignedBytes;
-                                    udpRxSw = Stopwatch.StartNew();
-                                    udpAckWindowSw.Restart();
-                                    udpUiWindowSw.Restart();
-                                    udpDupResumeSw.Restart();
-
-                                    byte[] resumeReply = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + resumeChunk.ToString());
-                                    for (int k = 0; k < 4; k++)
-                                    {
-                                        try { SendUdpP2pPacket(resumeReply, resumeReply.Length, remoteEp); } catch { }
-                                    }
-
-                                    if (resumeChunk > 0)
-                                        Log("Resuming P2P UDP download of " + udpFileName + " from chunk " + resumeChunk.ToString() + " (" + FormatBytes(alignedBytes) + ")");
-                                    else
-                                        Log("Receiving file over High-Speed P2P NAT-UDP -> " + udpFinalPath + " (" + FormatBytes(udpExpectedSize) + ")");
-                                }
-                            }
-                        }
-                    }
-                    else if (text.StartsWith("AETHER_UDP_RESUME|"))
-                    {
-                        string[] parts = text.Split('|');
-                        if (parts.Length >= 2)
-                        {
-                            int rChunk = 0;
-                            if (Int32.TryParse(parts[1], out rChunk) && rChunk >= 0)
-                            {
-                                if (rChunk > udpPeerResumeChunk) udpPeerResumeChunk = rChunk;
-                                if (rChunk - 1 > udpPeerContiguousChunk) udpPeerContiguousChunk = rChunk - 1;
-                                udpResumeEvent.Set();
-                                udpAckEvent.Set();
-                            }
-                        }
                     }
                     else if (text.StartsWith("AETHER_UDP_END|"))
                     {
                         udpRxEndPending = true;
                         udpRxDataEvent.Set();
                     }
-            }
-            catch { }
+                }
+                catch { }
         }
 
         private byte[] AllocStageBuffer()
@@ -2583,15 +3087,20 @@ namespace AetherTunnelNative
             }
         }
 
-        private void EnqueueCompletedPageJob(UdpStagePage page, List<DiskWriteJob> queuedJobs)
+        private void EnqueueCompletedPageJob(
+            FileStream outFile,
+            string partPath,
+            long expectedFileSize,
+            UdpStagePage page,
+            List<DiskWriteJob> queuedJobs)
         {
             if (page == null) return;
             if (page.StartSlot == 0)
             {
                 DiskWriteJob job = new DiskWriteJob();
-                job.TargetFile = udpOutFile;
-                job.PartPath = udpPartPath;
-                job.ExpectedFileSize = udpExpectedSize;
+                job.TargetFile = outFile;
+                job.PartPath = partPath;
+                job.ExpectedFileSize = expectedFileSize;
                 job.Buffer = page.Data;
                 job.Length = page.ValidBytes;
                 job.FileOffset = (long)page.PageIndex * STAGE_PAGE_BYTES;
@@ -2620,9 +3129,9 @@ namespace AetherTunnelNative
                         byte[] runBuf = AllocStageBuffer();
                         Buffer.BlockCopy(page.Data, runStart * UDP_CHUNK_SIZE, runBuf, 0, runBytes);
                         DiskWriteJob rJob = new DiskWriteJob();
-                        rJob.TargetFile = udpOutFile;
-                        rJob.PartPath = udpPartPath;
-                        rJob.ExpectedFileSize = udpExpectedSize;
+                        rJob.TargetFile = outFile;
+                        rJob.PartPath = partPath;
+                        rJob.ExpectedFileSize = expectedFileSize;
                         rJob.Buffer = runBuf;
                         rJob.Length = runBytes;
                         rJob.FileOffset = ((long)page.PageIndex * CHUNKS_PER_STAGE_PAGE + runStart) * UDP_CHUNK_SIZE;
@@ -2635,63 +3144,72 @@ namespace AetherTunnelNative
             }
         }
 
-        private void DispatchStagedPagesToDiskQueue(bool forceAll)
+        private void DispatchStagedPagesToDiskQueue(
+            FileStream outFile,
+            string partPath,
+            long expectedFileSize,
+            Dictionary<int, UdpStagePage> stagedPages,
+            ref long readyCompletedBytes,
+            ref int lastQueuedCkptContig,
+            int curContiguous,
+            List<int> keysBuf,
+            bool forceAll)
         {
-            if (udpOutFile == null || udpStagedPages.Count == 0) return;
+            if (outFile == null || stagedPages.Count == 0) return;
 
             List<DiskWriteJob> queuedJobs = new List<DiskWriteJob>();
 
             // 1. Strictly sequential in-order flush from diskSequentialNextPage (eliminates NTFS ValidDataLength zero-fills & random SSD seeks!)
             UdpStagePage seqPage;
             int nextSeq = diskSequentialNextPage;
-            while (udpStagedPages.TryGetValue(nextSeq, out seqPage))
+            while (stagedPages.TryGetValue(nextSeq, out seqPage))
             {
                 int needed = Math.Max(1, seqPage.ExpectedCount - seqPage.StartSlot);
                 if (seqPage.PresentCount < needed) break;
-                udpStagedPages.Remove(nextSeq);
-                udpReadyCompletedBytes -= seqPage.ValidBytes;
-                if (udpReadyCompletedBytes < 0) udpReadyCompletedBytes = 0;
-                EnqueueCompletedPageJob(seqPage, queuedJobs);
+                stagedPages.Remove(nextSeq);
+                readyCompletedBytes -= seqPage.ValidBytes;
+                if (readyCompletedBytes < 0) readyCompletedBytes = 0;
+                EnqueueCompletedPageJob(outFile, partPath, expectedFileSize, seqPage, queuedJobs);
                 nextSeq++;
             }
             diskSequentialNextPage = nextSeq;
 
             // 2. Emergency spill ONLY when RAM staging exceeds 512 MB behind a gap, or on forceAll (transfer end / close)
-            long remainingPageBytes = (long)udpStagedPages.Count * STAGE_PAGE_BYTES;
+            long remainingPageBytes = (long)stagedPages.Count * STAGE_PAGE_BYTES;
             if (forceAll || remainingPageBytes >= 512L * 1024L * 1024L)
             {
-                udpFlushKeysBuf.Clear();
-                foreach (KeyValuePair<int, UdpStagePage> kv in udpStagedPages)
+                keysBuf.Clear();
+                foreach (KeyValuePair<int, UdpStagePage> kv in stagedPages)
                 {
                     int needed = Math.Max(1, kv.Value.ExpectedCount - kv.Value.StartSlot);
-                    if (kv.Value.PresentCount >= needed) udpFlushKeysBuf.Add(kv.Key);
+                    if (kv.Value.PresentCount >= needed) keysBuf.Add(kv.Key);
                 }
-                if (udpFlushKeysBuf.Count > 0)
+                if (keysBuf.Count > 0)
                 {
-                    udpFlushKeysBuf.Sort();
-                    for (int i = 0; i < udpFlushKeysBuf.Count; i++)
+                    keysBuf.Sort();
+                    for (int i = 0; i < keysBuf.Count; i++)
                     {
-                        int pIdx = udpFlushKeysBuf[i];
-                        UdpStagePage page = udpStagedPages[pIdx];
-                        udpStagedPages.Remove(pIdx);
-                        udpReadyCompletedBytes -= page.ValidBytes;
-                        if (udpReadyCompletedBytes < 0) udpReadyCompletedBytes = 0;
-                        EnqueueCompletedPageJob(page, queuedJobs);
+                        int pIdx = keysBuf[i];
+                        UdpStagePage page = stagedPages[pIdx];
+                        stagedPages.Remove(pIdx);
+                        readyCompletedBytes -= page.ValidBytes;
+                        if (readyCompletedBytes < 0) readyCompletedBytes = 0;
+                        EnqueueCompletedPageJob(outFile, partPath, expectedFileSize, page, queuedJobs);
                     }
                 }
 
-                remainingPageBytes = (long)udpStagedPages.Count * STAGE_PAGE_BYTES;
-                if ((forceAll || remainingPageBytes >= 512L * 1024L * 1024L) && udpStagedPages.Count > 0)
+                remainingPageBytes = (long)stagedPages.Count * STAGE_PAGE_BYTES;
+                if ((forceAll || remainingPageBytes >= 512L * 1024L * 1024L) && stagedPages.Count > 0)
                 {
-                    udpFlushKeysBuf.Clear();
-                    foreach (int key in udpStagedPages.Keys) udpFlushKeysBuf.Add(key);
-                    udpFlushKeysBuf.Sort();
+                    keysBuf.Clear();
+                    foreach (int key in stagedPages.Keys) keysBuf.Add(key);
+                    keysBuf.Sort();
 
-                    for (int i = 0; i < udpFlushKeysBuf.Count; i++)
+                    for (int i = 0; i < keysBuf.Count; i++)
                     {
-                        int pIdx = udpFlushKeysBuf[i];
-                        UdpStagePage page = udpStagedPages[pIdx];
-                        udpStagedPages.Remove(pIdx);
+                        int pIdx = keysBuf[i];
+                        UdpStagePage page = stagedPages[pIdx];
+                        stagedPages.Remove(pIdx);
 
                         int exp = page.ExpectedCount;
                         int s = page.StartSlot;
@@ -2712,9 +3230,9 @@ namespace AetherTunnelNative
                                 byte[] runBuf = AllocStageBuffer();
                                 Buffer.BlockCopy(page.Data, runStart * UDP_CHUNK_SIZE, runBuf, 0, runBytes);
                                 DiskWriteJob rJob = new DiskWriteJob();
-                                rJob.TargetFile = udpOutFile;
-                                rJob.PartPath = udpPartPath;
-                                rJob.ExpectedFileSize = udpExpectedSize;
+                                rJob.TargetFile = outFile;
+                                rJob.PartPath = partPath;
+                                rJob.ExpectedFileSize = expectedFileSize;
                                 rJob.Buffer = runBuf;
                                 rJob.Length = runBytes;
                                 rJob.FileOffset = ((long)pIdx * CHUNKS_PER_STAGE_PAGE + runStart) * UDP_CHUNK_SIZE;
@@ -2730,8 +3248,8 @@ namespace AetherTunnelNative
 
             if (queuedJobs.Count == 0 && !forceAll) return;
 
-            int diskSafeContig = udpHighestContiguousChunk;
-            foreach (UdpStagePage remPage in udpStagedPages.Values)
+            int diskSafeContig = curContiguous;
+            foreach (UdpStagePage remPage in stagedPages.Values)
             {
                 int pageBase = remPage.PageIndex * CHUNKS_PER_STAGE_PAGE;
                 if (pageBase <= diskSafeContig)
@@ -2749,8 +3267,8 @@ namespace AetherTunnelNative
                 }
             }
 
-            int ckptToWrite = (diskSafeContig > udpLastQueuedCkptContig) ? diskSafeContig : -1;
-            if (ckptToWrite > udpLastQueuedCkptContig) udpLastQueuedCkptContig = ckptToWrite;
+            int ckptToWrite = (diskSafeContig > lastQueuedCkptContig) ? diskSafeContig : -1;
+            if (ckptToWrite > lastQueuedCkptContig) lastQueuedCkptContig = ckptToWrite;
 
             if (queuedJobs.Count > 0)
             {
@@ -2765,9 +3283,9 @@ namespace AetherTunnelNative
             else if (forceAll)
             {
                 DiskWriteJob syncJob = new DiskWriteJob();
-                syncJob.TargetFile = udpOutFile;
-                syncJob.PartPath = udpPartPath;
-                syncJob.ExpectedFileSize = udpExpectedSize;
+                syncJob.TargetFile = outFile;
+                syncJob.PartPath = partPath;
+                syncJob.ExpectedFileSize = expectedFileSize;
                 syncJob.Buffer = null;
                 syncJob.Length = 0;
                 syncJob.FileOffset = 0;
@@ -2780,15 +3298,41 @@ namespace AetherTunnelNative
         private void UdpP2pDiskWriterLoop()
         {
             udpWriterExitedEvent.Reset();
-            List<byte[]> batch = new List<byte[]>(2048);
-            ParallelOptions decParallelOpts = new ParallelOptions();
-            decParallelOpts.MaxDegreeOfParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
+            FileStream udpOutFile = null;
+            string udpFileName = "";
+            string lastCompletedUdpFileName = "";
+            string udpPartPath = "";
+            string udpFinalPath = "";
+            long udpExpectedSize = 0;
+            int udpExpectedChunks = 1;
+            long udpReceivedBytes = 0;
+            long udpSessionStartBytes = 0;
+            long readyCompletedBytes = 0;
+            int lastQueuedCkptContig = -1;
+            bool[] udpChunkReceived = null;
+            Dictionary<int, int> udpChunkLastNackTick = new Dictionary<int, int>();
+            Dictionary<int, UdpStagePage> stagedPages = new Dictionary<int, UdpStagePage>(512);
+            List<int> pageKeysBuf = new List<int>(512);
+            int udpContiguousChunk = -1;
+            int udpHighestSeenChunk = -1;
+            int udpUniqueReceivedCount = 0;
+            int chunksSinceLastAck = 0;
             int dupChunksSinceLastResume = 0;
             int lastNeedStartTick = 0;
             int lastEndNackTick = 0;
             int lastPartialDispatchTick = 0;
+            int lastContigAdvanceTick = Environment.TickCount;
             int lastIdleHoleNackTick = 0;
+            long ackWindowBytes = 0;
+            long uiWindowBytes = 0;
+            double smoothedUiRxMbps = 0.0;
+            Stopwatch ackWindowSw = Stopwatch.StartNew();
+            Stopwatch uiWindowSw = Stopwatch.StartNew();
+            Stopwatch dupResumeSw = Stopwatch.StartNew();
             Stopwatch flushSw = Stopwatch.StartNew();
+            Stopwatch udpRxSw = null;
+            ParallelOptions decParallelOpts = new ParallelOptions();
+            decParallelOpts.MaxDegreeOfParallelism = Math.Max(1, Math.Min(4, Environment.ProcessorCount / 2));
 
             try
             {
@@ -2796,312 +3340,458 @@ namespace AetherTunnelNative
                 {
                     udpRxDataEvent.WaitOne(8);
 
-                    if (udpOutFile == null && !udpRxDataQueue.IsEmpty)
+                    try
                     {
-                        int nowTick = Environment.TickCount;
-                        if (nowTick - lastNeedStartTick > 80 && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                        if (udpPendingAcceptOpen)
                         {
-                            lastNeedStartTick = nowTick;
-                            byte[] needStart = Encoding.UTF8.GetBytes("AETHER_UDP_NEED_START|1");
-                            try { SendUdpP2pPacket(needStart, needStart.Length, activeUdpPeerEndpoint); } catch { }
-                        }
-                        continue;
-                    }
-
-                    batch.Clear();
-                    long drainedWireBytes = 0;
-                    byte[] item;
-                    while (batch.Count < 2048 && udpRxDataQueue.TryDequeue(out item))
-                    {
-                        if (item != null) drainedWireBytes += item.Length;
-                        if (item != null && item.Length > 28)
-                        {
-                            batch.Add(item);
-                        }
-                    }
-                    if (drainedWireBytes > 0) Interlocked.Add(ref totalAppBufferedBytes, -drainedWireBytes);
-
-                    if (batch.Count > 0)
-                    {
-                        int count = batch.Count;
-                        int[] chunkIndices = new int[count];
-                        byte[][] decryptedPayloads = new byte[count][];
-                        byte[] keySnapshot = aesKey;
-                        int expectedChunksSnapshot = udpTotalExpectedChunks;
-
-                        if (count <= 48)
-                        {
-                            byte[] seqIv = threadLocalIv.Value;
-                            AesCryptoServiceProvider seqAes = threadLocalAes.Value;
-                            for (int i = 0; i < count; i++)
+                            udpPendingAcceptOpen = false;
+                            string aHdr = udpPendingAcceptHeader;
+                            IPEndPoint aEp = udpPendingAcceptEp ?? activeUdpPeerEndpoint;
+                            string[] aParts = aHdr.Split('|');
+                            if (aParts.Length >= 3)
                             {
-                                byte[] pkt = batch[i];
-                                if (pkt.Length <= 28) { chunkIndices[i] = -1; continue; }
-                                int pktTotalChunks = BitConverter.ToInt32(pkt, 8);
-                                if (expectedChunksSnapshot > 0 && pktTotalChunks != expectedChunksSnapshot) { chunkIndices[i] = -1; continue; }
-                                int cIdx = BitConverter.ToInt32(pkt, 4);
-                                Buffer.BlockCopy(pkt, 12, seqIv, 0, 16);
-                                try
+                                string newFileName = aParts[1];
+                                long newExpectedSize = 0;
+                                Int64.TryParse(aParts[2], out newExpectedSize);
+                                if (!(udpOutFile != null && newFileName == udpFileName && newExpectedSize == udpExpectedSize))
                                 {
-                                    using (ICryptoTransform dec = seqAes.CreateDecryptor(keySnapshot, seqIv))
+                                    if (udpOutFile != null)
                                     {
-                                        decryptedPayloads[i] = dec.TransformFinalBlock(pkt, 28, pkt.Length - 28);
-                                        chunkIndices[i] = cIdx;
-                                    }
-                                }
-                                catch { chunkIndices[i] = -1; }
-                            }
-                        }
-                        else
-                        {
-                            Parallel.For(0, count, decParallelOpts, delegate(int i)
-                            {
-                                byte[] pkt = batch[i];
-                                if (pkt.Length <= 28) { chunkIndices[i] = -1; return; }
-                                int pktTotalChunks = BitConverter.ToInt32(pkt, 8);
-                                if (expectedChunksSnapshot > 0 && pktTotalChunks != expectedChunksSnapshot)
-                                {
-                                    chunkIndices[i] = -1;
-                                    return;
-                                }
-                                int cIdx = BitConverter.ToInt32(pkt, 4);
-                                byte[] iv = threadLocalIv.Value;
-                                Buffer.BlockCopy(pkt, 12, iv, 0, 16);
-                                try
-                                {
-                                    AesCryptoServiceProvider aes = threadLocalAes.Value;
-                                    using (ICryptoTransform dec = aes.CreateDecryptor(keySnapshot, iv))
-                                    {
-                                        decryptedPayloads[i] = dec.TransformFinalBlock(pkt, 28, pkt.Length - 28);
-                                        chunkIndices[i] = cIdx;
-                                    }
-                                }
-                                catch { chunkIndices[i] = -1; }
-                            });
-                        }
-
-                        lock (udpFileLock)
-                        {
-                            if (udpOutFile != null)
-                            {
-                                for (int i = 0; i < count; i++)
-                                {
-                                    byte[] plain = decryptedPayloads[i];
-                                    if (plain == null) continue;
-                                    int cIdx = chunkIndices[i];
-                                    if (cIdx < 0) continue;
-                                    if (udpReceivedChunkMap != null && cIdx < udpReceivedChunkMap.Length && udpReceivedChunkMap[cIdx])
-                                    {
-                                        udpAckWindowBytes += plain.Length;
-                                        udpUiWindowBytes += plain.Length;
-                                        udpPacketsSinceLastAck++;
-                                        dupChunksSinceLastResume++;
-                                        if ((dupChunksSinceLastResume >= 16 || udpDupResumeSw.ElapsedMilliseconds >= 35) && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                                        DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, true);
+                                        WaitForDiskIoDrain(15000);
+                                        lock (diskFileStreamLock)
                                         {
-                                            dupChunksSinceLastResume = 0;
-                                            udpDupResumeSw.Restart();
-                                            int nextNeeded = Math.Max(0, udpHighestContiguousChunk + 1);
-                                            byte[] resumeJump = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + nextNeeded.ToString());
-                                            try { SendUdpP2pPacket(resumeJump, resumeJump.Length, activeUdpPeerEndpoint); } catch { }
+                                            try { udpOutFile.Flush(false); udpOutFile.Close(); } catch { }
+                                            udpOutFile = null;
+                                        }
+                                    }
+                                    foreach (UdpStagePage remP in stagedPages.Values)
+                                    {
+                                        ReleaseStageBuffer(remP.Data);
+                                    }
+                                    stagedPages.Clear();
+                                    readyCompletedBytes = 0;
 
-                                            if (udpHighestSeenChunk > udpHighestContiguousChunk)
+                                    udpFileName = newFileName;
+                                    lastCompletedUdpFileName = "";
+                                    udpExpectedSize = newExpectedSize;
+                                    udpExpectedChunks = (int)Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
+                                    if (aParts.Length >= 4) Int32.TryParse(aParts[3], out udpExpectedChunks);
+
+                                    udpFinalPath = Path.Combine(downloadDirectory, "AetherTunnel_" + udpFileName);
+                                    udpPartPath = udpFinalPath + ".part";
+
+                                    long existingLen = 0;
+                                    bool partExists = File.Exists(udpPartPath);
+                                    if (partExists)
+                                    {
+                                        existingLen = new FileInfo(udpPartPath).Length;
+                                    }
+                                    int resumeChunk = 0;
+                                    string ckptPath = udpPartPath + ".ckpt";
+                                    if (partExists && File.Exists(ckptPath))
+                                    {
+                                        try
+                                        {
+                                            string ckptRaw = File.ReadAllText(ckptPath).Trim();
+                                            string[] ckptParts = ckptRaw.Split('|');
+                                            int ckptChunk = 0;
+                                            if (Int32.TryParse(ckptParts[0], out ckptChunk) && ckptChunk >= 0)
                                             {
-                                                int nowDupTick = Environment.TickCount;
-                                                StringBuilder holeSb = new StringBuilder();
-                                                int holeCnt = 0;
-                                                int holeLimit = Math.Min(udpTotalExpectedChunks, udpHighestSeenChunk + 1);
-                                                for (int h = nextNeeded; h < holeLimit; h++)
+                                                if (ckptParts.Length >= 2)
                                                 {
-                                                    int prevTick;
-                                                    if (!udpReceivedChunkMap[h] && (!udpChunkLastNackTick.TryGetValue(h, out prevTick) || unchecked(nowDupTick - prevTick) > 260))
+                                                    long ckptExpSize = 0;
+                                                    if (Int64.TryParse(ckptParts[1], out ckptExpSize) && ckptExpSize == udpExpectedSize && existingLen >= (long)ckptChunk * UDP_CHUNK_SIZE)
                                                     {
-                                                        udpChunkLastNackTick[h] = nowDupTick;
-                                                        if (holeCnt > 0) holeSb.Append(",");
-                                                        holeSb.Append(h.ToString());
-                                                        holeCnt++;
-                                                        if (holeCnt >= 80) break;
+                                                        resumeChunk = Math.Min(ckptChunk, Math.Max(0, udpExpectedChunks - 1));
                                                     }
                                                 }
-                                                if (holeCnt > 0)
+                                                else if (existingLen > 0 && existingLen < udpExpectedSize)
                                                 {
-                                                    byte[] holeNack = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + holeSb.ToString());
-                                                    try { SendUdpP2pPacket(holeNack, holeNack.Length, activeUdpPeerEndpoint); } catch { }
+                                                    resumeChunk = Math.Min(ckptChunk, (int)(existingLen / UDP_CHUNK_SIZE));
                                                 }
                                             }
                                         }
-                                        continue;
+                                        catch { }
                                     }
-
-                                    if (udpReceivedChunkMap != null && cIdx < udpReceivedChunkMap.Length)
+                                    else if (partExists && existingLen > 0 && existingLen < udpExpectedSize)
                                     {
-                                        udpReceivedChunkMap[cIdx] = true;
-                                        udpUniqueReceivedCount++;
+                                        resumeChunk = (int)(existingLen / UDP_CHUNK_SIZE);
                                     }
-                                    if (cIdx > udpHighestSeenChunk) udpHighestSeenChunk = cIdx;
-                                    udpReceivedBytes += plain.Length;
-                                    if (udpReceivedBytes > udpExpectedSize) udpReceivedBytes = udpExpectedSize;
+                                    long alignedBytes = (long)resumeChunk * UDP_CHUNK_SIZE;
 
-                                    // Place chunk directly into aligned 4 MB pooled RAM page (zero small heap allocations kept in Gen2!)
-                                    int pIdx = cIdx / CHUNKS_PER_STAGE_PAGE;
-                                    int slot = cIdx % CHUNKS_PER_STAGE_PAGE;
-                                    UdpStagePage page;
-                                    if (!udpStagedPages.TryGetValue(pIdx, out page))
-                                    {
-                                        page = new UdpStagePage();
-                                        page.PageIndex = pIdx;
-                                        page.Data = AllocStageBuffer();
-                                        int remChunks = Math.Max(1, udpTotalExpectedChunks - (pIdx * CHUNKS_PER_STAGE_PAGE));
-                                        page.ExpectedCount = Math.Max(1, Math.Min(CHUNKS_PER_STAGE_PAGE, remChunks));
-                                        page.StartSlot = (pIdx == udpResumeBoundaryPage && udpResumeBoundarySlot > 0 && udpResumeBoundarySlot < page.ExpectedCount) ? udpResumeBoundarySlot : 0;
-                                        page.Present = new bool[page.ExpectedCount];
-                                        page.ChunkLens = new short[page.ExpectedCount];
-                                        udpStagedPages[pIdx] = page;
-                                    }
-                                    if (slot >= page.StartSlot && slot < page.ExpectedCount && !page.Present[slot])
-                                    {
-                                        Buffer.BlockCopy(plain, 0, page.Data, slot * UDP_CHUNK_SIZE, plain.Length);
-                                        page.Present[slot] = true;
-                                        page.ChunkLens[slot] = (short)plain.Length;
-                                        page.PresentCount++;
-                                        page.ValidBytes += plain.Length;
-                                        int needed = Math.Max(1, page.ExpectedCount - page.StartSlot);
-                                        if (page.PresentCount == needed)
-                                        {
-                                            udpReadyCompletedBytes += page.ValidBytes;
-                                        }
-                                    }
+                                    udpChunkReceived = new bool[udpExpectedChunks];
+                                    udpChunkLastNackTick.Clear();
+                                    for (int c = 0; c < resumeChunk && c < udpExpectedChunks; c++) udpChunkReceived[c] = true;
+                                    udpContiguousChunk = resumeChunk - 1;
+                                    lastQueuedCkptContig = resumeChunk - 1;
+                                    udpHighestSeenChunk = resumeChunk - 1;
+                                    udpUniqueReceivedCount = resumeChunk;
+                                    chunksSinceLastAck = 0;
+                                    dupChunksSinceLastResume = 0;
+                                    ackWindowBytes = 0;
+                                    uiWindowBytes = 0;
+                                    smoothedUiRxMbps = 0.0;
+                                    udpRxEndPending = false;
+                                    lastContigAdvanceTick = Environment.TickCount;
+                                    lastDiskWriteMs = 0;
+                                    diskSequentialNextPage = resumeChunk / CHUNKS_PER_STAGE_PAGE;
+                                    int boundarySlot = resumeChunk % CHUNKS_PER_STAGE_PAGE;
+                                    udpResumeBoundaryPage = (boundarySlot > 0) ? (resumeChunk / CHUNKS_PER_STAGE_PAGE) : -1;
+                                    udpResumeBoundarySlot = boundarySlot;
 
-                                    udpAckWindowBytes += plain.Length;
-                                    udpUiWindowBytes += plain.Length;
-                                    udpPacketsSinceLastAck++;
-                                }
-
-                                if (udpReceivedChunkMap != null)
-                                {
-                                    int prevContig = udpHighestContiguousChunk;
-                                    while (udpHighestContiguousChunk + 1 < udpReceivedChunkMap.Length && udpReceivedChunkMap[udpHighestContiguousChunk + 1])
-                                    {
-                                        udpHighestContiguousChunk++;
-                                    }
-                                    if (udpHighestContiguousChunk > prevContig)
-                                    {
-                                        udpLastContigAdvanceTick = Environment.TickCount;
-                                    }
-                                }
-
-                                double uiWinSec = udpUiWindowSw.Elapsed.TotalSeconds;
-                                if (uiWinSec >= 0.35 || udpSmoothedUiRxMbps <= 0.0)
-                                {
-                                    if (udpSmoothedUiRxMbps <= 0.0)
-                                    {
-                                        double totalSec = Math.Max(0.005, udpRxSw != null ? udpRxSw.Elapsed.TotalSeconds : 0.005);
-                                        udpSmoothedUiRxMbps = (Math.Max(0L, udpReceivedBytes - udpSessionStartBytes) / (1024.0 * 1024.0)) / totalSec;
-                                    }
-                                    else if (uiWinSec >= 0.35)
-                                    {
-                                        double sampleMbps = (udpUiWindowBytes / (1024.0 * 1024.0)) / uiWinSec;
-                                        udpSmoothedUiRxMbps = (udpSmoothedUiRxMbps * 0.35) + (sampleMbps * 0.65);
-                                        udpUiWindowBytes = 0;
-                                        udpUiWindowSw.Restart();
-                                    }
-                                }
-
-                                long stagedAllocBytes = (long)udpStagedPages.Count * STAGE_PAGE_BYTES;
-                                int nowTickMs = Environment.TickCount;
-                                bool emergencyPartialFlush = (stagedAllocBytes >= 512L * 1024L * 1024L && unchecked(nowTickMs - lastPartialDispatchTick) >= 500);
-                                bool wantStageFlush = (udpReadyCompletedBytes >= DISK_STAGE_TARGET_BYTES) ||
-                                    emergencyPartialFlush ||
-                                    (udpReceivedChunkMap != null && udpHighestContiguousChunk + 1 >= udpTotalExpectedChunks) ||
-                                    udpRxEndPending;
-
-                                long ackElapsedMs = udpAckWindowSw.ElapsedMilliseconds;
-                                if (udpPacketsSinceLastAck > 0 && (ackElapsedMs >= 50 || wantStageFlush) && activeUdpPeerEndpoint != null && udpP2pClient != null)
-                                {
-                                    double ackSec = Math.Max(0.050, udpAckWindowSw.Elapsed.TotalSeconds);
-                                    double instMbits = ((udpAckWindowBytes * 8.0) / (1024.0 * 1024.0)) / ackSec;
-                                    int mbitsInt = Math.Max(1, (int)Math.Round(Math.Min(5000.0, instMbits)));
-                                    udpPacketsSinceLastAck = 0;
-                                    udpAckWindowBytes = 0;
-                                    udpAckWindowSw.Restart();
-
-                                    long queuedDiskBytes = (long)Math.Max(0, Thread.VolatileRead(ref activeDiskIoJobs)) * STAGE_PAGE_BYTES;
-                                    long memBufferedBytes = Interlocked.Read(ref totalAppBufferedBytes);
-                                    int diskMbps = smoothedDiskWriteMbps;
-                                    int diskLatMs = lastDiskWriteMs;
-                                    bool diskBusy = (queuedDiskBytes >= 192L * 1024L * 1024L) || (memBufferedBytes >= 768L * 1024L * 1024L) || (diskLatMs >= 100);
-                                    if (diskBusy)
-                                    {
-                                        double safeDiskMbits = diskMbps > 0 ? Math.Max(16.0, diskMbps * 8.0 * 0.78) : 180.0;
-                                        if (queuedDiskBytes >= 384L * 1024L * 1024L || memBufferedBytes >= 1150L * 1024L * 1024L)
-                                        {
-                                            safeDiskMbits = Math.Max(8.0, safeDiskMbits * 0.45);
-                                        }
-                                        mbitsInt = Math.Min(mbitsInt, Math.Max(8, (int)Math.Round(safeDiskMbits)));
-                                    }
-
-                                    byte[] ackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_ACK|" + udpUniqueReceivedCount.ToString() + "|" + udpHighestContiguousChunk.ToString() + "|" + mbitsInt.ToString() + (diskBusy ? "|1" : "|0"));
-                                    try { SendUdpP2pPacket(ackBytes, ackBytes.Length, activeUdpPeerEndpoint); } catch { }
-
-                                    // Adaptive Real-Time NACK: if contiguous stalls >= 220ms, drop slack to 0 so tail holes repair immediately!
-                                    int contigStallMs = unchecked(nowTickMs - udpLastContigAdvanceTick);
-                                    int reorderSlack = (contigStallMs >= 220 || udpRxEndPending) ? 0 : Math.Max(24, Math.Min(192, (int)Math.Round(udpSmoothedUiRxMbps * 3.0)));
-                                    if (udpReceivedChunkMap != null && (udpHighestSeenChunk - udpHighestContiguousChunk > reorderSlack + 16 || (contigStallMs >= 220 && udpHighestSeenChunk > udpHighestContiguousChunk)))
-                                    {
-                                        if (udpChunkLastNackTick.Count > 16384) udpChunkLastNackTick.Clear();
-                                        StringBuilder nackSb = new StringBuilder();
-                                        int nackCnt = 0;
-                                        int scanLimit = Math.Min(udpTotalExpectedChunks, udpHighestSeenChunk - reorderSlack);
-                                        for (int c = udpHighestContiguousChunk + 1; c < scanLimit; c++)
-                                        {
-                                            int prevTick;
-                                            if (!udpReceivedChunkMap[c] && (!udpChunkLastNackTick.TryGetValue(c, out prevTick) || unchecked(nowTickMs - prevTick) > 240))
-                                            {
-                                                udpChunkLastNackTick[c] = nowTickMs;
-                                                if (nackCnt > 0) nackSb.Append(",");
-                                                nackSb.Append(c.ToString());
-                                                nackCnt++;
-                                                if (nackCnt >= 80) break;
-                                            }
-                                        }
-                                        if (nackCnt > 0)
-                                        {
-                                            byte[] nackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + nackSb.ToString());
-                                            try { SendUdpP2pPacket(nackBytes, nackBytes.Length, activeUdpPeerEndpoint); } catch { }
-                                        }
-                                    }
-                                }
-
-                                // Hand off >= 128 MB of sequential 4 MB pages to background Disk I/O thread WITHOUT blocking ACKs/NACKs!
-                                if (wantStageFlush && udpStagedPages.Count > 0)
-                                {
-                                    if (emergencyPartialFlush) lastPartialDispatchTick = nowTickMs;
-                                    bool forceFlush = (udpReceivedChunkMap != null && udpHighestContiguousChunk + 1 >= udpTotalExpectedChunks) || udpRxEndPending;
-                                    DispatchStagedPagesToDiskQueue(forceFlush);
+                                    udpOutFile = new FileStream(udpPartPath, (partExists && resumeChunk > 0) ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+                                    try { if (udpExpectedSize > 0 && udpOutFile.Length != udpExpectedSize) udpOutFile.SetLength(udpExpectedSize); } catch { }
+                                    if (alignedBytes > 0) udpOutFile.Seek(alignedBytes, SeekOrigin.Begin);
+                                    udpReceivedBytes = alignedBytes;
+                                    udpSessionStartBytes = alignedBytes;
+                                    udpRxSw = Stopwatch.StartNew();
+                                    ackWindowSw.Restart();
+                                    uiWindowSw.Restart();
+                                    dupResumeSw.Restart();
                                     flushSw.Restart();
-                                }
-                                else if (udpStagedPages.Count > 0)
-                                {
-                                    flushSw.Restart();
-                                }
 
-                                int permille = (int)((udpReceivedBytes * 1000L) / Math.Max(1L, udpExpectedSize));
-                                UpdateTransferUi("Receiving via P2P NAT-UDP: " + udpFileName, udpReceivedBytes, udpExpectedSize, udpSmoothedUiRxMbps, permille);
+                                    if (aEp != null && udpP2pClient != null)
+                                    {
+                                        byte[] resumeReply = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + resumeChunk.ToString());
+                                        for (int k = 0; k < 4; k++)
+                                        {
+                                            try { SendUdpP2pPacket(resumeReply, resumeReply.Length, aEp); } catch { }
+                                        }
+                                    }
+
+                                    if (resumeChunk > 0)
+                                        Log("Resuming P2P UDP download of " + udpFileName + " from chunk " + resumeChunk.ToString() + " (" + FormatBytes(alignedBytes) + ")");
+                                    else
+                                        Log("Receiving file over High-Speed P2P NAT-UDP -> " + udpFinalPath + " (" + FormatBytes(udpExpectedSize) + ")");
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        lock (udpFileLock)
+
+                        if (udpRxStartPending)
                         {
-                            int nowTickIdle = Environment.TickCount;
-                            if (udpOutFile != null && udpPacketsSinceLastAck > 0 && udpAckWindowSw.ElapsedMilliseconds >= 45 && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                            udpRxStartPending = false;
+                            string hdr = udpPendingStartHeader;
+                            IPEndPoint senderEp = udpPendingStartEp ?? activeUdpPeerEndpoint;
+                            string[] parts = hdr.Split('|');
+                            if (parts.Length >= 3)
                             {
-                                double ackSec = Math.Max(0.001, udpAckWindowSw.Elapsed.TotalSeconds);
-                                double instMbits = ((udpAckWindowBytes * 8.0) / (1024.0 * 1024.0)) / ackSec;
+                                string newFileName = parts[1];
+                                long newExpectedSize = 0;
+                                Int64.TryParse(parts[2], out newExpectedSize);
+                                string promptKey = newFileName + "|" + newExpectedSize.ToString();
+
+                                // If duplicate AETHER_UDP_START arrives for the already-open active transfer, just re-send RESUME ACK without resetting file
+                                if (udpOutFile != null && newFileName == udpFileName && newExpectedSize == udpExpectedSize)
+                                {
+                                    if (senderEp != null && udpP2pClient != null)
+                                    {
+                                        int curResume = Math.Max(0, udpContiguousChunk + 1);
+                                        byte[] resumeReply = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + curResume.ToString());
+                                        for (int k = 0; k < 3; k++)
+                                        {
+                                            try { SendUdpP2pPacket(resumeReply, resumeReply.Length, senderEp); } catch { }
+                                        }
+                                    }
+                                }
+                                else if (udpPromptState == 1 && udpPromptKey == promptKey)
+                                {
+                                    if (senderEp != null && udpP2pClient != null)
+                                    {
+                                        byte[] waitMsg = Encoding.UTF8.GetBytes("AETHER_UDP_WAIT_ACCEPT|" + newFileName);
+                                        try { SendUdpP2pPacket(waitMsg, waitMsg.Length, senderEp); } catch { }
+                                    }
+                                }
+                                else if (udpPromptState == 3 && udpPromptKey == promptKey && unchecked(Environment.TickCount - udpPromptRejectTick) < 8000)
+                                {
+                                    if (senderEp != null && udpP2pClient != null)
+                                    {
+                                        byte[] rejMsg = Encoding.UTF8.GetBytes("AETHER_UDP_REJECT|" + newFileName);
+                                        for (int k = 0; k < 3; k++)
+                                        {
+                                            try { SendUdpP2pPacket(rejMsg, rejMsg.Length, senderEp); } catch { }
+                                        }
+                                    }
+                                }
+                                else if (autoAcceptAllIncoming || udpPromptAcceptedKey == promptKey)
+                                {
+                                    udpPendingAcceptHeader = hdr;
+                                    udpPendingAcceptEp = senderEp;
+                                    udpPendingAcceptOpen = true;
+                                    udpRxDataEvent.Set();
+                                }
+                                else
+                                {
+                                    udpPromptState = 1;
+                                    udpPromptKey = promptKey;
+                                    if (senderEp != null && udpP2pClient != null)
+                                    {
+                                        byte[] waitMsg = Encoding.UTF8.GetBytes("AETHER_UDP_WAIT_ACCEPT|" + newFileName);
+                                        for (int k = 0; k < 2; k++)
+                                        {
+                                            try { SendUdpP2pPacket(waitMsg, waitMsg.Length, senderEp); } catch { }
+                                        }
+                                    }
+                                    string pCandPath = Path.Combine(downloadDirectory, "AetherTunnel_" + newFileName) + ".part";
+                                    bool pHasRes = File.Exists(pCandPath) && new FileInfo(pCandPath).Length > 0;
+                                    string pFile = newFileName;
+                                    long pSize = newExpectedSize;
+                                    string pHdr = hdr;
+                                    IPEndPoint pEp = senderEp;
+                                    ThreadPool.QueueUserWorkItem(delegate {
+                                        int choice = ShowIncomingTransferDialog("P2P NAT-UDP", pFile, pSize, pHasRes);
+                                        if (choice == 1 || choice == 2)
+                                        {
+                                            udpPromptAcceptedKey = promptKey;
+                                            udpPromptState = 2;
+                                            udpPendingAcceptHeader = pHdr;
+                                            udpPendingAcceptEp = pEp;
+                                            udpPendingAcceptOpen = true;
+                                            udpRxDataEvent.Set();
+                                        }
+                                        else
+                                        {
+                                            udpPromptState = 3;
+                                            udpPromptRejectTick = Environment.TickCount;
+                                            Log("Saapuva P2P-tiedosto hylätty: " + pFile);
+                                            if (pEp != null && udpP2pClient != null)
+                                            {
+                                                byte[] rejMsg = Encoding.UTF8.GetBytes("AETHER_UDP_REJECT|" + pFile);
+                                                for (int k = 0; k < 5; k++)
+                                                {
+                                                    try { SendUdpP2pPacket(rejMsg, rejMsg.Length, pEp); } catch { }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                        }
+
+                        // If data packets arrive before AETHER_UDP_START, ask sender to re-send AETHER_UDP_START immediately
+                        if (udpOutFile == null && !udpRxDataQueue.IsEmpty)
+                        {
+                            int nowTick = Environment.TickCount;
+                            if (nowTick - lastNeedStartTick > 80 && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                            {
+                                lastNeedStartTick = nowTick;
+                                byte[] needStart = Encoding.UTF8.GetBytes("AETHER_UDP_NEED_START|1");
+                                try { SendUdpP2pPacket(needStart, needStart.Length, activeUdpPeerEndpoint); } catch { }
+                            }
+                            continue;
+                        }
+
+                        // Drain up to 2048 packets (~2.8 MB) per batch and decrypt cleanly into pooled 4 MB RAM pages
+                        List<byte[]> batch = new List<byte[]>(2048);
+                        long drainedWireBytes = 0;
+                        byte[] pkt;
+                        while (batch.Count < 2048 && udpRxDataQueue.TryDequeue(out pkt))
+                        {
+                            drainedWireBytes += pkt.Length;
+                            batch.Add(pkt);
+                        }
+                        if (drainedWireBytes > 0) Interlocked.Add(ref totalAppBufferedBytes, -drainedWireBytes);
+
+                        if (batch.Count > 0 && udpOutFile != null)
+                        {
+                            int count = batch.Count;
+                            int[] indices = new int[count];
+                            byte[][] plains = new byte[count][];
+                            byte[] keySnapshot = aesKey;
+
+                            if (count <= 48)
+                            {
+                                byte[] seqIv = threadLocalIv.Value;
+                                AesCryptoServiceProvider seqAes = threadLocalAes.Value;
+                                for (int i = 0; i < count; i++)
+                                {
+                                    try
+                                    {
+                                        byte[] d = batch[i];
+                                        int pktTotalChunks = BitConverter.ToInt32(d, 8);
+                                        if (pktTotalChunks != udpExpectedChunks) { indices[i] = -1; continue; }
+                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        Buffer.BlockCopy(d, 12, seqIv, 0, 16);
+                                        using (ICryptoTransform dec = seqAes.CreateDecryptor(keySnapshot, seqIv))
+                                        {
+                                            plains[i] = dec.TransformFinalBlock(d, 28, d.Length - 28);
+                                        }
+                                    }
+                                    catch { indices[i] = -1; }
+                                }
+                            }
+                            else
+                            {
+                                Parallel.For(0, count, decParallelOpts, delegate(int i)
+                                {
+                                    try
+                                    {
+                                        byte[] d = batch[i];
+                                        int pktTotalChunks = BitConverter.ToInt32(d, 8);
+                                        if (pktTotalChunks != udpExpectedChunks)
+                                        {
+                                            indices[i] = -1;
+                                            return;
+                                        }
+                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        byte[] iv = threadLocalIv.Value;
+                                        Buffer.BlockCopy(d, 12, iv, 0, 16);
+                                        AesCryptoServiceProvider aes = threadLocalAes.Value;
+                                        using (ICryptoTransform dec = aes.CreateDecryptor(keySnapshot, iv))
+                                        {
+                                            plains[i] = dec.TransformFinalBlock(d, 28, d.Length - 28);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        indices[i] = -1;
+                                    }
+                                });
+                            }
+
+                            for (int i = 0; i < count; i++)
+                            {
+                                int cIdx = indices[i];
+                                byte[] plain = plains[i];
+                                if (cIdx < 0 || plain == null) continue;
+                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length && udpChunkReceived[cIdx])
+                                {
+                                    ackWindowBytes += plain.Length;
+                                    uiWindowBytes += plain.Length;
+                                    chunksSinceLastAck++;
+                                    dupChunksSinceLastResume++;
+                                    if ((dupChunksSinceLastResume >= 16 || dupResumeSw.ElapsedMilliseconds >= 35) && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                                    {
+                                        dupChunksSinceLastResume = 0;
+                                        dupResumeSw.Restart();
+                                        int nextNeeded = Math.Max(0, udpContiguousChunk + 1);
+                                        byte[] resumeJump = Encoding.UTF8.GetBytes("AETHER_UDP_RESUME|" + nextNeeded.ToString());
+                                        try { SendUdpP2pPacket(resumeJump, resumeJump.Length, activeUdpPeerEndpoint); } catch { }
+
+                                        if (udpHighestSeenChunk > udpContiguousChunk)
+                                        {
+                                            int nowDupTick = Environment.TickCount;
+                                            StringBuilder holeSb = new StringBuilder();
+                                            int holeCnt = 0;
+                                            int holeLimit = Math.Min(udpExpectedChunks, udpHighestSeenChunk + 1);
+                                            for (int h = nextNeeded; h < holeLimit; h++)
+                                            {
+                                                int prevTick;
+                                                if (!udpChunkReceived[h] && (!udpChunkLastNackTick.TryGetValue(h, out prevTick) || unchecked(nowDupTick - prevTick) > 260))
+                                                {
+                                                    udpChunkLastNackTick[h] = nowDupTick;
+                                                    if (holeCnt > 0) holeSb.Append(",");
+                                                    holeSb.Append(h.ToString());
+                                                    holeCnt++;
+                                                    if (holeCnt >= 80) break;
+                                                }
+                                            }
+                                            if (holeCnt > 0)
+                                            {
+                                                byte[] holeNack = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + holeSb.ToString());
+                                                try { SendUdpP2pPacket(holeNack, holeNack.Length, activeUdpPeerEndpoint); } catch { }
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length)
+                                {
+                                    udpChunkReceived[cIdx] = true;
+                                    udpUniqueReceivedCount++;
+                                    udpReceivedBytes = Math.Min(udpExpectedSize, udpReceivedBytes + plain.Length);
+                                }
+                                else
+                                {
+                                    udpReceivedBytes = Math.Max(udpReceivedBytes, ((long)cIdx * UDP_CHUNK_SIZE) + plain.Length);
+                                }
+
+                                // Place chunk directly into aligned 4 MB pooled RAM page (zero small heap allocations kept in Gen2!)
+                                int pIdx = cIdx / CHUNKS_PER_STAGE_PAGE;
+                                int slot = cIdx % CHUNKS_PER_STAGE_PAGE;
+                                UdpStagePage page;
+                                if (!stagedPages.TryGetValue(pIdx, out page))
+                                {
+                                    page = new UdpStagePage();
+                                    page.PageIndex = pIdx;
+                                    page.Data = AllocStageBuffer();
+                                    int remChunks = udpExpectedChunks - (pIdx * CHUNKS_PER_STAGE_PAGE);
+                                    page.ExpectedCount = Math.Max(1, Math.Min(CHUNKS_PER_STAGE_PAGE, remChunks));
+                                    page.StartSlot = (pIdx == udpResumeBoundaryPage && udpResumeBoundarySlot > 0 && udpResumeBoundarySlot < page.ExpectedCount) ? udpResumeBoundarySlot : 0;
+                                    page.Present = new bool[page.ExpectedCount];
+                                    page.ChunkLens = new short[page.ExpectedCount];
+                                    stagedPages[pIdx] = page;
+                                }
+                                if (slot >= page.StartSlot && slot < page.ExpectedCount && !page.Present[slot])
+                                {
+                                    Buffer.BlockCopy(plain, 0, page.Data, slot * UDP_CHUNK_SIZE, plain.Length);
+                                    page.Present[slot] = true;
+                                    page.ChunkLens[slot] = (short)plain.Length;
+                                    page.PresentCount++;
+                                    page.ValidBytes += plain.Length;
+                                    int needed = Math.Max(1, page.ExpectedCount - page.StartSlot);
+                                    if (page.PresentCount == needed)
+                                    {
+                                        readyCompletedBytes += page.ValidBytes;
+                                    }
+                                }
+
+                                if (cIdx > udpHighestSeenChunk) udpHighestSeenChunk = cIdx;
+                                ackWindowBytes += plain.Length;
+                                uiWindowBytes += plain.Length;
+                                chunksSinceLastAck++;
+                            }
+
+                            if (udpChunkReceived != null)
+                            {
+                                int prevContig = udpContiguousChunk;
+                                while (udpContiguousChunk + 1 < udpChunkReceived.Length && udpChunkReceived[udpContiguousChunk + 1])
+                                {
+                                    udpContiguousChunk++;
+                                }
+                                if (udpContiguousChunk > prevContig)
+                                {
+                                    lastContigAdvanceTick = Environment.TickCount;
+                                }
+                            }
+
+                            // Live sliding-window RX speed for UI readout
+                            double uiWinSec = uiWindowSw.Elapsed.TotalSeconds;
+                            if (uiWinSec >= 0.35 || smoothedUiRxMbps <= 0.0)
+                            {
+                                if (smoothedUiRxMbps <= 0.0)
+                                {
+                                    double totalSec = Math.Max(0.005, udpRxSw.Elapsed.TotalSeconds);
+                                    smoothedUiRxMbps = (Math.Max(0L, udpReceivedBytes - udpSessionStartBytes) / (1024.0 * 1024.0)) / totalSec;
+                                }
+                                else if (uiWinSec >= 0.35)
+                                {
+                                    double sampleMbps = (uiWindowBytes / (1024.0 * 1024.0)) / uiWinSec;
+                                    smoothedUiRxMbps = (smoothedUiRxMbps * 0.35) + (sampleMbps * 0.65);
+                                    uiWindowBytes = 0;
+                                    uiWindowSw.Restart();
+                                }
+                            }
+
+                            long stagedAllocBytes = (long)stagedPages.Count * STAGE_PAGE_BYTES;
+                            int nowTickMs = Environment.TickCount;
+                            bool emergencyPartialFlush = (stagedAllocBytes >= 512L * 1024L * 1024L && unchecked(nowTickMs - lastPartialDispatchTick) >= 500);
+                            bool wantStageFlush = (readyCompletedBytes >= DISK_STAGE_TARGET_BYTES) ||
+                                emergencyPartialFlush ||
+                                (udpChunkReceived != null && udpContiguousChunk + 1 >= udpExpectedChunks) ||
+                                udpRxEndPending;
+
+                            long ackElapsedMs = ackWindowSw.ElapsedMilliseconds;
+                            if (chunksSinceLastAck > 0 && (ackElapsedMs >= 50 || wantStageFlush) && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                            {
+                                double ackSec = Math.Max(0.050, ackWindowSw.Elapsed.TotalSeconds);
+                                double instMbits = ((ackWindowBytes * 8.0) / (1024.0 * 1024.0)) / ackSec;
                                 int mbitsInt = Math.Max(1, (int)Math.Round(Math.Min(5000.0, instMbits)));
-                                udpPacketsSinceLastAck = 0;
-                                udpAckWindowBytes = 0;
-                                udpAckWindowSw.Restart();
+                                chunksSinceLastAck = 0;
+                                ackWindowBytes = 0;
+                                ackWindowSw.Restart();
+
                                 long queuedDiskBytes = (long)Math.Max(0, Thread.VolatileRead(ref activeDiskIoJobs)) * STAGE_PAGE_BYTES;
                                 long memBufferedBytes = Interlocked.Read(ref totalAppBufferedBytes);
                                 int diskMbps = smoothedDiskWriteMbps;
@@ -3116,24 +3806,99 @@ namespace AetherTunnelNative
                                     }
                                     mbitsInt = Math.Min(mbitsInt, Math.Max(8, (int)Math.Round(safeDiskMbits)));
                                 }
-                                byte[] ackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_ACK|" + udpUniqueReceivedCount.ToString() + "|" + udpHighestContiguousChunk.ToString() + "|" + mbitsInt.ToString() + (diskBusy ? "|1" : "|0"));
+
+                                byte[] ackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_ACK|" + udpUniqueReceivedCount.ToString() + "|" + udpContiguousChunk.ToString() + "|" + mbitsInt.ToString() + (diskBusy ? "|1" : "|0"));
+                                try { SendUdpP2pPacket(ackBytes, ackBytes.Length, activeUdpPeerEndpoint); } catch { }
+
+                                // Adaptive Real-Time NACK: if contiguous stalls >= 220ms, drop slack to 0 so tail holes repair immediately!
+                                int contigStallMs = unchecked(nowTickMs - lastContigAdvanceTick);
+                                int reorderSlack = (contigStallMs >= 220 || udpRxEndPending) ? 0 : Math.Max(24, Math.Min(192, (int)Math.Round(smoothedUiRxMbps * 3.0)));
+                                if (udpChunkReceived != null && (udpHighestSeenChunk - udpContiguousChunk > reorderSlack + 16 || (contigStallMs >= 220 && udpHighestSeenChunk > udpContiguousChunk)))
+                                {
+                                    if (udpChunkLastNackTick.Count > 16384) udpChunkLastNackTick.Clear();
+                                    StringBuilder nackSb = new StringBuilder();
+                                    int nackCnt = 0;
+                                    int scanLimit = Math.Min(udpExpectedChunks, udpHighestSeenChunk - reorderSlack);
+                                    for (int c = udpContiguousChunk + 1; c < scanLimit; c++)
+                                    {
+                                        int prevTick;
+                                        if (!udpChunkReceived[c] && (!udpChunkLastNackTick.TryGetValue(c, out prevTick) || unchecked(nowTickMs - prevTick) > 240))
+                                        {
+                                            udpChunkLastNackTick[c] = nowTickMs;
+                                            if (nackCnt > 0) nackSb.Append(",");
+                                            nackSb.Append(c.ToString());
+                                            nackCnt++;
+                                            if (nackCnt >= 80) break;
+                                        }
+                                    }
+                                    if (nackCnt > 0)
+                                    {
+                                        byte[] nackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + nackSb.ToString());
+                                        try { SendUdpP2pPacket(nackBytes, nackBytes.Length, activeUdpPeerEndpoint); } catch { }
+                                    }
+                                }
+                            }
+
+                            // Hand off >= 128 MB of sequential 4 MB pages to background Disk I/O thread WITHOUT blocking ACKs/NACKs!
+                            if (wantStageFlush && stagedPages.Count > 0)
+                            {
+                                if (emergencyPartialFlush) lastPartialDispatchTick = nowTickMs;
+                                bool forceFlush = (udpChunkReceived != null && udpContiguousChunk + 1 >= udpExpectedChunks) || udpRxEndPending;
+                                DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, forceFlush);
+                                flushSw.Restart();
+                            }
+                            else if (stagedPages.Count > 0)
+                            {
+                                flushSw.Restart();
+                            }
+
+                            double avgRxMbps = (Math.Max(0L, udpReceivedBytes - udpSessionStartBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, udpRxSw.Elapsed.TotalSeconds);
+                            int permille = (int)((udpReceivedBytes * 1000L) / Math.Max(1L, udpExpectedSize));
+                            UpdateTransferUi("Receiving via P2P NAT-UDP: " + udpFileName, udpReceivedBytes, udpExpectedSize, smoothedUiRxMbps, avgRxMbps, permille);
+                        }
+                        else
+                        {
+                            int nowTickIdle = Environment.TickCount;
+                            if (udpOutFile != null && chunksSinceLastAck > 0 && ackWindowSw.ElapsedMilliseconds >= 45 && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                            {
+                                double ackSec = Math.Max(0.001, ackWindowSw.Elapsed.TotalSeconds);
+                                double instMbits = ((ackWindowBytes * 8.0) / (1024.0 * 1024.0)) / ackSec;
+                                int mbitsInt = Math.Max(1, (int)Math.Round(Math.Min(5000.0, instMbits)));
+                                chunksSinceLastAck = 0;
+                                ackWindowBytes = 0;
+                                ackWindowSw.Restart();
+                                long queuedDiskBytes = (long)Math.Max(0, Thread.VolatileRead(ref activeDiskIoJobs)) * STAGE_PAGE_BYTES;
+                                long memBufferedBytes = Interlocked.Read(ref totalAppBufferedBytes);
+                                int diskMbps = smoothedDiskWriteMbps;
+                                int diskLatMs = lastDiskWriteMs;
+                                bool diskBusy = (queuedDiskBytes >= 192L * 1024L * 1024L) || (memBufferedBytes >= 768L * 1024L * 1024L) || (diskLatMs >= 100);
+                                if (diskBusy)
+                                {
+                                    double safeDiskMbits = diskMbps > 0 ? Math.Max(16.0, diskMbps * 8.0 * 0.78) : 180.0;
+                                    if (queuedDiskBytes >= 384L * 1024L * 1024L || memBufferedBytes >= 1150L * 1024L * 1024L)
+                                    {
+                                        safeDiskMbits = Math.Max(8.0, safeDiskMbits * 0.45);
+                                    }
+                                    mbitsInt = Math.Min(mbitsInt, Math.Max(8, (int)Math.Round(safeDiskMbits)));
+                                }
+                                byte[] ackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_ACK|" + udpUniqueReceivedCount.ToString() + "|" + udpContiguousChunk.ToString() + "|" + mbitsInt.ToString() + (diskBusy ? "|1" : "|0"));
                                 try { SendUdpP2pPacket(ackBytes, ackBytes.Length, activeUdpPeerEndpoint); } catch { }
                             }
 
                             // Proactive stalled-hole NACK when idle so BDP tail gaps never freeze transfer
-                            if (udpOutFile != null && udpReceivedChunkMap != null && udpHighestSeenChunk > udpHighestContiguousChunk &&
-                                unchecked(nowTickIdle - udpLastContigAdvanceTick) >= 220 && unchecked(nowTickIdle - lastIdleHoleNackTick) >= 180 &&
+                            if (udpOutFile != null && udpChunkReceived != null && udpHighestSeenChunk > udpContiguousChunk &&
+                                unchecked(nowTickIdle - lastContigAdvanceTick) >= 220 && unchecked(nowTickIdle - lastIdleHoleNackTick) >= 180 &&
                                 activeUdpPeerEndpoint != null && udpP2pClient != null)
                             {
                                 lastIdleHoleNackTick = nowTickIdle;
                                 if (udpChunkLastNackTick.Count > 16384) udpChunkLastNackTick.Clear();
                                 StringBuilder nackSb = new StringBuilder();
                                 int nackCnt = 0;
-                                int scanLimit = Math.Min(udpTotalExpectedChunks, udpHighestSeenChunk);
-                                for (int c = udpHighestContiguousChunk + 1; c < scanLimit; c++)
+                                int scanLimit = Math.Min(udpExpectedChunks, udpHighestSeenChunk);
+                                for (int c = udpContiguousChunk + 1; c < scanLimit; c++)
                                 {
                                     int prevTick;
-                                    if (!udpReceivedChunkMap[c] && (!udpChunkLastNackTick.TryGetValue(c, out prevTick) || unchecked(nowTickIdle - prevTick) > 220))
+                                    if (!udpChunkReceived[c] && (!udpChunkLastNackTick.TryGetValue(c, out prevTick) || unchecked(nowTickIdle - prevTick) > 220))
                                     {
                                         udpChunkLastNackTick[c] = nowTickIdle;
                                         if (nackCnt > 0) nackSb.Append(",");
@@ -3150,19 +3915,17 @@ namespace AetherTunnelNative
                             }
 
                             // Idle safety flush: if stream pauses for >= 10s, persist staged RAM pages to disk + .ckpt
-                            if (udpOutFile != null && udpStagedPages.Count > 0 && flushSw.ElapsedMilliseconds >= 10000)
+                            if (udpOutFile != null && stagedPages.Count > 0 && flushSw.ElapsedMilliseconds >= 10000)
                             {
-                                DispatchStagedPagesToDiskQueue(true);
+                                DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, true);
                                 flushSw.Restart();
                             }
                         }
-                    }
 
-                    lock (udpFileLock)
-                    {
-                        if (udpOutFile != null && udpReceivedChunkMap != null && udpHighestContiguousChunk + 1 >= udpTotalExpectedChunks)
+                        // Auto-finalize cleanly once 100% of contiguous chunks arrive (drain background Disk I/O queue before closing & renaming!)
+                        if (udpOutFile != null && udpChunkReceived != null && udpContiguousChunk + 1 >= udpExpectedChunks)
                         {
-                            DispatchStagedPagesToDiskQueue(true);
+                            DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, true);
                             WaitForDiskIoDrain(30000);
                             udpRxEndPending = false;
                             lock (diskFileStreamLock)
@@ -3172,7 +3935,7 @@ namespace AetherTunnelNative
                                 udpOutFile.Close();
                                 udpOutFile = null;
                             }
-                            if (udpRxSw != null) udpRxSw.Stop();
+                            udpRxSw.Stop();
 
                             try
                             {
@@ -3192,10 +3955,10 @@ namespace AetherTunnelNative
                                 }
                             }
 
-                            double sec = Math.Max(0.005, udpRxSw != null ? udpRxSw.Elapsed.TotalSeconds : 0.005);
+                            double sec = Math.Max(0.005, udpRxSw.Elapsed.TotalSeconds);
                             long sessionDeltaBytes = Math.Max(1L, udpExpectedSize - udpSessionStartBytes);
                             double mbps = (sessionDeltaBytes / (1024.0 * 1024.0)) / sec;
-                            UpdateTransferUi("Saved via P2P NAT-UDP: " + udpFileName, udpExpectedSize, udpExpectedSize, mbps, 1000, true);
+                            UpdateTransferUi("Saved via P2P NAT-UDP: " + udpFileName, udpExpectedSize, udpExpectedSize, mbps, mbps, 1000, true);
                             Log(String.Format("P2P NAT-UDP RX COMPLETE: {0} ({1:F2} MB/s)", udpFinalPath, mbps));
                         }
                         else if (udpRxEndPending && udpRxDataQueue.IsEmpty)
@@ -3209,57 +3972,55 @@ namespace AetherTunnelNative
                                     try { SendUdpP2pPacket(doneBytes, doneBytes.Length, activeUdpPeerEndpoint); } catch { }
                                 }
                             }
-                            else if (udpReceivedChunkMap != null)
+                            else
                             {
-                                if (udpStagedPages.Count > 0)
+                                if (stagedPages.Count > 0)
                                 {
-                                    DispatchStagedPagesToDiskQueue(true);
+                                    DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, true);
                                     flushSw.Restart();
                                 }
                                 int nowTick = Environment.TickCount;
                                 if (nowTick - lastEndNackTick >= 120)
                                 {
                                     lastEndNackTick = nowTick;
-                                    StringBuilder missingSb = new StringBuilder();
-                                    int missingCount = 0;
-                                    for (int c = Math.Max(0, udpHighestContiguousChunk + 1); c < udpTotalExpectedChunks; c++)
+                                    List<string> missing = new List<string>();
+                                    if (udpChunkReceived != null)
                                     {
-                                        if (!udpReceivedChunkMap[c])
+                                        for (int c = Math.Max(0, udpContiguousChunk + 1); c < udpChunkReceived.Length; c++)
                                         {
-                                            if (missingCount > 0) missingSb.Append(",");
-                                            missingSb.Append(c.ToString());
-                                            missingCount++;
-                                            if (missingCount >= 80) break;
+                                            if (!udpChunkReceived[c])
+                                            {
+                                                missing.Add(c.ToString());
+                                                if (missing.Count >= 80) break;
+                                            }
                                         }
                                     }
 
-                                    if (missingCount > 0 && activeUdpPeerEndpoint != null && udpP2pClient != null)
+                                    if (missing.Count > 0 && activeUdpPeerEndpoint != null && udpP2pClient != null)
                                     {
-                                        byte[] nackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + missingSb.ToString());
+                                        byte[] nackBytes = Encoding.UTF8.GetBytes("AETHER_UDP_NACK|" + String.Join(",", missing.ToArray()));
                                         try { SendUdpP2pPacket(nackBytes, nackBytes.Length, activeUdpPeerEndpoint); } catch { }
                                     }
                                 }
                             }
                         }
                     }
+                    catch { }
                 }
             }
             finally
             {
                 try
                 {
-                    lock (udpFileLock)
+                    if (udpOutFile != null)
                     {
-                        if (udpOutFile != null)
+                        DispatchStagedPagesToDiskQueue(udpOutFile, udpPartPath, udpExpectedSize, stagedPages, ref readyCompletedBytes, ref lastQueuedCkptContig, udpContiguousChunk, pageKeysBuf, true);
+                        WaitForDiskIoDrain(10000);
+                        lock (diskFileStreamLock)
                         {
-                            DispatchStagedPagesToDiskQueue(true);
-                            WaitForDiskIoDrain(10000);
-                            lock (diskFileStreamLock)
-                            {
-                                try { udpOutFile.Flush(false); } catch { }
-                                udpOutFile.Close();
-                                udpOutFile = null;
-                            }
+                            try { udpOutFile.Flush(false); } catch { }
+                            udpOutFile.Close();
+                            udpOutFile = null;
                         }
                     }
                 }
@@ -3268,8 +4029,51 @@ namespace AetherTunnelNative
             }
         }
 
+        private void PerformHolePunchPassForPeer(RoomPeerInfo p)
+        {
+            if (p == null) return;
+            if (p.ActiveUdpEp != null && (DateTime.UtcNow - p.LastUdpSeen).TotalSeconds < 12) return;
+
+            int nowTick = Environment.TickCount;
+            bool doSpray = unchecked(nowTick - lastPunchFanTick) >= 2400;
+            if (doSpray) lastPunchFanTick = nowTick;
+
+            string v6Ep = p.WanV6UdpEp ?? "";
+            string wanEp = p.WanUdpEp ?? "";
+            string predEp = p.PredWanUdpEp ?? "";
+            string lanUdpEp = p.LanUdpEp ?? "";
+
+            if (v6Ep.Length > 0 && udpP2pV6Client != null)
+            {
+                InitiateUdpHolePunch(v6Ep, false, true);
+            }
+            if (wanEp.Length > 0)
+            {
+                InitiateUdpHolePunch(wanEp, doSpray || p.NatSym == 1, true);
+            }
+            if (predEp.Length > 0 && predEp != wanEp)
+            {
+                InitiateUdpHolePunch(predEp, false, true);
+            }
+            if (lanUdpEp.Length > 0)
+            {
+                InitiateUdpHolePunch(lanUdpEp, false, true);
+            }
+        }
+
         private void PerformHolePunchPass()
         {
+            bool anyFromMap = false;
+            foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+            {
+                RoomPeerInfo p = kv.Value;
+                if (p != null && p.ClientType == "exe")
+                {
+                    anyFromMap = true;
+                    PerformHolePunchPassForPeer(p);
+                }
+            }
+            if (anyFromMap) return;
             if (activeUdpPeerEndpoint != null && (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds < 12) return;
 
             int nowTick = Environment.TickCount;
@@ -3283,19 +4087,19 @@ namespace AetherTunnelNative
 
             if (v6Ep.Length > 0 && udpP2pV6Client != null)
             {
-                InitiateUdpHolePunch(v6Ep, false);
+                InitiateUdpHolePunch(v6Ep, false, true);
             }
             if (wanEp.Length > 0)
             {
-                InitiateUdpHolePunch(wanEp, doSpray || remotePeerNatSym == 1);
+                InitiateUdpHolePunch(wanEp, doSpray || remotePeerNatSym == 1, true);
             }
             if (predEp.Length > 0 && predEp != wanEp)
             {
-                InitiateUdpHolePunch(predEp, false);
+                InitiateUdpHolePunch(predEp, false, true);
             }
             if (lanUdpEp.Length > 0)
             {
-                InitiateUdpHolePunch(lanUdpEp, false);
+                InitiateUdpHolePunch(lanUdpEp, false, true);
             }
         }
 
@@ -3307,9 +4111,10 @@ namespace AetherTunnelNative
                 try
                 {
                     tickSeq++;
+                    DateTime now = DateTime.UtcNow;
                     if (activeUdpPeerEndpoint != null)
                     {
-                        if ((DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds < 12)
+                        if ((now - lastUdpPeerSeen).TotalSeconds < 12)
                         {
                             byte[] ping = Encoding.UTF8.GetBytes("AETHER_PING|" + instanceId);
                             SendUdpP2pPacket(ping, ping.Length, activeUdpPeerEndpoint);
@@ -3320,25 +4125,84 @@ namespace AetherTunnelNative
                         }
                     }
 
-                    bool hasTcp = (activePeerClient != null && activePeerClient.Connected);
-                    bool hasUdp = (activeUdpPeerEndpoint != null && (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds < 12);
-                    bool hasLocalBrowser = (activeBrowserWsClient != null && activeBrowserWsClient.Connected);
-                    bool hasCloudBrowser = (!String.IsNullOrEmpty(activeCloudBrowserPeerId) && (DateTime.UtcNow - lastCloudBrowserSeen).TotalSeconds < 12);
-                    bool hasCloudExe = (!String.IsNullOrEmpty(activeCloudExePeerId) && (DateTime.UtcNow - lastCloudExeSeen).TotalSeconds < 12);
+                    int activeCount = 0;
+                    int exeNoUdpCount = 0;
+                    foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+                    {
+                        RoomPeerInfo p = kv.Value;
+                        if (p == null) continue;
+                        if (p.TcpClientConn != null && !p.TcpClientConn.Connected)
+                        {
+                            p.TcpClientConn = null;
+                            p.TcpStream = null;
+                        }
+                        if (p.ActiveUdpEp != null)
+                        {
+                            if ((now - p.LastUdpSeen).TotalSeconds < 12)
+                            {
+                                if (activeUdpPeerEndpoint == null || !p.ActiveUdpEp.Equals(activeUdpPeerEndpoint))
+                                {
+                                    byte[] ping = Encoding.UTF8.GetBytes("AETHER_PING|" + instanceId);
+                                    try { SendUdpP2pPacket(ping, ping.Length, p.ActiveUdpEp); } catch { }
+                                }
+                            }
+                            else
+                            {
+                                p.ActiveUdpEp = null;
+                            }
+                        }
 
-                    if (!hasTcp && !hasUdp && (tickSeq % 2 == 0))
+                        if (IsPeerActive(p, now))
+                        {
+                            activeCount++;
+                            if (p.ClientType == "exe" && p.ActiveUdpEp == null && (p.TcpClientConn == null || !p.TcpClientConn.Connected))
+                            {
+                                exeNoUdpCount++;
+                                PerformHolePunchPassForPeer(p);
+                            }
+                        }
+                        else
+                        {
+                            bool canRemove = (p.TcpClientConn == null) && (p.ActiveUdpEp == null) &&
+                                             (String.IsNullOrEmpty(p.CloudPeerId) || (now - p.LastCloudSeen).TotalSeconds >= 16) &&
+                                             (p.ClientType != "local_browser");
+                            if (canRemove)
+                            {
+                                RoomPeerInfo removed;
+                                roomPeers.TryRemove(kv.Key, out removed);
+                            }
+                        }
+                    }
+
+                    bool hasTcp = (activePeerClient != null && activePeerClient.Connected);
+                    bool hasUdp = (activeUdpPeerEndpoint != null && (now - lastUdpPeerSeen).TotalSeconds < 12);
+                    bool hasLocalBrowser = (activeBrowserWsClient != null && activeBrowserWsClient.Connected);
+                    bool hasCloudBrowser = (!String.IsNullOrEmpty(activeCloudBrowserPeerId) && (now - lastCloudBrowserSeen).TotalSeconds < 12);
+                    bool hasCloudExe = (!String.IsNullOrEmpty(activeCloudExePeerId) && (now - lastCloudExeSeen).TotalSeconds < 12);
+
+                    if ((activeCount == 0 || exeNoUdpCount > 0) && (tickSeq % 2 == 0))
                     {
                         BroadcastUdpPresence();
                     }
 
-                    if (!hasUdp && !hasTcp && hasCloudExe)
+                    if (!hasUdp && !hasTcp && hasCloudExe && exeNoUdpCount == 0)
                     {
                         PerformHolePunchPass();
                     }
 
-                    string room = currentRoomCode;
+                    SyncTargetPeerDropdown();
 
-                    if (hasTcp)
+                    string room = CleanRoomCode(currentRoomCode);
+                    if (roomFullRejected)
+                        UpdateStatusBadge("PEER STATUS: HUONE TÄYNNÄ (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " käyttäjää)");
+                    else if (room.Length == 0)
+                        UpdateStatusBadge("PEER STATUS: EI YHDISTETTY — Kirjoita tunnelin nimi ja paina Yhdistä");
+                    else if (activeCount > 0)
+                    {
+                        int totalUsers = Math.Min(MAX_ROOM_PEERS, activeCount + 1);
+                        UpdateStatusBadge("PEER STATUS: CONNECTED — " + activeCount.ToString() + " muuta huoneessa [" + room + "] (" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + ")");
+                    }
+                    else if (hasTcp)
                         UpdateStatusBadge("PEER STATUS: CONNECTED — KERNEL TCP (" + activePeerClient.Client.RemoteEndPoint.ToString() + ")");
                     else if (hasUdp)
                         UpdateStatusBadge("PEER STATUS: CONNECTED — P2P NAT-UDP (" + activeUdpPeerEndpoint.ToString() + ")");
@@ -3524,33 +4388,36 @@ namespace AetherTunnelNative
                 if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')
                     cleanSb.Append(ch);
             }
-            return cleanSb.Length > 0 ? cleanSb.ToString() : "default";
+            return cleanSb.ToString();
         }
 
-        private byte[] BuildMqttPacket(byte typeAndFlags, byte[] body)
+        private static byte[] BuildMqttPacket(byte packetType, byte[] variableHeader, byte[] payload)
         {
-            MemoryStream ms = new MemoryStream();
-            ms.WriteByte(typeAndFlags);
-            int rem = body.Length;
+            int remLen = (variableHeader != null ? variableHeader.Length : 0) + (payload != null ? payload.Length : 0);
+            List<byte> varLenBytes = new List<byte>(4);
+            int x = remLen;
             do
             {
-                byte enc = (byte)(rem % 128);
-                rem = rem / 128;
-                if (rem > 0) enc = (byte)(enc | 128);
-                ms.WriteByte(enc);
-            } while (rem > 0);
-            ms.Write(body, 0, body.Length);
-            return ms.ToArray();
-        }
+                byte encodedByte = (byte)(x % 128);
+                x = x / 128;
+                if (x > 0) encodedByte = (byte)(encodedByte | 128);
+                varLenBytes.Add(encodedByte);
+            } while (x > 0);
 
-        private byte[] EncodeMqttString(string s)
-        {
-            byte[] b = Encoding.UTF8.GetBytes(s);
-            byte[] res = new byte[b.Length + 2];
-            res[0] = (byte)((b.Length >> 8) & 0xFF);
-            res[1] = (byte)(b.Length & 0xFF);
-            Buffer.BlockCopy(b, 0, res, 2, b.Length);
-            return res;
+            byte[] packet = new byte[1 + varLenBytes.Count + remLen];
+            packet[0] = packetType;
+            for (int i = 0; i < varLenBytes.Count; i++) packet[1 + i] = varLenBytes[i];
+            int offset = 1 + varLenBytes.Count;
+            if (variableHeader != null && variableHeader.Length > 0)
+            {
+                Buffer.BlockCopy(variableHeader, 0, packet, offset, variableHeader.Length);
+                offset += variableHeader.Length;
+            }
+            if (payload != null && payload.Length > 0)
+            {
+                Buffer.BlockCopy(payload, 0, packet, offset, payload.Length);
+            }
+            return packet;
         }
 
         private void SendChannelFrame(SignalingChannel ch, byte[] data, bool isBinary)
@@ -3580,7 +4447,8 @@ namespace AetherTunnelNative
                         predWan = publicWanUdpEndpoint.Substring(0, col + 1) + nextP.ToString();
                 }
             }
-            return "{\\"kind\\":\\"" + kindName + "\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"fingerprint\\":\\"" + currentFingerprint +
+            string safeDisplay = SanitizeJsonText(localDisplayName);
+            return "{\\"kind\\":\\"" + kindName + "\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"displayName\\":\\"" + safeDisplay + "\\",\\"fingerprint\\":\\"" + currentFingerprint +
                    "\\",\\"lanEndpoint\\":\\"" + lanEp + "\\",\\"lanUdpEndpoint\\":\\"" + lanUdpEp +
                    "\\",\\"wanUdpEndpoint\\":\\"" + publicWanUdpEndpoint + "\\",\\"wanV6UdpEndpoint\\":\\"" + publicWanV6UdpEndpoint +
                    "\\",\\"predWanUdpEndpoint\\":\\"" + predWan + "\\",\\"natSym\\":\\"" + natSymDetected.ToString() +
@@ -3601,22 +4469,32 @@ namespace AetherTunnelNative
         {
             if (ch == null || ch.Ws == null || ch.Ws.State != WebSocketState.Open || String.IsNullOrEmpty(dstPeerId)) return;
             string envelope = "{\\"type\\":\\"CANDIDATE\\",\\"src\\":\\"" + activeCloudMyId + "\\",\\"dst\\":\\"" + dstPeerId + "\\",\\"payload\\":" + innerPayloadJson + "}";
-            byte[] mBytes = Encoding.UTF8.GetBytes(envelope);
+            byte[] envBytes = Encoding.UTF8.GetBytes(envelope);
             if (!ch.IsMqtt)
             {
-                SendChannelFrame(ch, mBytes, false);
+                SendChannelFrame(ch, envBytes, false);
                 return;
             }
-            byte[] tBytes = EncodeMqttString(ch.Topic);
-            byte[] body = new byte[tBytes.Length + mBytes.Length];
-            Buffer.BlockCopy(tBytes, 0, body, 0, tBytes.Length);
-            Buffer.BlockCopy(mBytes, 0, body, tBytes.Length, mBytes.Length);
-            SendChannelFrame(ch, BuildMqttPacket(0x30, body), true);
+            byte[] topicBytes = Encoding.UTF8.GetBytes(ch.Topic);
+            byte[] vh = new byte[2 + topicBytes.Length];
+            vh[0] = (byte)((topicBytes.Length >> 8) & 0xFF);
+            vh[1] = (byte)(topicBytes.Length & 0xFF);
+            Buffer.BlockCopy(topicBytes, 0, vh, 2, topicBytes.Length);
+            SendChannelFrame(ch, BuildMqttPacket(0x30, vh, envBytes), true);
         }
 
         private void SendCloudPacketAny(string dstPeerId, string innerPayloadJson)
         {
-            SignalingChannel preferred = dstPeerId == activeCloudBrowserPeerId ? lastBrowserSignalingChannel : lastExeSignalingChannel;
+            SignalingChannel preferred = null;
+            RoomPeerInfo targetP;
+            if (!String.IsNullOrEmpty(dstPeerId) && roomPeers.TryGetValue(dstPeerId, out targetP) && targetP != null)
+            {
+                preferred = targetP.PreferredCloudChannel;
+            }
+            if (preferred == null)
+            {
+                preferred = dstPeerId == activeCloudBrowserPeerId ? lastBrowserSignalingChannel : lastExeSignalingChannel;
+            }
             if (preferred != null && preferred.Ws != null && preferred.Ws.State == WebSocketState.Open)
             {
                 try { SendCloudPacketToChannel(preferred, dstPeerId, innerPayloadJson); return; } catch { }
@@ -3663,6 +4541,11 @@ namespace AetherTunnelNative
                 try
                 {
                     string cleanCode = CleanRoomCode(currentRoomCode);
+                    if (cleanCode.Length == 0)
+                    {
+                        Thread.Sleep(350);
+                        continue;
+                    }
                     string myPeerId = "aethertunnel-exe-" + cleanCode + "-" + instanceId;
                     activeCloudMyId = myPeerId;
                     activeCloudTopic = "aethertunnel/v1/room/" + cleanCode;
@@ -3683,7 +4566,9 @@ namespace AetherTunnelNative
                     activeSignalingChannels[ch.Name] = ch;
                     Log("Cloud Signaling connected: App Relay (" + cleanCode + ")");
 
-                    string joinJson = "{\\"type\\":\\"room:join\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"peerId\\":\\"" + myPeerId + "\\",\\"deviceLabel\\":\\"AetherTunnel .EXE (WAN)\\",\\"natType\\":\\"" + natTypeSummary + "\\"}";
+                    string safeDev = SanitizeJsonText(localDisplayName);
+                    if (safeDev.Length == 0) safeDev = "AetherTunnel .EXE (WAN)";
+                    string joinJson = "{\\"type\\":\\"room:join\\",\\"roomCode\\":\\"" + cleanCode + "\\",\\"peerId\\":\\"" + myPeerId + "\\",\\"deviceLabel\\":\\"" + safeDev + "\\",\\"clientType\\":\\"exe\\",\\"natType\\":\\"" + natTypeSummary + "\\"}";
                     SendChannelFrame(ch, Encoding.UTF8.GetBytes(joinJson), false);
                     SendCloudPacketToChannel(ch, "*", BuildHelloInnerJson("exe:hello", cleanCode));
 
@@ -3743,6 +4628,11 @@ namespace AetherTunnelNative
                 try
                 {
                     string cleanCode = CleanRoomCode(currentRoomCode);
+                    if (cleanCode.Length == 0)
+                    {
+                        Thread.Sleep(350);
+                        continue;
+                    }
                     joinedCode = cleanCode;
                     cloudReconnectRequested = false;
 
@@ -3766,17 +4656,15 @@ namespace AetherTunnelNative
                     ch.Topic = topic;
                     ch.Ws = ws;
 
+                    // MQTT 3.1.1 CONNECT packet (ClientId strictly <= 22 bytes for universal broker compatibility)
                     string shortCid = "at" + instanceId + "_" + (DateTime.UtcNow.Ticks & 0xFFFF).ToString("x4");
-                    MemoryStream connectBody = new MemoryStream();
-                    byte[] proto = EncodeMqttString("MQTT");
-                    connectBody.Write(proto, 0, proto.Length);
-                    connectBody.WriteByte(4);
-                    connectBody.WriteByte(2);
-                    connectBody.WriteByte(0);
-                    connectBody.WriteByte(30);
-                    byte[] cid = EncodeMqttString(shortCid);
-                    connectBody.Write(cid, 0, cid.Length);
-                    SendChannelFrame(ch, BuildMqttPacket(0x10, connectBody.ToArray()), true);
+                    byte[] idBytes = Encoding.UTF8.GetBytes(shortCid);
+                    byte[] connVh = new byte[] { 0x00, 0x04, (byte)'M', (byte)'Q', (byte)'T', (byte)'T', 0x04, 0x02, 0x00, 0x3C };
+                    byte[] connPl = new byte[2 + idBytes.Length];
+                    connPl[0] = (byte)((idBytes.Length >> 8) & 0xFF);
+                    connPl[1] = (byte)(idBytes.Length & 0xFF);
+                    Buffer.BlockCopy(idBytes, 0, connPl, 2, idBytes.Length);
+                    SendChannelFrame(ch, BuildMqttPacket(0x10, connVh, connPl), true);
 
                     ClientWebSocket capturedWs = ws;
                     SignalingChannel capturedCh = ch;
@@ -3807,8 +4695,7 @@ namespace AetherTunnelNative
 
                     byte[] recvBuf = new byte[131072];
                     MemoryStream msgMs = new MemoryStream();
-
-                    while (isRunning && !cloudReconnectRequested && ws.State == WebSocketState.Open && CleanRoomCode(currentRoomCode) == cleanCode)
+                    while (isRunning && ws.State == WebSocketState.Open && CleanRoomCode(currentRoomCode) == cleanCode)
                     {
                         WebSocketReceiveResult res = ws.ReceiveAsync(new ArraySegment<byte>(recvBuf), CancellationToken.None).GetAwaiter().GetResult();
                         if (res.MessageType == WebSocketMessageType.Close) break;
@@ -3818,51 +4705,56 @@ namespace AetherTunnelNative
                         byte[] rawFrame = msgMs.ToArray();
                         msgMs.SetLength(0);
 
-                        int offset = 0;
-                        while (offset < rawFrame.Length)
+                        int idx = 0;
+                        while (idx + 2 <= rawFrame.Length)
                         {
-                            byte header = rawFrame[offset++];
-                            int pktType = header >> 4;
-                            int remLen = 0;
+                            byte pktType = rawFrame[idx++];
                             int mult = 1;
-                            while (offset < rawFrame.Length)
+                            int remLen = 0;
+                            byte b = 0;
+                            bool okLen = true;
+                            do
                             {
-                                byte b = rawFrame[offset++];
+                                if (idx >= rawFrame.Length) { okLen = false; break; }
+                                b = rawFrame[idx++];
                                 remLen += (b & 127) * mult;
                                 mult *= 128;
-                                if ((b & 128) == 0) break;
-                            }
-                            if (offset + remLen > rawFrame.Length) break;
+                            } while ((b & 128) != 0);
 
-                            if (pktType == 2) // CONNACK -> Subscribe
+                            if (!okLen || idx + remLen > rawFrame.Length) break;
+                            int pktStart = idx;
+                            idx += remLen;
+
+                            if (pktType == 0x20) // CONNACK -> Subscribe
                             {
-                                MemoryStream subBody = new MemoryStream();
-                                subBody.WriteByte(0);
-                                subBody.WriteByte(1);
-                                byte[] topBytes = EncodeMqttString(topic);
-                                subBody.Write(topBytes, 0, topBytes.Length);
-                                subBody.WriteByte(0);
-                                SendChannelFrame(ch, BuildMqttPacket(0x82, subBody.ToArray()), true);
+                                byte[] topicBytes = Encoding.UTF8.GetBytes(topic);
+                                byte[] subPl = new byte[4 + topicBytes.Length + 1];
+                                subPl[0] = 0x00; subPl[1] = 0x01;
+                                subPl[2] = (byte)((topicBytes.Length >> 8) & 0xFF);
+                                subPl[3] = (byte)(topicBytes.Length & 0xFF);
+                                Buffer.BlockCopy(topicBytes, 0, subPl, 4, topicBytes.Length);
+                                subPl[4 + topicBytes.Length] = 0x00;
+                                SendChannelFrame(ch, BuildMqttPacket(0x82, new byte[0], subPl), true);
+                                continue;
                             }
-                            else if (pktType == 9) // SUBACK -> Online!
+
+                            if (pktType == 0x90) // SUBACK -> Online!
                             {
                                 activeSignalingChannels[ch.Name] = ch;
                                 Log("Cloud Signaling online (" + brokerName + ") -> Room [" + cleanCode + "]");
                                 SendCloudPacketToChannel(ch, "*", BuildHelloInnerJson("exe:hello", cleanCode));
+                                continue;
                             }
-                            else if (pktType == 3 && remLen >= 2)
-                            {
-                                int topicLen = (rawFrame[offset] << 8) | rawFrame[offset + 1];
-                                int qos = (header >> 1) & 3;
-                                int payloadStart = offset + 2 + topicLen + (qos > 0 ? 2 : 0);
-                                int payloadLen = (offset + remLen) - payloadStart;
-                                if (payloadLen > 0 && payloadStart + payloadLen <= rawFrame.Length)
-                                {
-                                    string text = Encoding.UTF8.GetString(rawFrame, payloadStart, payloadLen);
-                                    HandleIncomingCloudMessage(ch, text, cleanCode, myPeerId);
-                                }
-                            }
-                            offset += remLen;
+
+                            if ((pktType & 0xF0) != 0x30 || remLen < 4) continue;
+                            int tLen = (rawFrame[pktStart] << 8) | rawFrame[pktStart + 1];
+                            int pOffset = pktStart + 2 + tLen;
+                            if (((pktType >> 1) & 0x03) > 0) pOffset += 2;
+                            int jsonLen = (pktStart + remLen) - pOffset;
+                            if (jsonLen <= 0 || pOffset + jsonLen > rawFrame.Length) continue;
+
+                            string text = Encoding.UTF8.GetString(rawFrame, pOffset, jsonLen);
+                            HandleIncomingCloudMessage(ch, text, cleanCode, myPeerId);
                         }
                     }
                 }
@@ -3882,8 +4774,32 @@ namespace AetherTunnelNative
             {
                 if (String.IsNullOrEmpty(text)) return;
                 string topType = ExtractJsonString(text, "type");
+                if (topType == "room:full")
+                {
+                    roomFullRejected = true;
+                    UpdateStatusBadge("PEER STATUS: HUONE TÄYNNÄ (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " käyttäjää)");
+                    Log("Huone [" + cleanCode + "] on täynnä (enintään " + MAX_ROOM_PEERS.ToString() + " käyttäjää).");
+                    return;
+                }
+                if (topType == "peer:left")
+                {
+                    string leftId = ExtractJsonString(text, "peerId");
+                    if (leftId.Length == 0) leftId = ExtractJsonString(text, "id");
+                    if (leftId.Length > 0)
+                    {
+                        RoomPeerInfo rem;
+                        if (roomPeers.TryRemove(leftId, out rem))
+                        {
+                            try { if (rem != null && rem.TcpClientConn != null) rem.TcpClientConn.Close(); } catch { }
+                            Log("Käyttäjä poistui huoneesta: " + (rem != null ? rem.DisplayName : leftId));
+                            SyncTargetPeerDropdown();
+                        }
+                    }
+                    return;
+                }
                 if (topType == "peer:joined" || topType == "room:joined")
                 {
+                    roomFullRejected = false;
                     if (text.Contains("\\"id\\":\\"aethertunnel-"))
                     {
                         SendCloudPacketToChannel(ch, "*", BuildHelloInnerJson("exe:hello", cleanCode));
@@ -3901,15 +4817,29 @@ namespace AetherTunnelNative
 
                 if (kind == "browser:hello" || kind == "web:hello" || kind == "browser:hello-ack")
                 {
+                    string dName = ExtractJsonString(text, "displayName");
+                    if (dName.Length == 0) dName = "Selain (" + srcPeer.Substring(Math.Max(0, srcPeer.Length - 4)) + ")";
+                    bool isNewRoomPeer, fullRej;
+                    RoomPeerInfo bPeer = UpsertRoomPeer(srcPeer, dName, "web", out isNewRoomPeer, out fullRej);
+                    if (fullRej || bPeer == null)
+                    {
+                        Log("Ohitettiin uusi selainkäyttäjä: huoneessa jo max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        return;
+                    }
+                    bPeer.CloudPeerId = srcPeer;
+                    bPeer.LastCloudSeen = DateTime.UtcNow;
+                    bPeer.PreferredCloudChannel = ch;
+
                     bool isNewPairing = (activeCloudBrowserPeerId != srcPeer) || ((DateTime.UtcNow - lastCloudBrowserSeen).TotalSeconds > 10);
                     activeCloudBrowserPeerId = srcPeer;
                     lastCloudBrowserSeen = DateTime.UtcNow;
                     lastBrowserSignalingChannel = ch;
 
-                    if (isNewPairing)
+                    if (isNewRoomPeer || isNewPairing)
                     {
-                        UpdateStatusBadge("PEER STATUS: CONNECTED — CHROME BROWSER [" + cleanCode + "]");
-                        Log("Paired with Chrome Browser App in Wormhole Room [" + cleanCode + "] via " + ch.Name);
+                        SyncTargetPeerDropdown();
+                        UpdateStatusBadge("PEER STATUS: CONNECTED — " + bPeer.DisplayName + " [" + cleanCode + "]");
+                        Log("Yhdistetty selainkäyttäjään " + bPeer.DisplayName + " [" + cleanCode + "] (" + ch.Name + ")");
                     }
                     if (kind != "browser:hello-ack")
                     {
@@ -3924,10 +4854,15 @@ namespace AetherTunnelNative
                 }
                 else if ((kind == "exe:hello" || kind == "exe:hello-reply") && srcPeer.StartsWith("aethertunnel-exe-") && srcPeer != myPeerId)
                 {
-                    bool isNewPairing = (activeCloudExePeerId != srcPeer) || ((DateTime.UtcNow - lastCloudExeSeen).TotalSeconds > 10);
-                    activeCloudExePeerId = srcPeer;
-                    lastCloudExeSeen = DateTime.UtcNow;
-                    lastExeSignalingChannel = ch;
+                    string dName = ExtractJsonString(text, "displayName");
+                    if (dName.Length == 0) dName = "Windows .EXE (" + srcPeer.Substring(Math.Max(0, srcPeer.Length - 4)) + ")";
+                    bool isNewRoomPeer, fullRej;
+                    RoomPeerInfo ePeer = UpsertRoomPeer(srcPeer, dName, "exe", out isNewRoomPeer, out fullRej);
+                    if (fullRej || ePeer == null)
+                    {
+                        Log("Ohitettiin uusi .EXE-käyttäjä: huoneessa jo max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        return;
+                    }
 
                     string remoteWanUdp = ExtractJsonString(text, "wanUdpEndpoint");
                     string remoteLanUdp = ExtractJsonString(text, "lanUdpEndpoint");
@@ -3938,8 +4873,25 @@ namespace AetherTunnelNative
                     int rDelta = 0; Int32.TryParse(ExtractJsonString(text, "natDelta"), out rDelta);
                     int rUpnpTcp = 0; Int32.TryParse(ExtractJsonString(text, "upnpTcp"), out rUpnpTcp);
 
-                    bool endpointChanged = (remoteWanUdp.Length > 0 && remoteWanUdp != remotePeerWanUdp) ||
-                                           (remoteV6Udp.Length > 0 && remoteV6Udp != remotePeerWanV6Udp);
+                    bool endpointChanged = (remoteWanUdp.Length > 0 && remoteWanUdp != ePeer.WanUdpEp) ||
+                                           (remoteV6Udp.Length > 0 && remoteV6Udp != ePeer.WanV6UdpEp);
+
+                    ePeer.CloudPeerId = srcPeer;
+                    ePeer.LastCloudSeen = DateTime.UtcNow;
+                    ePeer.PreferredCloudChannel = ch;
+                    if (remoteWanUdp.Length > 0) ePeer.WanUdpEp = remoteWanUdp;
+                    if (remoteLanUdp.Length > 0) ePeer.LanUdpEp = remoteLanUdp;
+                    if (remoteV6Udp.Length > 0) ePeer.WanV6UdpEp = remoteV6Udp;
+                    if (remotePredWan.Length > 0) ePeer.PredWanUdpEp = remotePredWan;
+                    if (remoteLan.Length > 0) ePeer.LanTcpEp = remoteLan;
+                    ePeer.NatSym = rSym;
+                    ePeer.NatDelta = rDelta;
+                    ePeer.UpnpTcp = rUpnpTcp;
+
+                    bool isNewPairing = (activeCloudExePeerId != srcPeer) || ((DateTime.UtcNow - lastCloudExeSeen).TotalSeconds > 10);
+                    activeCloudExePeerId = srcPeer;
+                    lastCloudExeSeen = DateTime.UtcNow;
+                    lastExeSignalingChannel = ch;
 
                     if (remoteWanUdp.Length > 0) remotePeerWanUdp = remoteWanUdp;
                     if (remoteLanUdp.Length > 0) remotePeerLanUdp = remoteLanUdp;
@@ -3950,10 +4902,11 @@ namespace AetherTunnelNative
                     remotePeerNatDelta = rDelta;
                     remotePeerUpnpTcp = rUpnpTcp;
 
-                    if (isNewPairing)
+                    if (isNewRoomPeer || isNewPairing)
                     {
-                        UpdateStatusBadge("PEER STATUS: CONNECTED — REMOTE .EXE [" + cleanCode + "]");
-                        Log("Paired with Remote .EXE Peer in Room [" + cleanCode + "] via " + ch.Name +
+                        SyncTargetPeerDropdown();
+                        UpdateStatusBadge("PEER STATUS: CONNECTED — " + ePeer.DisplayName + " [" + cleanCode + "]");
+                        Log("Yhdistetty .EXE-käyttäjään " + ePeer.DisplayName + " [" + cleanCode + "] via " + ch.Name +
                             (remoteWanUdp.Length > 0 ? " (WAN: " + remoteWanUdp + ")" : "") +
                             (remoteV6Udp.Length > 0 ? " (IPv6)" : ""));
                     }
@@ -3961,25 +4914,25 @@ namespace AetherTunnelNative
                     {
                         int nowMs = Environment.TickCount;
                         int lastRep;
-                        if (!cloudHelloReplyTicks.TryGetValue(srcPeer, out lastRep) || unchecked(nowMs - lastRep) > 1000 || isNewPairing || endpointChanged)
+                        if (!cloudHelloReplyTicks.TryGetValue(srcPeer, out lastRep) || unchecked(nowMs - lastRep) > 1000 || isNewRoomPeer || endpointChanged)
                         {
                             cloudHelloReplyTicks[srcPeer] = nowMs;
                             SendCloudPacketToChannel(ch, srcPeer, BuildHelloInnerJson("exe:hello-reply", cleanCode));
                         }
                     }
 
-                    if ((isNewPairing || endpointChanged) && activeUdpPeerEndpoint == null)
+                    if ((isNewRoomPeer || endpointChanged) && ePeer.ActiveUdpEp == null)
                     {
-                        string punchSummary = remotePeerWanV6Udp.Length > 0 ? remotePeerWanV6Udp : (remotePeerWanUdp.Length > 0 ? remotePeerWanUdp : remotePeerLanUdp);
-                        if (punchSummary.Length > 0 && punchSummary != lastLoggedPunchTarget)
+                        string punchSummary = !String.IsNullOrEmpty(ePeer.WanV6UdpEp) ? ePeer.WanV6UdpEp : (!String.IsNullOrEmpty(ePeer.WanUdpEp) ? ePeer.WanUdpEp : ePeer.LanUdpEp);
+                        if (!String.IsNullOrEmpty(punchSummary) && punchSummary != lastLoggedPunchTarget)
                         {
                             lastLoggedPunchTarget = punchSummary;
-                            Log("Initiating P2P NAT Hole Punch -> " + punchSummary + (remotePeerNatSym == 1 ? " [Symmetric Port Spray]" : ""));
+                            Log("Initiating P2P NAT Hole Punch -> " + ePeer.DisplayName + " (" + punchSummary + ")" + (ePeer.NatSym == 1 ? " [Symmetric Port Spray]" : ""));
                         }
-                        PerformHolePunchPass();
+                        PerformHolePunchPassForPeer(ePeer);
                     }
 
-                    if (remoteLan.Length > 0 && !remoteLan.StartsWith("100.") && (activePeerClient == null || !activePeerClient.Connected) && activeUdpPeerEndpoint == null)
+                    if (remoteLan.Length > 0 && !remoteLan.StartsWith("100.") && (ePeer.TcpClientConn == null || !ePeer.TcpClientConn.Connected) && ePeer.ActiveUdpEp == null)
                     {
                         bool shouldTryTcp = false;
                         lock (attemptedAutoTcpEndpoints)
@@ -3990,9 +4943,9 @@ namespace AetherTunnelNative
                                 shouldTryTcp = true;
                             }
                         }
-                        if (shouldTryTcp) ConnectToPeerEndpoint(remoteLan, true);
+                        if (shouldTryTcp) ConnectToPeerEndpoint(remoteLan, true, ePeer);
                     }
-                    if (rUpnpTcp == 1 && remoteWanUdp.Contains(":") && (activePeerClient == null || !activePeerClient.Connected) && activeUdpPeerEndpoint == null)
+                    if (rUpnpTcp == 1 && remoteWanUdp.Contains(":") && (ePeer.TcpClientConn == null || !ePeer.TcpClientConn.Connected) && ePeer.ActiveUdpEp == null)
                     {
                         string peerWanTcp = remoteWanUdp.Split(':')[0] + ":" + listenPort.ToString();
                         bool shouldTryWanTcp = false;
@@ -4004,12 +4957,24 @@ namespace AetherTunnelNative
                                 shouldTryWanTcp = true;
                             }
                         }
-                        if (shouldTryWanTcp) ConnectToPeerEndpoint(peerWanTcp, true);
+                        if (shouldTryWanTcp) ConnectToPeerEndpoint(peerWanTcp, true, ePeer);
                     }
+                }
+                else if (kind == "exe:wait-accept" || kind == "browser:wait-accept")
+                {
+                    cloudWaitAcceptReceived = true;
+                    cloudResumeEvent.Set();
+                }
+                else if (kind == "exe:file-reject" || kind == "browser:file-reject")
+                {
+                    cloudTransferRejected = true;
+                    cloudResumeEvent.Set();
+                    cloudAckEvent.Set();
                 }
                 else if (kind == "exe:resume-ack" || kind == "file:resume-ack")
                 {
                     cloudResumeChunk = (int)ExtractJsonLong(text, "resumeFromChunk");
+                    cloudResumeReceived = true;
                     cloudResumeEvent.Set();
                 }
                 else if (kind == "exe:chunk-ack" || kind == "browser:chunk-ack")
@@ -4018,46 +4983,80 @@ namespace AetherTunnelNative
                 }
                 else if (kind == "exe:file-start" || kind == "browser:file-start")
                 {
-                    lock (cloudRxFileLock)
-                    {
-                        bool fromExe = srcPeer.StartsWith("aethertunnel-exe-");
-                        if (fromExe) { activeCloudExePeerId = srcPeer; lastCloudExeSeen = DateTime.UtcNow; lastExeSignalingChannel = ch; }
-                        else { activeCloudBrowserPeerId = srcPeer; lastCloudBrowserSeen = DateTime.UtcNow; lastBrowserSignalingChannel = ch; }
+                    bool fromExe = srcPeer.StartsWith("aethertunnel-exe-");
+                    if (fromExe) { activeCloudExePeerId = srcPeer; lastCloudExeSeen = DateTime.UtcNow; lastExeSignalingChannel = ch; }
+                    else { activeCloudBrowserPeerId = srcPeer; lastCloudBrowserSeen = DateTime.UtcNow; lastBrowserSignalingChannel = ch; }
 
-                        string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
-                        string incomingFileId = ExtractJsonString(text, "fileId");
-                        cloudFileName = ExtractJsonString(text, "name");
-                        if (cloudFileName.Length == 0) cloudFileName = "transfer.bin";
-                        cloudExpectedSize = ExtractJsonLong(text, "size");
-                        long cChunkSize = ExtractJsonLong(text, "chunkSize");
-                        if (cChunkSize <= 0) cChunkSize = CLOUD_CHUNK_SIZE;
-                        cloudOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + cloudFileName);
-                        cloudPartPath = cloudOutPath + ".part";
+                    string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
+                    string incomingFileId = ExtractJsonString(text, "fileId");
+                    string incName = ExtractJsonString(text, "name");
+                    if (incName.Length == 0) incName = "transfer.bin";
+                    long incSize = ExtractJsonLong(text, "size");
+                    long cChunkSize = ExtractJsonLong(text, "chunkSize");
+                    if (cChunkSize <= 0) cChunkSize = CLOUD_CHUNK_SIZE;
+                    string candOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + incName);
+                    string candPartPath = candOutPath + ".part";
+                    bool hasPart = File.Exists(candPartPath) && new FileInfo(candPartPath).Length > 0;
 
-                        if (cloudOutFile != null) cloudOutFile.Close();
-                        long existingBytes = 0;
-                        if (File.Exists(cloudPartPath))
+                    Action openCloudRx = delegate {
+                        lock (cloudRxFileLock)
                         {
-                            existingBytes = new FileInfo(cloudPartPath).Length;
-                            if (existingBytes >= cloudExpectedSize) existingBytes = 0;
+                            cloudRejectedFileId = "";
+                            cloudFileName = incName;
+                            cloudExpectedSize = incSize;
+                            cloudOutPath = candOutPath;
+                            cloudPartPath = candPartPath;
+
+                            if (cloudOutFile != null) cloudOutFile.Close();
+                            long existingBytes = 0;
+                            if (File.Exists(cloudPartPath))
+                            {
+                                existingBytes = new FileInfo(cloudPartPath).Length;
+                                if (existingBytes >= cloudExpectedSize) existingBytes = 0;
+                            }
+                            int resumeFromChunk = (int)(existingBytes / cChunkSize);
+                            long alignedBytes = (long)resumeFromChunk * cChunkSize;
+
+                            cloudOutFile = new FileStream(cloudPartPath, existingBytes > 0 ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
+                            if (alignedBytes > 0) cloudOutFile.Seek(alignedBytes, SeekOrigin.Begin);
+                            cloudReceivedBytes = alignedBytes;
+                            cloudSessionStartBytes = alignedBytes;
+                            cloudRxSw = Stopwatch.StartNew();
+
+                            SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + cloudFileName.Replace("\\"", "") + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
+                            int startPermille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
+                            UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, 0, 0, startPermille, true);
                         }
-                        int resumeFromChunk = (int)(existingBytes / cChunkSize);
-                        long alignedBytes = (long)resumeFromChunk * cChunkSize;
+                    };
 
-                        cloudOutFile = new FileStream(cloudPartPath, existingBytes > 0 ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
-                        if (alignedBytes > 0) cloudOutFile.Seek(alignedBytes, SeekOrigin.Begin);
-                        cloudReceivedBytes = alignedBytes;
-                        cloudRxSw = Stopwatch.StartNew();
-
-                        SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + cloudFileName.Replace("\\"", "") + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
-                        int startPermille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
-                        UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, 0, startPermille);
+                    if (autoAcceptAllIncoming)
+                    {
+                        openCloudRx();
+                    }
+                    else
+                    {
+                        SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:wait-accept\\",\\"fileId\\":\\"" + incomingFileId + "\\"}");
+                        ThreadPool.QueueUserWorkItem(delegate {
+                            int choice = ShowIncomingTransferDialog(senderLabel, incName, incSize, hasPart);
+                            if (choice == 1 || choice == 2)
+                            {
+                                openCloudRx();
+                            }
+                            else
+                            {
+                                cloudRejectedFileId = incomingFileId;
+                                Log("Saapuva Wormhole-tiedosto hylätty: " + incName);
+                                SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:file-reject\\",\\"fileId\\":\\"" + incomingFileId + "\\"}");
+                            }
+                        });
                     }
                 }
                 else if ((kind == "exe:file-chunk" || kind == "browser:file-chunk"))
                 {
                     lock (cloudRxFileLock)
                     {
+                        string fId = ExtractJsonString(text, "fileId");
+                        if (!String.IsNullOrEmpty(cloudRejectedFileId) && fId == cloudRejectedFileId) return;
                         if (cloudOutFile == null) return;
                         string b64 = ExtractJsonString(text, "data");
                         long chunkIdx = ExtractJsonLong(text, "chunkIndex");
@@ -4070,9 +5069,10 @@ namespace AetherTunnelNative
                             cloudReceivedBytes = Math.Max(cloudReceivedBytes, writePos + raw.Length);
 
                             double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
-                            double mbps = (cloudReceivedBytes / (1024.0 * 1024.0)) / sec;
+                            long deltaBytes = Math.Max(1L, cloudReceivedBytes - cloudSessionStartBytes);
+                            double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
                             int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
-                            UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, permille);
+                            UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, mbps, permille);
                         }
                         if ((chunkIdx + 1) % 8 == 0)
                         {
@@ -4085,7 +5085,7 @@ namespace AetherTunnelNative
                     lock (cloudRxFileLock)
                     {
                         if (cloudOutFile == null) return;
-                        cloudOutFile.Flush();
+                        cloudOutFile.Flush(false);
                         cloudOutFile.Close();
                         cloudOutFile = null;
                         cloudRxSw.Stop();
@@ -4098,8 +5098,9 @@ namespace AetherTunnelNative
                         catch { }
 
                         double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
-                        double mbps = (cloudExpectedSize / (1024.0 * 1024.0)) / sec;
-                        UpdateTransferUi("Saved to Downloads: " + cloudFileName, cloudExpectedSize, cloudExpectedSize, mbps, 1000);
+                        long deltaBytes = Math.Max(1L, cloudExpectedSize - cloudSessionStartBytes);
+                        double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
+                        UpdateTransferUi("Saved to Downloads: " + cloudFileName, cloudExpectedSize, cloudExpectedSize, mbps, mbps, 1000, true);
                         Log(String.Format("TRANSFER COMPLETE: Saved to {0} ({1:F2} MB/s)", cloudOutPath, mbps));
                         SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":999999}");
                     }
@@ -4145,14 +5146,48 @@ namespace AetherTunnelNative
                 }
                 else
                 {
-                    Log("Incoming Native .EXE Peer connected from " + client.Client.RemoteEndPoint.ToString());
+                    string epStr = client.Client.RemoteEndPoint.ToString();
+                    Log("Incoming Native .EXE Peer connected from " + epStr);
+                    RoomPeerInfo tcpPeer = FindPeerByEndpointOrInstance(CleanRoomCode(currentRoomCode), "", client.Client.RemoteEndPoint as IPEndPoint);
+                    bool isNewTcp, fullRej;
+                    if (tcpPeer == null)
+                    {
+                        tcpPeer = UpsertRoomPeer("tcp-" + epStr, "Windows .EXE (" + epStr + ")", "exe", out isNewTcp, out fullRej);
+                    }
+                    else
+                    {
+                        fullRej = false;
+                    }
+                    if (fullRej || tcpPeer == null)
+                    {
+                        Log("Hylättiin saapuva TCP-yhteys: huoneessa max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        try { client.Close(); } catch { }
+                        return;
+                    }
+                    tcpPeer.TcpClientConn = client;
+                    tcpPeer.TcpStream = netStream;
+                    tcpPeer.LastTcpSeen = DateTime.UtcNow;
+                    SyncTargetPeerDropdown();
+
                     if (activePeerClient == null || !activePeerClient.Connected)
                     {
                         activePeerClient = client;
                         activePeerStream = netStream;
-                        UpdateStatusBadge("CONNECTED .EXE PEER (" + client.Client.RemoteEndPoint.ToString() + ")");
+                        UpdateStatusBadge("CONNECTED .EXE PEER (" + epStr + ")");
                     }
-                    ReceiveKernelTcpLoop(client, netStream, peek);
+                    try
+                    {
+                        ReceiveKernelTcpLoop(client, netStream, peek);
+                    }
+                    finally
+                    {
+                        if (Object.ReferenceEquals(tcpPeer.TcpClientConn, client))
+                        {
+                            tcpPeer.TcpClientConn = null;
+                            tcpPeer.TcpStream = null;
+                            SyncTargetPeerDropdown();
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -4224,7 +5259,10 @@ namespace AetherTunnelNative
 
                 activeBrowserWsClient = client;
                 activeBrowserWsStream = netStream;
-                UpdateStatusBadge("CONNECTED: CHROME BROWSER (LOCAL 127.0.0.1:" + listenPort.ToString() + ")");
+                bool isNewLb, fullLb;
+                UpsertRoomPeer("local-browser", "Paikallinen selain (127.0.0.1)", "local_browser", out isNewLb, out fullLb);
+                SyncTargetPeerDropdown();
+                UpdateStatusBadge("PEER STATUS: CONNECTED — LOCAL BROWSER (127.0.0.1:" + listenPort.ToString() + ")");
                 Log("Chrome Browser connected via Direct Localhost Kernel WebSocket (127.0.0.1:" + listenPort.ToString() + ")");
 
                 NotifyBrowserRoomCode();
@@ -4233,6 +5271,17 @@ namespace AetherTunnelNative
             catch (Exception ex)
             {
                 if (isRunning) Log("Local Browser Bridge disconnected: " + ex.Message);
+            }
+            finally
+            {
+                if (Object.ReferenceEquals(activeBrowserWsClient, client))
+                {
+                    activeBrowserWsClient = null;
+                    activeBrowserWsStream = null;
+                    RoomPeerInfo removed;
+                    roomPeers.TryRemove("local-browser", out removed);
+                    SyncTargetPeerDropdown();
+                }
             }
         }
 
@@ -4247,7 +5296,8 @@ namespace AetherTunnelNative
                 else
                     code = txtRoomCode.Text.Trim().ToLowerInvariant();
 
-                string json = "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + code + "\\",\\"port\\":" + listenPort.ToString() + "}";
+                string safeDisp = SanitizeJsonText(localDisplayName);
+                string json = "{\\"kind\\":\\"exe:hello\\",\\"roomCode\\":\\"" + code + "\\",\\"displayName\\":\\"" + safeDisp + "\\",\\"port\\":" + listenPort.ToString() + "}";
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
                 SendWebSocketFrame(activeBrowserWsStream, 0x01, bytes, 0, bytes.Length);
             }
@@ -4315,7 +5365,7 @@ namespace AetherTunnelNative
                     bool masked = (h2[1] & 0x80) != 0;
                     long payloadLen = h2[1] & 0x7F;
 
-                    if (opcode == 0x08) break; // Close frame
+                    if (opcode == 0x08) break;
 
                     if (payloadLen == 126)
                     {
@@ -4349,7 +5399,7 @@ namespace AetherTunnelNative
                         }
                     }
 
-                    if (opcode == 0x09) // Ping -> Pong
+                    if (opcode == 0x09)
                     {
                         SendWebSocketFrame(wsStream, 0x0A, data, 0, data.Length);
                         continue;
@@ -4363,19 +5413,20 @@ namespace AetherTunnelNative
                     byte[] message = fragBuffer.ToArray();
                     fragBuffer.SetLength(0);
 
-                    if (fragOpcode == 0x01) // Text JSON frame from Browser
+                    if (fragOpcode == 0x01)
                     {
                         string text = Encoding.UTF8.GetString(message);
                         if (text.Contains("\\"browser:hello\\"") || text.Contains("\\"browser:room\\""))
                         {
-                            string browserRoom = ExtractJsonString(text, "roomCode");
+                            string browserRoom = CleanRoomCode(ExtractJsonString(text, "roomCode"));
                             if (browserRoom.Length > 0)
                             {
                                 this.BeginInvoke(new Action(delegate {
-                                    if (txtRoomCode.Text.Trim().ToLowerInvariant() != browserRoom.ToLowerInvariant())
+                                    if (CleanRoomCode(currentRoomCode) != browserRoom)
                                     {
                                         suppressRoomBroadcast = true;
-                                        txtRoomCode.Text = browserRoom.ToLowerInvariant();
+                                        txtRoomCode.Text = browserRoom;
+                                        ConnectToEnteredRoom();
                                         suppressRoomBroadcast = false;
                                         Log("Synced Wormhole Code with Chrome Browser: " + browserRoom);
                                     }
@@ -4393,7 +5444,19 @@ namespace AetherTunnelNative
                             currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
                             currentPartPath = currentOutPath + ".part";
 
-                            if (currentOutFile != null) currentOutFile.Close();
+                            if (currentOutFile != null) { currentOutFile.Close(); currentOutFile = null; }
+                            bool hasPart = File.Exists(currentPartPath) && new FileInfo(currentPartPath).Length > 0;
+
+                            int choice = autoAcceptAllIncoming ? 1 : ShowIncomingTransferDialog("Chrome Browser (Local)", currentFileName, expectedFileSize, hasPart);
+                            if (choice == 0)
+                            {
+                                Log("Saapuva selain-siirto hylätty: " + currentFileName);
+                                string rejJson = String.Format("{{\\"kind\\":\\"exe:file-reject\\",\\"fileId\\":\\"{0}\\"}}", incomingFileId);
+                                byte[] rejBytes = Encoding.UTF8.GetBytes(rejJson);
+                                SendWebSocketFrame(wsStream, 0x01, rejBytes, 0, rejBytes.Length);
+                                continue;
+                            }
+
                             long existingBytes = 0;
                             if (File.Exists(currentPartPath))
                             {
@@ -4422,7 +5485,7 @@ namespace AetherTunnelNative
                         }
                         else if (text.Contains("\\"exe:file-end\\"") && currentOutFile != null)
                         {
-                            currentOutFile.Flush();
+                            currentOutFile.Flush(false);
                             currentOutFile.Close();
                             currentOutFile = null;
                             rxSw.Stop();
@@ -4436,11 +5499,11 @@ namespace AetherTunnelNative
 
                             double sec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
                             double mbps = (expectedFileSize / (1024.0 * 1024.0)) / sec;
-                            UpdateTransferUi("Saved from Browser: " + currentFileName, expectedFileSize, expectedFileSize, mbps, 1000);
+                            UpdateTransferUi("Saved from Browser: " + currentFileName, expectedFileSize, expectedFileSize, mbps, mbps, 1000, true);
                             Log(String.Format("BROWSER -> .EXE COMPLETE: {0} ({1:F2} MB/s · {2:F2} Gbps)", currentOutPath, mbps, (mbps * 8.0) / 1000.0));
                         }
                     }
-                    else if (fragOpcode == 0x02 && currentOutFile != null) // Raw Binary chunk from Browser
+                    else if (fragOpcode == 0x02 && currentOutFile != null)
                     {
                         currentOutFile.Write(message, 0, message.Length);
                         receivedBytes += message.Length;
@@ -4448,7 +5511,7 @@ namespace AetherTunnelNative
                         double sec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
                         double mbps = (receivedBytes / (1024.0 * 1024.0)) / sec;
                         int permille = (int)((receivedBytes * 1000L) / Math.Max(1L, expectedFileSize));
-                        UpdateTransferUi("Receiving from Browser: " + currentFileName, receivedBytes, expectedFileSize, mbps, permille);
+                        UpdateTransferUi("Receiving from Browser: " + currentFileName, receivedBytes, expectedFileSize, mbps, mbps, permille);
                     }
                 }
             }
@@ -4525,32 +5588,48 @@ namespace AetherTunnelNative
                 return;
             }
             lblStatusBadge.Text = text;
-            bool isConnected = text.IndexOf("CONNECTED", StringComparison.OrdinalIgnoreCase) >= 0;
-            lblStatusBadge.ForeColor = isConnected ? Color.FromArgb(52, 211, 153) : Color.FromArgb(251, 191, 36);
+            bool isFull = roomFullRejected || text.IndexOf("TÄYNNÄ", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool isConnected = !isFull && text.IndexOf("CONNECTED", StringComparison.OrdinalIgnoreCase) >= 0;
+            lblStatusBadge.ForeColor = isFull ? Color.FromArgb(248, 113, 113) : (isConnected ? Color.FromArgb(52, 211, 153) : Color.FromArgb(251, 191, 36));
 
             if (pnlRoomPresence != null && lblRoomPresence != null)
             {
-                if (isConnected)
+                DateTime now = DateTime.UtcNow;
+                int activeOthers = 0;
+                foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
                 {
+                    if (IsPeerActive(kv.Value, now)) activeOthers++;
+                }
+
+                if (isFull)
+                {
+                    pnlRoomPresence.BackColor = Color.FromArgb(65, 18, 24);
+                    lblRoomPresence.ForeColor = Color.FromArgb(248, 113, 113);
+                    lblRoomPresence.Text = "[" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " TÄYNNÄ] Huoneessa on enimmäismäärä käyttäjiä!";
+                }
+                else if (isConnected || activeOthers > 0)
+                {
+                    int totalUsers = Math.Min(MAX_ROOM_PEERS, Math.Max(2, activeOthers + 1));
                     string detail = text.Replace("PEER STATUS: CONNECTED — ", "").Replace("PEER STATUS: CONNECTED", "").Trim();
                     pnlRoomPresence.BackColor = Color.FromArgb(6, 46, 36);
                     lblRoomPresence.ForeColor = Color.FromArgb(52, 211, 153);
-                    lblRoomPresence.Text = "[2/2 PEERS] Toinen peer on huoneessa! (" + detail + ")";
+                    lblRoomPresence.Text = "[" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " KÄYTTÄJÄÄ] Huoneessa " + Math.Max(1, activeOthers).ToString() + " muuta (" + detail + ")";
                 }
                 else
                 {
-                    string room = txtRoomCode != null ? txtRoomCode.Text.Trim().ToLowerInvariant() : "";
+                    string room = CleanRoomCode(currentRoomCode);
                     pnlRoomPresence.BackColor = Color.FromArgb(30, 27, 22);
                     lblRoomPresence.ForeColor = Color.FromArgb(251, 191, 36);
-                    lblRoomPresence.Text = "[1/2 PEERS] Ei toista peeriä huoneessa [" + room + "]";
+                    lblRoomPresence.Text = room.Length == 0
+                        ? "Kirjoita tunnelin nimi ja paina Yhdistä"
+                        : "[1/" + MAX_ROOM_PEERS.ToString() + " KÄYTTÄJÄ] Ei muita huoneessa [" + room + "]";
                 }
             }
         }
 
-        private void ConnectToPeerEndpoint(string endpointStr, bool silentAutoAttempt = false)
+        private void ConnectToPeerEndpoint(string endpointStr, bool silentAutoProbe = false, RoomPeerInfo targetPeer = null)
         {
-            // Also initiate simultaneous UDP Hole Punching in case the peer is across a WAN NAT
-            InitiateUdpHolePunch(endpointStr);
+            InitiateUdpHolePunch(endpointStr, false, targetPeer != null);
 
             ThreadPool.QueueUserWorkItem(delegate {
                 try
@@ -4568,37 +5647,72 @@ namespace AetherTunnelNative
                         host = endpointStr;
                     }
 
-                    if (!silentAutoAttempt)
+                    if (!silentAutoProbe)
                     {
                         Log("Opening Direct Winsock2 Kernel TCP connection to " + host + ":" + port.ToString() + "...");
                     }
+
                     TcpClient client = new TcpClient();
                     ConfigureSocketForMaxThroughput(client);
-                    IAsyncResult ar = client.BeginConnect(host, port, null, null);
-                    bool connected = ar.AsyncWaitHandle.WaitOne(silentAutoAttempt ? 1200 : 3500);
-                    if (!connected || !client.Connected)
+                    if (silentAutoProbe)
                     {
-                        try { client.Close(); } catch { }
-                        if (!silentAutoAttempt)
+                        IAsyncResult ar = client.BeginConnect(host, port, null, null);
+                        if (!ar.AsyncWaitHandle.WaitOne(1200))
                         {
-                            Log("TCP Connect timed out (UDP NAT Hole-Punch active): " + host + ":" + port.ToString());
+                            try { client.Close(); } catch { }
+                            return;
                         }
-                        return;
+                        client.EndConnect(ar);
                     }
-                    client.EndConnect(ar);
+                    else
+                    {
+                        client.Connect(host, port);
+                    }
 
-                    activePeerClient = client;
-                    activePeerStream = client.GetStream();
+                    NetworkStream netStream = client.GetStream();
+                    RoomPeerInfo tcpPeer = targetPeer;
+                    if (tcpPeer == null)
+                    {
+                        tcpPeer = FindPeerByEndpointOrInstance(CleanRoomCode(currentRoomCode), "", client.Client.RemoteEndPoint as IPEndPoint);
+                        if (tcpPeer == null)
+                        {
+                            bool isNewTcp, fullRej;
+                            tcpPeer = UpsertRoomPeer("tcp-" + host + ":" + port.ToString(), "Windows .EXE (" + host + ":" + port.ToString() + ")", "exe", out isNewTcp, out fullRej);
+                        }
+                    }
+                    if (tcpPeer != null)
+                    {
+                        tcpPeer.TcpClientConn = client;
+                        tcpPeer.TcpStream = netStream;
+                        tcpPeer.LastTcpSeen = DateTime.UtcNow;
+                        SyncTargetPeerDropdown();
+                    }
+                    if (activePeerClient == null || !activePeerClient.Connected)
+                    {
+                        activePeerClient = client;
+                        activePeerStream = netStream;
+                    }
                     UpdateStatusBadge("PEER STATUS: CONNECTED — DIRECT TCP (" + host + ":" + port.ToString() + ")");
                     Log("Direct Kernel TCP Pipe established -> " + host + ":" + port.ToString() + " (NoDelay=true, 16MB Buffers)");
 
-                    Thread rxThread = new Thread(delegate() { ReceiveKernelTcpLoop(client, activePeerStream, null); });
+                    Thread rxThread = new Thread(delegate() {
+                        try { ReceiveKernelTcpLoop(client, netStream, null); }
+                        finally
+                        {
+                            if (tcpPeer != null && Object.ReferenceEquals(tcpPeer.TcpClientConn, client))
+                            {
+                                tcpPeer.TcpClientConn = null;
+                                tcpPeer.TcpStream = null;
+                                SyncTargetPeerDropdown();
+                            }
+                        }
+                    });
                     rxThread.IsBackground = true;
                     rxThread.Start();
                 }
                 catch (Exception ex)
                 {
-                    if (!silentAutoAttempt)
+                    if (!silentAutoProbe)
                     {
                         Log("TCP Connect failed (UDP NAT Hole-Punch active): " + ex.Message);
                     }
@@ -4631,19 +5745,23 @@ namespace AetherTunnelNative
                             int remotePort = 0;
                             Int32.TryParse(parts[2], out remotePort);
                             string remoteInstanceId = parts[3];
+                            string remoteDName = (parts.Length >= 5 && parts[4].Trim().Length > 0) ? parts[4].Trim() : ("Windows .EXE (" + remoteEp.Address.ToString() + ")");
 
                             if (remoteInstanceId == instanceId) continue;
                             if (IsOwnLocalEndpoint(remoteEp.Address, remotePort)) continue;
 
                             string myRoom = CleanRoomCode(currentRoomCode);
 
-                            if (remoteRoom == myRoom && remotePort > 0)
+                            if (myRoom.Length > 0 && remoteRoom == myRoom && remotePort > 0)
                             {
                                 string candidate = remoteEp.Address.ToString() + ":" + remotePort.ToString();
-                                if (activePeerClient == null || !activePeerClient.Connected)
+                                string canonKey = "aethertunnel-exe-" + remoteRoom + "-" + remoteInstanceId;
+                                bool isNewDisc, fullDisc;
+                                RoomPeerInfo discPeer = UpsertRoomPeer(canonKey, remoteDName, "exe", out isNewDisc, out fullDisc);
+                                if (!fullDisc && discPeer != null && (discPeer.TcpClientConn == null || !discPeer.TcpClientConn.Connected))
                                 {
-                                    Log("LAN Auto-Discovery found remote .EXE peer at " + candidate);
-                                    ConnectToPeerEndpoint(candidate);
+                                    Log("LAN Auto-Discovery found remote .EXE peer " + discPeer.DisplayName + " at " + candidate);
+                                    ConnectToPeerEndpoint(candidate, true, discPeer);
                                 }
                             }
                         }
@@ -4659,7 +5777,8 @@ namespace AetherTunnelNative
             {
                 if (udpDiscovery == null) return;
                 string room = CleanRoomCode(currentRoomCode);
-                byte[] payload = Encoding.UTF8.GetBytes("AETHER_DISCOVER|" + room + "|" + listenPort.ToString() + "|" + instanceId);
+                if (room.Length == 0) return;
+                byte[] payload = Encoding.UTF8.GetBytes("AETHER_DISCOVER|" + room + "|" + listenPort.ToString() + "|" + instanceId + "|" + SanitizeJsonText(localDisplayName));
                 try { udpDiscovery.Send(payload, payload.Length, new IPEndPoint(IPAddress.Broadcast, UDP_DISCOVERY_PORT)); } catch { }
                 foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
                 {
@@ -4691,15 +5810,7 @@ namespace AetherTunnelNative
             string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
             if (files != null && files.Length > 0)
             {
-                if (files.Length > 1)
-                {
-                    Log("Queued " + files.Length.ToString() + " files for high-speed P2P transfer...");
-                }
-                foreach (string f in files)
-                {
-                    string pathCopy = f;
-                    StartFileTransfer(pathCopy);
-                }
+                EnqueueTransferPaths(files);
             }
         }
 
@@ -4707,73 +5818,495 @@ namespace AetherTunnelNative
         {
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
-                ofd.Title = "Select File(s) to Stream to Connected Chrome Browser or .EXE Peer";
+                ofd.Title = "Valitse siirtojonoon lisättävät tiedostot";
                 ofd.Multiselect = true;
                 if (ofd.ShowDialog() == DialogResult.OK && ofd.FileNames != null && ofd.FileNames.Length > 0)
                 {
-                    if (ofd.FileNames.Length > 1)
-                    {
-                        Log("Queued " + ofd.FileNames.Length.ToString() + " files for high-speed P2P transfer...");
-                    }
-                    foreach (string f in ofd.FileNames)
-                    {
-                        string pathCopy = f;
-                        StartFileTransfer(pathCopy);
-                    }
+                    EnqueueTransferPaths(ofd.FileNames);
                 }
             }
         }
 
-        private void StartFileTransfer(string filePath)
+        private void OnSelectFolderClicked(object sender, EventArgs e)
         {
+            if (folderPickDialog == null) folderPickDialog = new FolderBrowserDialog();
+            folderPickDialog.Description = "Valitse kansio, jonka kaikki tiedostot lisätään siirtojonoon:";
+            if (folderPickDialog.ShowDialog() == DialogResult.OK && !String.IsNullOrEmpty(folderPickDialog.SelectedPath))
+            {
+                EnqueueTransferPaths(new string[] { folderPickDialog.SelectedPath });
+            }
+        }
+
+        private void OnRemoveSelectedQueueClicked(object sender, EventArgs e)
+        {
+            if (lstQueue == null || lstQueue.SelectedIndex < 0) return;
+            lock (transferQueueLock)
+            {
+                int idx = lstQueue.SelectedIndex;
+                if (idx >= 0 && idx < transferQueue.Count)
+                {
+                    TransferQueueEntry item = transferQueue[idx];
+                    if (item.Id == activeQueueTransferId && item.Status == "Siirretään")
+                    {
+                        Log("Aktiivista siirtoa ei voi poistaa jonosta kesken lähetyksen.");
+                        return;
+                    }
+                    cancelledQueueIds.Add(item.Id);
+                    transferQueue.RemoveAt(idx);
+                }
+            }
+            RefreshQueueUi();
+        }
+
+        private void OnClearQueueClicked(object sender, EventArgs e)
+        {
+            lock (transferQueueLock)
+            {
+                for (int i = transferQueue.Count - 1; i >= 0; i--)
+                {
+                    string st = transferQueue[i].Status;
+                    if (st == "Valmis" || st == "Hylätty" || st == "Virhe")
+                    {
+                        transferQueue.RemoveAt(i);
+                    }
+                }
+            }
+            RefreshQueueUi();
+        }
+
+        private void OnPauseResumeClicked(object sender, EventArgs e)
+        {
+            transferPaused = !transferPaused;
+            if (transferPaused)
+            {
+                transferResumeEvent.Reset();
+                if (btnPauseResume != null)
+                {
+                    btnPauseResume.Text = "Jatka";
+                    btnPauseResume.BackColor = Color.FromArgb(14, 52, 38);
+                    btnPauseResume.ForeColor = Color.FromArgb(52, 211, 153);
+                }
+                if (!String.IsNullOrEmpty(activeQueueTransferId))
+                {
+                    UpdateQueueEntryStatus(activeQueueTransferId, "Pysäytetty");
+                }
+                if (lblProgressDetail != null)
+                {
+                    lblProgressDetail.Text = "Siirto pysäytetty — paina Jatka jatkaaksesi.";
+                }
+                Log("Siirto pysäytetty käyttäjän toimesta.");
+            }
+            else
+            {
+                transferResumeEvent.Set();
+                if (btnPauseResume != null)
+                {
+                    btnPauseResume.Text = "Pysäytä";
+                    btnPauseResume.BackColor = Color.FromArgb(45, 34, 14);
+                    btnPauseResume.ForeColor = Color.FromArgb(251, 191, 36);
+                }
+                if (!String.IsNullOrEmpty(activeQueueTransferId))
+                {
+                    UpdateQueueEntryStatus(activeQueueTransferId, "Siirretään");
+                }
+                Log("Siirtoa jatketaan.");
+            }
+        }
+
+        private void EnqueueTransferPaths(string[] paths)
+        {
+            if (paths == null || paths.Length == 0) return;
+            string tgtId = String.IsNullOrEmpty(selectedTargetPeerId) ? "*" : selectedTargetPeerId;
+            string tgtLabel = GetCurrentTargetLabel(tgtId);
+            int added = 0;
+            lock (transferQueueLock)
+            {
+                foreach (string rawPath in paths)
+                {
+                    try
+                    {
+                        if (File.Exists(rawPath))
+                        {
+                            FileInfo fi = new FileInfo(rawPath);
+                            TransferQueueEntry entry = new TransferQueueEntry();
+                            entry.Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+                            entry.FullPath = fi.FullName;
+                            entry.DisplayName = fi.Name;
+                            entry.FileSize = fi.Length;
+                            entry.Status = "Odottaa";
+                            entry.TargetPeerId = tgtId;
+                            entry.TargetLabel = tgtLabel;
+                            transferQueue.Add(entry);
+                            added++;
+                        }
+                        else if (Directory.Exists(rawPath))
+                        {
+                            string rootDir = Path.GetFullPath(rawPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                            string rootFolderName = Path.GetFileName(rootDir);
+                            string[] dirFiles = Directory.GetFiles(rootDir, "*", SearchOption.AllDirectories);
+                            Array.Sort(dirFiles, StringComparer.OrdinalIgnoreCase);
+                            foreach (string df in dirFiles)
+                            {
+                                try
+                                {
+                                    FileInfo dfi = new FileInfo(df);
+                                    string rel = dfi.FullName.Length > rootDir.Length + 1
+                                        ? dfi.FullName.Substring(rootDir.Length + 1)
+                                        : dfi.Name;
+                                    TransferQueueEntry entry = new TransferQueueEntry();
+                                    entry.Id = Guid.NewGuid().ToString("N").Substring(0, 10);
+                                    entry.FullPath = dfi.FullName;
+                                    entry.DisplayName = (!String.IsNullOrEmpty(rootFolderName) ? rootFolderName + "\\\\" + rel : rel);
+                                    entry.FileSize = dfi.Length;
+                                    entry.Status = "Odottaa";
+                                    entry.TargetPeerId = tgtId;
+                                    entry.TargetLabel = tgtLabel;
+                                    transferQueue.Add(entry);
+                                    added++;
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            if (added > 0)
+            {
+                Log("Lisättiin siirtojonoon " + added.ToString() + (added == 1 ? " tiedosto" : " tiedostoa") + " -> " + tgtLabel + ".");
+                RefreshQueueUi();
+                transferQueueEvent.Set();
+            }
+        }
+
+        private void RefreshQueueUi()
+        {
+            try
+            {
+                if (this.InvokeRequired)
+                {
+                    this.BeginInvoke(new Action(RefreshQueueUi));
+                    return;
+                }
+                if (lstQueue == null || lblQueueSummary == null) return;
+                List<string> rows = new List<string>();
+                int waiting = 0;
+                int done = 0;
+                lock (transferQueueLock)
+                {
+                    for (int i = 0; i < transferQueue.Count; i++)
+                    {
+                        TransferQueueEntry q = transferQueue[i];
+                        if (q.Status == "Odottaa" || q.Status == "Odotetaan paria..." || q.Status == "Odotetaan hyväksyntää" || q.Status == "Siirretään" || q.Status == "Pysäytetty") waiting++;
+                        else if (q.Status == "Valmis") done++;
+                        string tLabel = String.IsNullOrEmpty(q.TargetLabel) ? "Kaikki" : q.TargetLabel;
+                        rows.Add(String.Format("[{0}] (-> {1}) {2} ({3})", q.Status, tLabel, q.DisplayName, FormatBytes(q.FileSize)));
+                    }
+                }
+                lblQueueSummary.Text = String.Format("Siirtojono ({0} jonossa · {1} valmis)", waiting, done);
+                int prevSel = lstQueue.SelectedIndex;
+                lstQueue.BeginUpdate();
+                lstQueue.Items.Clear();
+                for (int i = 0; i < rows.Count; i++) lstQueue.Items.Add(rows[i]);
+                if (prevSel >= 0 && prevSel < lstQueue.Items.Count) lstQueue.SelectedIndex = prevSel;
+                lstQueue.EndUpdate();
+            }
+            catch { }
+        }
+
+        private bool HasAnyActivePeer()
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+            {
+                if (IsPeerActive(kv.Value, now)) return true;
+            }
             bool hasExePeer = (activePeerClient != null && activePeerClient.Connected && activePeerStream != null);
-            bool hasUdpPeer = (activeUdpPeerEndpoint != null && (DateTime.UtcNow - lastUdpPeerSeen).TotalSeconds < 15);
+            bool hasUdpPeer = (activeUdpPeerEndpoint != null && (now - lastUdpPeerSeen).TotalSeconds < 15);
             bool hasLocalBrowserPeer = (activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null);
             bool hasCloudOpen = !activeSignalingChannels.IsEmpty;
-            bool hasCloudBrowserPeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudBrowserPeerId) && (DateTime.UtcNow - lastCloudBrowserSeen).TotalSeconds < 14);
-            bool hasCloudExePeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudExePeerId) && (DateTime.UtcNow - lastCloudExeSeen).TotalSeconds < 14);
+            bool hasCloudBrowserPeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudBrowserPeerId) && (now - lastCloudBrowserSeen).TotalSeconds < 14);
+            bool hasCloudExePeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudExePeerId) && (now - lastCloudExeSeen).TotalSeconds < 14);
+            return hasExePeer || hasUdpPeer || hasLocalBrowserPeer || hasCloudBrowserPeer || hasCloudExePeer;
+        }
 
-            if (hasExePeer)
+        private bool HasTargetReadyForEntry(TransferQueueEntry entry, DateTime now)
+        {
+            if (entry == null) return false;
+            if (String.IsNullOrEmpty(entry.TargetPeerId) || entry.TargetPeerId == "*")
             {
-                Thread txThread = new Thread(delegate() { StreamFileOverKernelTcp(filePath); });
-                txThread.IsBackground = true;
-                txThread.Start();
-                return;
+                return HasAnyActivePeer();
+            }
+            RoomPeerInfo p;
+            if (roomPeers.TryGetValue(entry.TargetPeerId, out p))
+            {
+                return IsPeerActive(p, now);
+            }
+            return false;
+        }
+
+        private void UpdateQueueEntryStatus(string entryId, string status)
+        {
+            lock (transferQueueLock)
+            {
+                for (int i = 0; i < transferQueue.Count; i++)
+                {
+                    if (transferQueue[i].Id == entryId)
+                    {
+                        transferQueue[i].Status = status;
+                        break;
+                    }
+                }
+            }
+            RefreshQueueUi();
+        }
+
+        private void TransferQueueWorkerLoop()
+        {
+            bool loggedWaitingPeer = false;
+            while (isRunning)
+            {
+                TransferQueueEntry next = null;
+                TransferQueueEntry firstWaiting = null;
+                DateTime now = DateTime.UtcNow;
+                lock (transferQueueLock)
+                {
+                    for (int i = 0; i < transferQueue.Count; i++)
+                    {
+                        TransferQueueEntry cand = transferQueue[i];
+                        if (cand.Status == "Odottaa" || cand.Status == "Odotetaan paria...")
+                        {
+                            if (firstWaiting == null) firstWaiting = cand;
+                            if (HasTargetReadyForEntry(cand, now))
+                            {
+                                next = cand;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (next == null)
+                {
+                    if (firstWaiting != null)
+                    {
+                        if (firstWaiting.Status != "Odotetaan paria...")
+                        {
+                            UpdateQueueEntryStatus(firstWaiting.Id, "Odotetaan paria...");
+                        }
+                        if (!loggedWaitingPeer)
+                        {
+                            loggedWaitingPeer = true;
+                            Log("Siirtojono odottaa vastaanottajaa (" + (firstWaiting.TargetLabel ?? "Kaikki") + ") huoneessa [" + txtRoomCode.Text.Trim() + "]...");
+                        }
+                        Thread.Sleep(400);
+                        continue;
+                    }
+                    loggedWaitingPeer = false;
+                    transferQueueEvent.WaitOne(250);
+                    continue;
+                }
+
+                if (cancelledQueueIds.Contains(next.Id))
+                {
+                    continue;
+                }
+
+                loggedWaitingPeer = false;
+
+                while (transferPaused && isRunning)
+                {
+                    transferResumeEvent.WaitOne(200);
+                }
+                if (!isRunning) break;
+
+                activeQueueTransferId = next.Id;
+                UpdateQueueEntryStatus(next.Id, "Siirretään");
+                string outcome = ExecuteQueuedTransfer(next);
+                activeQueueTransferId = "";
+                UpdateQueueEntryStatus(next.Id, outcome);
+            }
+        }
+
+        private string ExecuteQueuedTransfer(TransferQueueEntry entry)
+        {
+            DateTime now = DateTime.UtcNow;
+            List<RoomPeerInfo> targets = new List<RoomPeerInfo>();
+            if (!String.IsNullOrEmpty(entry.TargetPeerId) && entry.TargetPeerId != "*")
+            {
+                RoomPeerInfo specific;
+                if (roomPeers.TryGetValue(entry.TargetPeerId, out specific) && IsPeerActive(specific, now))
+                {
+                    targets.Add(specific);
+                }
+            }
+            else
+            {
+                foreach (KeyValuePair<string, RoomPeerInfo> kv in roomPeers)
+                {
+                    if (IsPeerActive(kv.Value, now)) targets.Add(kv.Value);
+                }
             }
 
-            if (hasUdpPeer)
+            if (targets.Count > 0)
             {
-                Thread udpTxThread = new Thread(delegate() { StreamFileOverNatPunchedUdp(filePath); });
-                udpTxThread.IsBackground = true;
-                udpTxThread.Start();
-                return;
+                int okCount = 0;
+                int rejCount = 0;
+                for (int i = 0; i < targets.Count && isRunning; i++)
+                {
+                    RoomPeerInfo tp = targets[i];
+                    string res = "Virhe";
+                    if (tp.TcpClientConn != null && tp.TcpClientConn.Connected && tp.TcpStream != null)
+                    {
+                        res = StreamFileOverKernelTcp(entry.FullPath, entry.Id, tp);
+                    }
+                    else if (tp.ActiveUdpEp != null && (now - tp.LastUdpSeen).TotalSeconds < 14)
+                    {
+                        res = StreamFileOverNatPunchedUdp(entry.FullPath, entry.Id, tp.ActiveUdpEp);
+                    }
+                    else if (tp.ClientType == "local_browser" && activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null)
+                    {
+                        res = StreamFileToBrowserOverWebSocket(entry.FullPath, entry.Id);
+                    }
+                    else if (!String.IsNullOrEmpty(tp.CloudPeerId))
+                    {
+                        res = StreamFileToBrowserOverCloudBridge(entry.FullPath, entry.Id, tp.CloudPeerId, tp.DisplayName);
+                    }
+
+                    if (res == "Valmis") okCount++;
+                    else if (res == "Hylätty") rejCount++;
+                }
+                if (okCount > 0) return "Valmis";
+                if (rejCount > 0) return "Hylätty";
+                return "Virhe";
             }
 
-            if (hasLocalBrowserPeer)
+            if (!String.IsNullOrEmpty(entry.TargetPeerId) && entry.TargetPeerId != "*")
             {
-                Thread wsTxThread = new Thread(delegate() { StreamFileToBrowserOverWebSocket(filePath); });
-                wsTxThread.IsBackground = true;
-                wsTxThread.Start();
-                return;
+                return "Virhe";
             }
 
-            if (hasCloudBrowserPeer || hasCloudExePeer)
-            {
-                Thread cloudTxThread = new Thread(delegate() { StreamFileToBrowserOverCloudBridge(filePath); });
-                cloudTxThread.IsBackground = true;
-                cloudTxThread.Start();
-                return;
-            }
+            bool hasExePeer = (activePeerClient != null && activePeerClient.Connected && activePeerStream != null);
+            bool hasUdpPeer = (activeUdpPeerEndpoint != null && (now - lastUdpPeerSeen).TotalSeconds < 15);
+            bool hasLocalBrowserPeer = (activeBrowserWsClient != null && activeBrowserWsClient.Connected && activeBrowserWsStream != null);
+            bool hasCloudOpen = !activeSignalingChannels.IsEmpty;
+            bool hasCloudBrowserPeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudBrowserPeerId) && (now - lastCloudBrowserSeen).TotalSeconds < 14);
+            bool hasCloudExePeer = (hasCloudOpen && !String.IsNullOrEmpty(activeCloudExePeerId) && (now - lastCloudExeSeen).TotalSeconds < 14);
 
-            Log("WAIT: Make sure the Chrome Browser App (or another .EXE) has the same Wormhole Code [" + txtRoomCode.Text.Trim() + "]!");
-            MessageBox.Show(
-                "No peer is paired in Wormhole Room [" + txtRoomCode.Text.Trim() + "] yet.\\n\\n" +
-                "1. Open another AetherTunnel .EXE or Chrome Browser App and enter the same Wormhole Code: " + txtRoomCode.Text.Trim() + "\\n" +
-                "2. Within 1-2 seconds, the status badge will turn green: PEER STATUS: CONNECTED.",
-                "AetherTunnel v1.0 — Waiting for Peer Pairing",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            if (hasExePeer) return StreamFileOverKernelTcp(entry.FullPath, entry.Id, null);
+            if (hasUdpPeer) return StreamFileOverNatPunchedUdp(entry.FullPath, entry.Id, null);
+            if (hasLocalBrowserPeer) return StreamFileToBrowserOverWebSocket(entry.FullPath, entry.Id);
+            if (hasCloudBrowserPeer || hasCloudExePeer) return StreamFileToBrowserOverCloudBridge(entry.FullPath, entry.Id, "", "");
+            return "Virhe";
+        }
+
+        private int ShowIncomingTransferDialog(string senderInfo, string fileName, long fileSize, bool hasResume)
+        {
+            if (autoAcceptAllIncoming) return 1;
+            lock (incomingPromptLock)
+            {
+                if (autoAcceptAllIncoming) return 1;
+                int result = 0;
+                try
+                {
+                    if (!isRunning || this.IsDisposed) return 0;
+                    this.Invoke(new Action(delegate {
+                        if (autoAcceptAllIncoming) { result = 1; return; }
+                        using (Form dlg = new Form())
+                        {
+                            dlg.Text = "Saapuva tiedostonsiirto — AetherTunnel";
+                            dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                            dlg.MaximizeBox = false;
+                            dlg.MinimizeBox = false;
+                            dlg.StartPosition = FormStartPosition.CenterParent;
+                            dlg.ShowInTaskbar = true;
+                            dlg.TopMost = true;
+                            dlg.ClientSize = new Size(S(470), S(205));
+                            dlg.BackColor = Color.FromArgb(15, 23, 42);
+                            dlg.ForeColor = Color.White;
+                            dlg.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+
+                            Label lHead = CreateCleanLabel(
+                                "Lähettäjä (" + senderInfo + ") haluaa lähettää tiedoston:",
+                                new Font("Segoe UI Semibold", 10f, FontStyle.Bold),
+                                Color.FromArgb(56, 189, 248),
+                                new Point(S(20), S(18)),
+                                false
+                            );
+                            lHead.Size = new Size(S(430), S(24));
+                            dlg.Controls.Add(lHead);
+
+                            Label lName = CreateCleanLabel(
+                                fileName,
+                                new Font("Consolas", 10.5f, FontStyle.Bold),
+                                Color.White,
+                                new Point(S(20), S(48)),
+                                false
+                            );
+                            lName.Size = new Size(S(430), S(26));
+                            dlg.Controls.Add(lName);
+
+                            Label lMeta = CreateCleanLabel(
+                                "Koko: " + FormatBytes(fileSize) + (hasResume ? "   ·   Keskeytynyt siirto voidaan jatkaa (.part)" : "   ·   Tallennuskansio: " + downloadDirectory),
+                                new Font("Segoe UI", 8.8f),
+                                Color.FromArgb(148, 163, 184),
+                                new Point(S(20), S(80)),
+                                false
+                            );
+                            lMeta.Size = new Size(S(430), S(40));
+                            dlg.Controls.Add(lMeta);
+
+                            Button bAccept = new Button();
+                            bAccept.UseMnemonic = false;
+                            bAccept.Text = "Hyväksy";
+                            bAccept.FlatStyle = FlatStyle.Flat;
+                            bAccept.BackColor = Color.FromArgb(16, 185, 129);
+                            bAccept.ForeColor = Color.FromArgb(9, 13, 22);
+                            bAccept.Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
+                            bAccept.Location = new Point(S(20), S(142));
+                            bAccept.Size = new Size(S(115), S(38));
+                            bAccept.Click += delegate { result = 1; dlg.DialogResult = DialogResult.OK; dlg.Close(); };
+                            dlg.Controls.Add(bAccept);
+
+                            Button bAcceptAll = new Button();
+                            bAcceptAll.UseMnemonic = false;
+                            bAcceptAll.Text = "Hyväksy kaikki (jonossa)";
+                            bAcceptAll.FlatStyle = FlatStyle.Flat;
+                            bAcceptAll.BackColor = Color.FromArgb(56, 189, 248);
+                            bAcceptAll.ForeColor = Color.FromArgb(9, 13, 22);
+                            bAcceptAll.Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold);
+                            bAcceptAll.Location = new Point(S(145), S(142));
+                            bAcceptAll.Size = new Size(S(185), S(38));
+                            bAcceptAll.Click += delegate {
+                                autoAcceptAllIncoming = true;
+                                if (chkAutoAccept != null) chkAutoAccept.Checked = true;
+                                result = 2;
+                                dlg.DialogResult = DialogResult.Yes;
+                                dlg.Close();
+                            };
+                            dlg.Controls.Add(bAcceptAll);
+
+                            Button bReject = new Button();
+                            bReject.UseMnemonic = false;
+                            bReject.Text = "Hylkää";
+                            bReject.FlatStyle = FlatStyle.Flat;
+                            bReject.BackColor = Color.FromArgb(51, 65, 85);
+                            bReject.ForeColor = Color.FromArgb(248, 113, 113);
+                            bReject.Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold);
+                            bReject.Location = new Point(S(340), S(142));
+                            bReject.Size = new Size(S(110), S(38));
+                            bReject.Click += delegate { result = 0; dlg.DialogResult = DialogResult.Cancel; dlg.Close(); };
+                            dlg.Controls.Add(bReject);
+
+                            dlg.AcceptButton = bAccept;
+                            dlg.CancelButton = bReject;
+                            dlg.ShowDialog(this);
+                        }
+                    }));
+                }
+                catch { result = 0; }
+                return result;
+            }
         }
 
         private static void WriteInt32LE(byte[] buf, int offset, int val)
@@ -4784,7 +6317,7 @@ namespace AetherTunnelNative
             buf[offset + 3] = (byte)((val >> 24) & 0xFF);
         }
 
-        private byte[] EncryptUdpChunkPacket(int chunkIndex, int totalChunks, byte[] rawData, int rawLen, byte[] keySnapshot)
+        private byte[] EncryptSingleUdpChunk(byte[] plainBuf, int plainLen, int chunkIndex, int totalChunks, byte[] keySnapshot)
         {
             byte[] iv = threadLocalIv.Value;
             Array.Clear(iv, 8, 8);
@@ -4795,7 +6328,7 @@ namespace AetherTunnelNative
             AesCryptoServiceProvider aes = threadLocalAes.Value;
             using (ICryptoTransform enc = aes.CreateEncryptor(keySnapshot, iv))
             {
-                cipher = enc.TransformFinalBlock(rawData, 0, rawLen);
+                cipher = enc.TransformFinalBlock(plainBuf, 0, plainLen);
             }
 
             byte[] packet = new byte[28 + cipher.Length];
@@ -4850,14 +6383,15 @@ namespace AetherTunnelNative
             }
         }
 
-        private void StreamFileOverNatPunchedUdp(string filePath)
+        private string StreamFileOverNatPunchedUdp(string filePath, string queueEntryId = "", IPEndPoint overrideEp = null)
         {
             lock (udpTxLock)
             {
                 try
                 {
-                    IPEndPoint targetEp = activeUdpPeerEndpoint;
-                    if (targetEp == null || udpP2pClient == null) return;
+                    IPEndPoint targetEp = overrideEp != null ? overrideEp : activeUdpPeerEndpoint;
+                    if (targetEp == null || udpP2pClient == null) return "Virhe";
+                    activeUdpPeerEndpoint = targetEp;
 
                     FileInfo fi = new FileInfo(filePath);
                     long fileSize = fi.Length;
@@ -4883,23 +6417,56 @@ namespace AetherTunnelNative
                     udpPeerContiguousChunk = -1;
                     udpPeerUniqueAcked = 0;
                     udpPeerMeasuredMbps = 0;
-                    udpPeerDoneConfirmed = false;
+                    udpTransferDoneAcked = false;
                     udpNeedStartResend = false;
+                    udpWaitAcceptReceived = false;
+                    udpTransferRejected = false;
+                    udpResumeReceived = false;
                     int staleIdx;
                     while (udpRetransmitQueue.TryDequeue(out staleIdx)) { }
                     udpResumeEvent.Reset();
                     udpAckEvent.Reset();
-                    udpNackEvent.Reset();
 
                     string startMsg = "AETHER_UDP_START|" + fileName.Replace("|", "_") + "|" + fileSize.ToString() + "|" + totalChunks.ToString();
                     byte[] startBytes = Encoding.UTF8.GetBytes(startMsg);
 
-                    // Reliable multi-attempt START handshake so receiver is guaranteed to open its .part FileStream
-                    for (int attempt = 0; attempt < 8; attempt++)
+                    // Reliable START handshake supporting receiver confirmation prompt (up to 120s wait on WAIT_ACCEPT)
+                    for (int attempt = 0; attempt < 8 && isRunning; attempt++)
                     {
                         SendUdpP2pPacket(startBytes, startBytes.Length, targetEp);
-                        if (udpResumeEvent.WaitOne(150)) break;
+                        if (udpResumeEvent.WaitOne(150))
+                        {
+                            if (udpTransferRejected || udpResumeReceived) break;
+                        }
                     }
+
+                    if (udpWaitAcceptReceived && !udpResumeReceived && !udpTransferRejected && isRunning)
+                    {
+                        if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
+                        UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                        Log("Odotetaan vastaanottajan hyväksyntää tiedostolle: " + fileName);
+                        int waitLoops = 0;
+                        while (!udpResumeReceived && !udpTransferRejected && isRunning && waitLoops < 150)
+                        {
+                            SendUdpP2pPacket(startBytes, startBytes.Length, targetEp);
+                            udpResumeEvent.WaitOne(800);
+                            waitLoops++;
+                        }
+                        if (!udpResumeReceived && !udpTransferRejected)
+                        {
+                            Log("Hyväksynnän odotus aikakatkaistiin: " + fileName);
+                            return "Virhe";
+                        }
+                    }
+
+                    if (udpTransferRejected)
+                    {
+                        Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
+                        UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                        return "Hylätty";
+                    }
+
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
 
                     int startChunk = Math.Max(0, Math.Min(udpPeerResumeChunk, totalChunks));
                     udpPeerAckedChunk = startChunk - 1;
@@ -4929,23 +6496,43 @@ namespace AetherTunnelNative
                     using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 16 * 1024 * 1024, FileOptions.SequentialScan))
                     using (FileStream fsRepair = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.RandomAccess))
                     {
-                        int chunkIndex = startChunk;
+                        int waveStart = startChunk;
                         int lastProbeTick = unchecked(Environment.TickCount - 1000);
-                        while (chunkIndex < totalChunks && !udpPeerDoneConfirmed && isRunning)
+                        while (waveStart < totalChunks && !udpTransferDoneAcked && isRunning)
                         {
+                            if (transferPaused && isRunning)
+                            {
+                                sw.Stop();
+                                double pausedAvg = (Math.Max(0L, totalSent - ((long)initialStartChunk * UDP_CHUNK_SIZE)) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                                int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
+                                UpdateTransferUi("Pysäytetty (UDP P2P): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                                while (transferPaused && isRunning)
+                                {
+                                    lastAckReceivedTick = Environment.TickCount;
+                                    transferResumeEvent.WaitOne(200);
+                                }
+                                if (!isRunning) break;
+                                sw.Start();
+                                txUiSw.Restart();
+                                txUiWindowBytes = 0;
+                                smoothedUiTxMbps = 0.0;
+                                lastAckReceivedTick = Environment.TickCount;
+                                Interlocked.Exchange(ref pacingResetRequested, 1);
+                                pacingEpochTicks = Stopwatch.GetTimestamp();
+                            }
                             // Instant Resume Jump: if receiver reports a higher contiguous/resume chunk, skip ahead smoothly without resetting live speed!
                             int peerContig = Math.Max(udpPeerResumeChunk, udpPeerContiguousChunk + 1);
                             if (peerContig > udpPeerUniqueAcked) udpPeerUniqueAcked = peerContig;
-                            if (peerContig > chunkIndex && peerContig <= totalChunks)
+                            if (peerContig > waveStart && peerContig <= totalChunks)
                             {
-                                if (peerContig - chunkIndex >= 512)
+                                if (peerContig - waveStart >= 512)
                                 {
                                     Log("Peer confirmed resume offset at chunk " + peerContig.ToString() + " (" + FormatBytes(Math.Min(fileSize, (long)peerContig * UDP_CHUNK_SIZE)) + ") — jumping ahead!");
                                 }
-                                chunkIndex = peerContig;
+                                waveStart = peerContig;
                                 startChunk = peerContig;
-                                totalSent = Math.Min(fileSize, (long)chunkIndex * UDP_CHUNK_SIZE);
-                                if (chunkIndex >= totalChunks) break;
+                                totalSent = Math.Min(fileSize, (long)waveStart * UDP_CHUNK_SIZE);
+                                if (waveStart >= totalChunks) break;
                             }
 
                             if (udpNeedStartResend)
@@ -4957,10 +6544,10 @@ namespace AetherTunnelNative
 
                             // Router-Safe BDP In-Flight Window Cap (min 320 chunks prevents reorder-slack deadlock!)
                             bool isProbeOnly = false;
-                            while (!udpPeerDoneConfirmed && isRunning)
+                            while (!udpTransferDoneAcked && isRunning)
                             {
                                 int curMaxInFlight = Math.Max(320, Math.Min(12000, (int)Math.Round(dynamicUdpBitrateMbps * 12.0)));
-                                int inFlightNow = Math.Max(0, chunkIndex - udpPeerUniqueAcked);
+                                int inFlightNow = Math.Max(0, waveStart - udpPeerUniqueAcked);
                                 if (inFlightNow < curMaxInFlight) break;
 
                                 if (unchecked(Environment.TickCount - lastAckReceivedTick) > 650)
@@ -4987,7 +6574,7 @@ namespace AetherTunnelNative
                                         int rRead = fsRepair.Read(rBuf, 0, rRem);
                                         if (rRead > 0)
                                         {
-                                            byte[] rPkt = EncryptUdpChunkPacket(waitNackIdx, totalChunks, rBuf, rRead, keySnapshot);
+                                            byte[] rPkt = EncryptSingleUdpChunk(rBuf, rRead, waitNackIdx, totalChunks, keySnapshot);
                                             SendUdpP2pPacket(rPkt, rPkt.Length, targetEp);
                                             totalWireBytesSent += rRead;
                                             txUiWindowBytes += rRead;
@@ -5032,7 +6619,7 @@ namespace AetherTunnelNative
                                     int rRead = fsRepair.Read(rBuf, 0, rRem);
                                     if (rRead > 0)
                                     {
-                                        byte[] rPkt = EncryptUdpChunkPacket(nackIdx, totalChunks, rBuf, rRead, keySnapshot);
+                                        byte[] rPkt = EncryptSingleUdpChunk(rBuf, rRead, nackIdx, totalChunks, keySnapshot);
                                         SendUdpP2pPacket(rPkt, rPkt.Length, targetEp);
                                         totalWireBytesSent += rRead;
                                         txUiWindowBytes += rRead;
@@ -5042,19 +6629,18 @@ namespace AetherTunnelNative
                                 }
                             }
 
-                            long waveOffset = (long)chunkIndex * UDP_CHUNK_SIZE;
+                            long waveOffset = (long)waveStart * UDP_CHUNK_SIZE;
                             if (fs.Position != waveOffset) fs.Seek(waveOffset, SeekOrigin.Begin);
 
                             // Smooth adaptive wave size (~12ms slice, clamped 2..128 chunks)
                             int dynamicWaveChunks = isProbeOnly ? 2 : (int)Math.Max(2.0, Math.Min(128.0, ((dynamicUdpBitrateMbps * 1024.0 * 1024.0 / 8.0) * 0.012) / UDP_CHUNK_SIZE));
-                            int waveCount = Math.Min(dynamicWaveChunks, totalChunks - chunkIndex);
-                            byte[][] rawBuffers = new byte[waveCount][];
-                            int[] rawLengths = new int[waveCount];
-                            int actualWave = 0;
+                            int waveCount = Math.Min(dynamicWaveChunks, totalChunks - waveStart);
+                            byte[][] plainBuffers = new byte[waveCount][];
+                            int[] plainLens = new int[waveCount];
 
-                            for (int i = 0; i < waveCount; i++)
+                            for (int w = 0; w < waveCount; w++)
                             {
-                                int rem = (int)Math.Min((long)UDP_CHUNK_SIZE, fileSize - ((long)(chunkIndex + i) * UDP_CHUNK_SIZE));
+                                int rem = (int)Math.Min((long)UDP_CHUNK_SIZE, fileSize - ((long)(waveStart + w) * UDP_CHUNK_SIZE));
                                 byte[] b = new byte[rem];
                                 int rTot = 0;
                                 while (rTot < rem)
@@ -5063,34 +6649,30 @@ namespace AetherTunnelNative
                                     if (r <= 0) break;
                                     rTot += r;
                                 }
-                                if (rTot <= 0) break;
-                                rawBuffers[i] = b;
-                                rawLengths[i] = rTot;
-                                actualWave++;
+                                plainBuffers[w] = b;
+                                plainLens[w] = rTot;
                             }
-                            if (actualWave == 0) break;
 
-                            byte[][] encryptedPackets = new byte[actualWave][];
-                            int baseChunk = chunkIndex;
-
-                            Parallel.For(0, actualWave, txParallelOpts, delegate(int i)
+                            byte[][] encryptedPackets = new byte[waveCount][];
+                            Parallel.For(0, waveCount, txParallelOpts, delegate(int w)
                             {
-                                encryptedPackets[i] = EncryptUdpChunkPacket(baseChunk + i, totalChunks, rawBuffers[i], rawLengths[i], keySnapshot);
+                                encryptedPackets[w] = EncryptSingleUdpChunk(plainBuffers[w], plainLens[w], waveStart + w, totalChunks, keySnapshot);
                             });
 
-                            for (int i = 0; i < actualWave && !udpPeerDoneConfirmed && isRunning; i++)
+                            for (int w = 0; w < waveCount && !udpTransferDoneAcked && isRunning; w++)
                             {
-                                byte[] packet = encryptedPackets[i];
+                                byte[] packet = encryptedPackets[w];
                                 SendUdpP2pPacket(packet, packet.Length, targetEp);
-                                totalSent += rawLengths[i];
-                                totalWireBytesSent += rawLengths[i];
-                                txUiWindowBytes += rawLengths[i];
+                                totalSent += plainLens[w];
+                                totalWireBytesSent += plainLens[w];
+                                txUiWindowBytes += plainLens[w];
 
                                 // Sub-microsecond hardware Stopwatch Token-Bucket pacer (never stalls on dropped packets!)
                                 PaceUdpPacketSend(packet.Length, ref pacingEpochTicks, ref pacedBytesSinceEpoch);
                             }
 
-                            chunkIndex += actualWave;
+                            waveStart += waveCount;
+
                             double txWinSec = txUiSw.Elapsed.TotalSeconds;
                             if (txWinSec >= 0.35 || smoothedUiTxMbps <= 0.0)
                             {
@@ -5107,63 +6689,64 @@ namespace AetherTunnelNative
                                     txUiSw.Restart();
                                 }
                             }
+                            double avgTxMbps = (Math.Max(0L, totalSent - ((long)initialStartChunk * UDP_CHUNK_SIZE)) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
                             int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                            UpdateTransferUi("Sending via UDP P2P: " + fileName, totalSent, fileSize, smoothedUiTxMbps, permille);
+                            UpdateTransferUi("Sending via UDP P2P: " + fileName, totalSent, fileSize, smoothedUiTxMbps, avgTxMbps, permille);
                         }
 
-                        // Send AETHER_UDP_END and perform fast tail NACK recovery until receiver confirms AETHER_UDP_DONE
+                        // Send END and handle any remaining tail NACK retransmission requests until receiver confirms AETHER_UDP_DONE
                         // Persistent retry (3000 rounds = ~4-6 mins) to survive unstable mobile connections and 0 Mbit/s zones
                         byte[] endBytes = Encoding.UTF8.GetBytes("AETHER_UDP_END|" + fileName);
-                        for (int endRound = 0; endRound < 3000 && !udpPeerDoneConfirmed && isRunning; endRound++)
+                        for (int retry = 0; retry < 3000 && !udpTransferDoneAcked && isRunning; retry++)
                         {
-                            udpNackEvent.Reset();
                             SendUdpP2pPacket(endBytes, endBytes.Length, targetEp);
-                            udpNackEvent.WaitOne(80);
-                            if (udpPeerDoneConfirmed) break;
+                            udpAckEvent.WaitOne(80);
+                            if (udpTransferDoneAcked) break;
 
-                            int mIdx;
+                            int missIdx;
                             bool repairedTail = false;
-                            while (udpRetransmitQueue.TryDequeue(out mIdx))
+                            while (udpRetransmitQueue.TryDequeue(out missIdx))
                             {
-                                if (mIdx >= 0 && mIdx < totalChunks)
+                                if (missIdx >= 0 && missIdx < totalChunks)
                                 {
-                                    long offset = (long)mIdx * UDP_CHUNK_SIZE;
-                                    int rem = (int)Math.Min((long)UDP_CHUNK_SIZE, fileSize - offset);
-                                    fsRepair.Seek(offset, SeekOrigin.Begin);
-                                    byte[] rBuf = new byte[rem];
-                                    int rLen = fsRepair.Read(rBuf, 0, rem);
-                                    if (rLen > 0)
+                                    long pos = (long)missIdx * UDP_CHUNK_SIZE;
+                                    int rem = (int)Math.Min((long)UDP_CHUNK_SIZE, fileSize - pos);
+                                    byte[] b = new byte[rem];
+                                    fsRepair.Seek(pos, SeekOrigin.Begin);
+                                    int r = fsRepair.Read(b, 0, rem);
+                                    if (r > 0)
                                     {
-                                        byte[] pkt = EncryptUdpChunkPacket(mIdx, totalChunks, rBuf, rLen, keySnapshot);
+                                        byte[] pkt = EncryptSingleUdpChunk(b, r, missIdx, totalChunks, keySnapshot);
                                         SendUdpP2pPacket(pkt, pkt.Length, targetEp);
                                         PaceUdpPacketSend(pkt.Length, ref pacingEpochTicks, ref pacedBytesSinceEpoch);
                                         repairedTail = true;
                                     }
                                 }
                             }
-                            if (repairedTail) endRound = 0;
+                            if (repairedTail) retry = 0;
                         }
                     }
 
                     sw.Stop();
-
                     double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                     long finalSessionBytes = Math.Max(1L, fileSize - ((long)initialStartChunk * UDP_CHUNK_SIZE));
                     double finalMbps = (finalSessionBytes / (1024.0 * 1024.0)) / totalSec;
-                    UpdateTransferUi("Sent via UDP NAT-Punch: " + fileName, fileSize, fileSize, finalMbps, 1000, true);
+                    UpdateTransferUi("Sent via UDP NAT-Punch: " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                     Log(String.Format("UDP NAT-P2P TX COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s{4}",
                         fileName, FormatBytes(fileSize), totalSec, finalMbps,
-                        udpPeerDoneConfirmed ? " (Verified 100% Saved)" : ""));
+                        udpTransferDoneAcked ? " (Verified 100% Saved)" : ""));
                     if (isRunning) Thread.Sleep(150);
+                    return "Valmis";
                 }
                 catch (Exception ex)
                 {
                     Log("UDP P2P TX Error: " + ex.Message);
+                    return "Virhe";
                 }
             }
         }
 
-        private void StreamFileToBrowserOverCloudBridge(string filePath)
+        private string StreamFileToBrowserOverCloudBridge(string filePath, string queueEntryId = "", string overrideDstPeer = "", string overrideLabel = "")
         {
             try
             {
@@ -5172,12 +6755,19 @@ namespace AetherTunnelNative
                 string fileName = fi.Name;
                 string fileId = "exe-cloud-" + DateTime.UtcNow.Ticks.ToString();
                 int totalChunks = (int)Math.Max(1L, (fileSize + CLOUD_CHUNK_SIZE - 1) / CLOUD_CHUNK_SIZE);
-                string dstPeer = !String.IsNullOrEmpty(activeCloudBrowserPeerId) ? activeCloudBrowserPeerId : activeCloudExePeerId;
-                string peerLabel = !String.IsNullOrEmpty(activeCloudBrowserPeerId) ? "Chrome Browser" : "Remote .EXE";
+                string dstPeer = !String.IsNullOrEmpty(overrideDstPeer)
+                    ? overrideDstPeer
+                    : (!String.IsNullOrEmpty(activeCloudBrowserPeerId) ? activeCloudBrowserPeerId : activeCloudExePeerId);
+                string peerLabel = !String.IsNullOrEmpty(overrideLabel)
+                    ? overrideLabel
+                    : (!String.IsNullOrEmpty(overrideDstPeer) ? overrideDstPeer : (!String.IsNullOrEmpty(activeCloudBrowserPeerId) ? "Chrome Browser" : "Remote .EXE"));
 
                 Log("Streaming .EXE -> " + peerLabel + " over Wormhole Bridge: " + fileName + " (" + FormatBytes(fileSize) + ")");
 
                 cloudResumeChunk = 0;
+                cloudWaitAcceptReceived = false;
+                cloudTransferRejected = false;
+                cloudResumeReceived = false;
                 cloudResumeEvent.Reset();
 
                 string startJson = String.Format(
@@ -5186,8 +6776,27 @@ namespace AetherTunnelNative
                 );
                 SendCloudPacketAny(dstPeer, startJson);
 
-                // Wait up to 900ms for exe:resume-ack from peer
-                cloudResumeEvent.WaitOne(900);
+                cloudResumeEvent.WaitOne(1200);
+                if (cloudWaitAcceptReceived && !cloudResumeReceived && !cloudTransferRejected && isRunning)
+                {
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
+                    UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    int waitLoops = 0;
+                    while (!cloudResumeReceived && !cloudTransferRejected && isRunning && waitLoops < 150)
+                    {
+                        cloudResumeEvent.WaitOne(800);
+                        waitLoops++;
+                    }
+                    if (!cloudResumeReceived && !cloudTransferRejected) return "Virhe";
+                }
+                if (cloudTransferRejected)
+                {
+                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
+                    UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    return "Hylätty";
+                }
+                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+
                 int startChunk = Math.Max(0, Math.Min(cloudResumeChunk, totalChunks));
                 if (startChunk > 0)
                 {
@@ -5195,7 +6804,8 @@ namespace AetherTunnelNative
                 }
 
                 Stopwatch sw = Stopwatch.StartNew();
-                long totalSent = (long)startChunk * CLOUD_CHUNK_SIZE;
+                long initialBytes = (long)startChunk * CLOUD_CHUNK_SIZE;
+                long totalSent = initialBytes;
                 byte[] buf = new byte[CLOUD_CHUNK_SIZE];
                 int chunkIndex = startChunk;
 
@@ -5203,8 +6813,21 @@ namespace AetherTunnelNative
                 {
                     if (totalSent > 0) fs.Seek(totalSent, SeekOrigin.Begin);
                     int read;
-                    while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+                    while ((read = fs.Read(buf, 0, buf.Length)) > 0 && !cloudTransferRejected && isRunning)
                     {
+                        if (transferPaused && isRunning)
+                        {
+                            sw.Stop();
+                            double pausedAvg = (Math.Max(0L, totalSent - initialBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                            int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
+                            UpdateTransferUi("Pysäytetty: " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            while (transferPaused && isRunning)
+                            {
+                                transferResumeEvent.WaitOne(200);
+                            }
+                            if (!isRunning) break;
+                            sw.Start();
+                        }
                         string b64 = Convert.ToBase64String(buf, 0, read);
                         string chunkJson = String.Format(
                             "{{\\"kind\\":\\"exe:file-chunk\\",\\"fileId\\":\\"{0}\\",\\"chunkIndex\\":{1},\\"data\\":\\"{2}\\"}}",
@@ -5216,9 +6839,10 @@ namespace AetherTunnelNative
                         chunkIndex++;
 
                         double sec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
-                        double mbps = (totalSent / (1024.0 * 1024.0)) / sec;
+                        long deltaBytes = Math.Max(1L, totalSent - initialBytes);
+                        double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
                         int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                        UpdateTransferUi("Sending to " + peerLabel + ": " + fileName, totalSent, fileSize, mbps, permille);
+                        UpdateTransferUi("Sending to " + peerLabel + ": " + fileName, totalSent, fileSize, mbps, mbps, permille);
 
                         if (chunkIndex % 8 == 0)
                         {
@@ -5227,23 +6851,32 @@ namespace AetherTunnelNative
                     }
                 }
 
+                if (cloudTransferRejected)
+                {
+                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
+                    return "Hylätty";
+                }
+
                 string endJson = String.Format("{{\\"kind\\":\\"exe:file-end\\",\\"fileId\\":\\"{0}\\"}}", fileId);
                 SendCloudPacketAny(dstPeer, endJson);
                 sw.Stop();
 
                 double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
-                double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
-                UpdateTransferUi("Sent to " + peerLabel + ": " + fileName, fileSize, fileSize, finalMbps, 1000);
+                long finalSessionBytes = Math.Max(1L, fileSize - initialBytes);
+                double finalMbps = (finalSessionBytes / (1024.0 * 1024.0)) / totalSec;
+                UpdateTransferUi("Sent to " + peerLabel + ": " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format(".EXE -> {0} COMPLETE: {1} ({2}) in {3:F2}s — {4:F2} MB/s",
                     peerLabel.ToUpperInvariant(), fileName, FormatBytes(fileSize), totalSec, finalMbps));
+                return "Valmis";
             }
             catch (Exception ex)
             {
                 Log("Wormhole Cloud Bridge TX Error: " + ex.Message);
+                return "Virhe";
             }
         }
 
-        private void StreamFileToBrowserOverWebSocket(string filePath)
+        private string StreamFileToBrowserOverWebSocket(string filePath, string queueEntryId = "")
         {
             try
             {
@@ -5269,15 +6902,28 @@ namespace AetherTunnelNative
                 using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, WS_CHUNK_SIZE, FileOptions.SequentialScan))
                 {
                     int read;
-                    while ((read = fs.Read(buf, 0, buf.Length)) > 0)
+                    while ((read = fs.Read(buf, 0, buf.Length)) > 0 && isRunning)
                     {
+                        if (transferPaused && isRunning)
+                        {
+                            sw.Stop();
+                            double pausedAvg = (totalSent / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                            int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
+                            UpdateTransferUi("Pysäytetty (Browser WS): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            while (transferPaused && isRunning)
+                            {
+                                transferResumeEvent.WaitOne(200);
+                            }
+                            if (!isRunning) break;
+                            sw.Start();
+                        }
                         SendWebSocketFrame(activeBrowserWsStream, 0x02, buf, 0, read);
                         totalSent += read;
 
                         double sec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                         double mbps = (totalSent / (1024.0 * 1024.0)) / sec;
                         int permille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                        UpdateTransferUi("Streaming to Browser: " + fileName, totalSent, fileSize, mbps, permille);
+                        UpdateTransferUi("Streaming to Browser: " + fileName, totalSent, fileSize, mbps, mbps, permille);
                     }
                 }
 
@@ -5288,20 +6934,27 @@ namespace AetherTunnelNative
 
                 double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                 double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
-                UpdateTransferUi("Sent to Browser: " + fileName, fileSize, fileSize, finalMbps, 1000);
+                UpdateTransferUi("Sent to Browser: " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format(".EXE -> BROWSER COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s ({4:F2} Gbps)",
                     fileName, FormatBytes(fileSize), totalSec, finalMbps, (finalMbps * 8.0) / 1000.0));
+                return "Valmis";
             }
             catch (Exception ex)
             {
                 Log("Browser WebSocket TX Error: " + ex.Message);
+                return "Virhe";
             }
         }
 
-        private void StreamFileOverKernelTcp(string filePath)
+        private string StreamFileOverKernelTcp(string filePath, string queueEntryId = "", RoomPeerInfo targetPeer = null)
         {
             try
             {
+                NetworkStream txStream = (targetPeer != null && targetPeer.TcpStream != null && targetPeer.TcpClientConn != null && targetPeer.TcpClientConn.Connected)
+                    ? targetPeer.TcpStream
+                    : activePeerStream;
+                if (txStream == null) return "Virhe";
+
                 FileInfo fi = new FileInfo(filePath);
                 long fileSize = fi.Length;
                 string fileName = fi.Name;
@@ -5310,6 +6963,9 @@ namespace AetherTunnelNative
                 Log("Starting Kernel-Socket transfer: " + fileName + " (" + FormatBytes(fileSize) + ", " + totalChunks.ToString() + " x 4 MB blocks)");
 
                 kernelTcpResumeChunk = 0;
+                kernelTcpWaitAccept = false;
+                kernelTcpRejected = false;
+                kernelTcpResumeReceived = false;
                 kernelTcpResumeEvent.Reset();
 
                 byte[] nameBytes = Encoding.UTF8.GetBytes(fileName);
@@ -5317,10 +6973,31 @@ namespace AetherTunnelNative
                 Buffer.BlockCopy(BitConverter.GetBytes(fileSize), 0, metaPayload, 0, 8);
                 Buffer.BlockCopy(BitConverter.GetBytes(totalChunks), 0, metaPayload, 8, 4);
                 Buffer.BlockCopy(nameBytes, 0, metaPayload, 12, nameBytes.Length);
-                WriteKernelFrame(1, metaPayload, metaPayload.Length);
+                WriteKernelFrameTo(txStream, 1, metaPayload, metaPayload.Length);
 
-                // Wait up to 800ms for Frame Type 4 (Resume ACK) from receiving .EXE
                 kernelTcpResumeEvent.WaitOne(800);
+                if (kernelTcpWaitAccept && !kernelTcpResumeReceived && !kernelTcpRejected && isRunning)
+                {
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
+                    UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    Log("Odotetaan vastaanottajan hyväksyntää tiedostolle: " + fileName);
+                    int waitLoops = 0;
+                    while (!kernelTcpResumeReceived && !kernelTcpRejected && isRunning && waitLoops < 150)
+                    {
+                        kernelTcpResumeEvent.WaitOne(800);
+                        waitLoops++;
+                    }
+                    if (!kernelTcpResumeReceived && !kernelTcpRejected) return "Virhe";
+                }
+
+                if (kernelTcpRejected)
+                {
+                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
+                    UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    return "Hylätty";
+                }
+                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+
                 int startChunk = Math.Max(0, Math.Min(kernelTcpResumeChunk, totalChunks));
                 if (startChunk > 0)
                 {
@@ -5328,15 +7005,35 @@ namespace AetherTunnelNative
                 }
 
                 Stopwatch sw = Stopwatch.StartNew();
-                long totalBytesSent = (long)startChunk * CHUNK_SIZE;
+                Stopwatch txUiSw = Stopwatch.StartNew();
+                long txWinBytes = 0;
+                double smoothedLiveMbps = 0.0;
+                long initialBytes = (long)startChunk * CHUNK_SIZE;
+                long totalBytesSent = initialBytes;
                 byte[] keySnapshot = (byte[])aesKey.Clone();
 
                 using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, CHUNK_SIZE, FileOptions.SequentialScan))
                 {
                     if (totalBytesSent > 0) fs.Seek(totalBytesSent, SeekOrigin.Begin);
 
-                    for (int waveStart = startChunk; waveStart < totalChunks; waveStart += PARALLEL_WORKERS)
+                    for (int waveStart = startChunk; waveStart < totalChunks && isRunning; waveStart += PARALLEL_WORKERS)
                     {
+                        if (transferPaused && isRunning)
+                        {
+                            sw.Stop();
+                            double pausedAvg = (Math.Max(0L, totalBytesSent - initialBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
+                            int pausedPermille = (int)((totalBytesSent * 1000L) / Math.Max(1L, fileSize));
+                            UpdateTransferUi("Pysäytetty: " + fileName, totalBytesSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            while (transferPaused && isRunning)
+                            {
+                                transferResumeEvent.WaitOne(200);
+                            }
+                            if (!isRunning) break;
+                            sw.Start();
+                            txUiSw.Restart();
+                            txWinBytes = 0;
+                            smoothedLiveMbps = 0.0;
+                        }
                         int waveCount = Math.Min(PARALLEL_WORKERS, totalChunks - waveStart);
                         byte[][] plainBlocks = new byte[waveCount][];
                         int[] plainLengths = new int[waveCount];
@@ -5388,34 +7085,53 @@ namespace AetherTunnelNative
                         for (int w = 0; w < waveCount; w++)
                         {
                             byte[] body = encryptedPayloads[w];
-                            WriteKernelFrame(2, body, body.Length);
+                            WriteKernelFrameTo(txStream, 2, body, body.Length);
                             totalBytesSent += plainLengths[w];
+                            txWinBytes += plainLengths[w];
 
                             double elapsedSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
-                            double mbps = (totalBytesSent / (1024.0 * 1024.0)) / elapsedSec;
+                            double avgMbps = (Math.Max(1L, totalBytesSent - initialBytes) / (1024.0 * 1024.0)) / elapsedSec;
+                            double winSec = txUiSw.Elapsed.TotalSeconds;
+                            if (winSec >= 0.35)
+                            {
+                                double inst = (txWinBytes / (1024.0 * 1024.0)) / winSec;
+                                smoothedLiveMbps = smoothedLiveMbps <= 0.0 ? inst : (smoothedLiveMbps * 0.35) + (inst * 0.65);
+                                txWinBytes = 0;
+                                txUiSw.Restart();
+                            }
+                            double liveMbps = smoothedLiveMbps > 0.0 ? smoothedLiveMbps : avgMbps;
                             int permille = (int)((totalBytesSent * 1000L) / Math.Max(1L, fileSize));
-                            UpdateTransferUi("Sending: " + fileName, totalBytesSent, fileSize, mbps, permille);
+                            UpdateTransferUi("Sending: " + fileName, totalBytesSent, fileSize, liveMbps, avgMbps, permille);
                         }
                     }
                 }
 
-                WriteKernelFrame(3, new byte[4], 4);
+                WriteKernelFrameTo(txStream, 3, new byte[4], 4);
                 sw.Stop();
 
                 double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
-                double finalMbps = (fileSize / (1024.0 * 1024.0)) / totalSec;
-                UpdateTransferUi("Sent & Verified: " + fileName, fileSize, fileSize, finalMbps, 1000);
+                long finalSessionBytes = Math.Max(1L, fileSize - initialBytes);
+                double finalMbps = (finalSessionBytes / (1024.0 * 1024.0)) / totalSec;
+                UpdateTransferUi("Sent & Verified: " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format("TX COMPLETE: {0} ({1}) in {2:F2}s — Average Speed: {3:F2} MB/s ({4:F2} Gbps)",
                     fileName, FormatBytes(fileSize), totalSec, finalMbps, (finalMbps * 8.0) / 1000.0));
+                return "Valmis";
             }
             catch (Exception ex)
             {
                 Log("TX Error: " + ex.Message);
+                return "Virhe";
             }
         }
 
         private void WriteKernelFrame(byte frameType, byte[] payload, int payloadLen)
         {
+            WriteKernelFrameTo(activePeerStream, frameType, payload, payloadLen);
+        }
+
+        private void WriteKernelFrameTo(NetworkStream targetStream, byte frameType, byte[] payload, int payloadLen)
+        {
+            if (targetStream == null) throw new InvalidOperationException("No active TCP stream.");
             byte[] header = new byte[9];
             Buffer.BlockCopy(BitConverter.GetBytes(MAGIC_HEADER), 0, header, 0, 4);
             header[4] = frameType;
@@ -5423,8 +7139,8 @@ namespace AetherTunnelNative
 
             lock (streamWriteLock)
             {
-                activePeerStream.Write(header, 0, 9);
-                activePeerStream.Write(payload, 0, payloadLen);
+                targetStream.Write(header, 0, 9);
+                targetStream.Write(payload, 0, payloadLen);
             }
         }
 
@@ -5439,12 +7155,32 @@ namespace AetherTunnelNative
             string currentPartPath = "";
             long expectedFileSize = 0;
             long receivedPlainBytes = 0;
+            long tcpSessionStartBytes = 0;
+            long tcpUiWinBytes = 0;
+            double tcpSmoothedLiveMbps = 0.0;
+            Stopwatch tcpUiSw = Stopwatch.StartNew();
             Stopwatch rxSw = null;
 
             try
             {
                 while (isRunning && client.Connected)
                 {
+                    if (transferPaused && currentOutFile != null && isRunning)
+                    {
+                        if (rxSw != null) rxSw.Stop();
+                        double pausedAvg = rxSw != null ? (Math.Max(0L, receivedPlainBytes - tcpSessionStartBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, rxSw.Elapsed.TotalSeconds) : 0.0;
+                        int pausedPermille = (int)((receivedPlainBytes * 1000L) / Math.Max(1L, expectedFileSize));
+                        UpdateTransferUi("Pysäytetty: " + currentFileName, receivedPlainBytes, expectedFileSize, 0.0, pausedAvg, pausedPermille, true);
+                        while (transferPaused && isRunning && client.Connected)
+                        {
+                            transferResumeEvent.WaitOne(200);
+                        }
+                        if (!isRunning || !client.Connected) break;
+                        if (rxSw != null) rxSw.Start();
+                        tcpUiSw.Restart();
+                        tcpUiWinBytes = 0;
+                        tcpSmoothedLiveMbps = 0.0;
+                    }
                     if (hasPreRead)
                     {
                         headerBuf[0] = preReadThreeBytes[0];
@@ -5480,7 +7216,46 @@ namespace AetherTunnelNative
                         currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
                         currentPartPath = currentOutPath + ".part";
 
-                        if (currentOutFile != null) currentOutFile.Close();
+                        if (currentOutFile != null) { currentOutFile.Close(); currentOutFile = null; }
+                        bool hasPart = File.Exists(currentPartPath) && new FileInfo(currentPartPath).Length > 0;
+
+                        if (!autoAcceptAllIncoming)
+                        {
+                            try
+                            {
+                                byte[] waitHeader = new byte[9];
+                                Buffer.BlockCopy(BitConverter.GetBytes(MAGIC_HEADER), 0, waitHeader, 0, 4);
+                                waitHeader[4] = 6;
+                                Buffer.BlockCopy(BitConverter.GetBytes(4), 0, waitHeader, 5, 4);
+                                lock (streamWriteLock)
+                                {
+                                    netStream.Write(waitHeader, 0, 9);
+                                    netStream.Write(new byte[4], 0, 4);
+                                }
+                            }
+                            catch { }
+                        }
+
+                        int choice = autoAcceptAllIncoming ? 1 : ShowIncomingTransferDialog("Kernel TCP (.EXE)", currentFileName, expectedFileSize, hasPart);
+                        if (choice == 0)
+                        {
+                            Log("Saapuva TCP-tiedosto hylätty: " + currentFileName);
+                            try
+                            {
+                                byte[] rejHeader = new byte[9];
+                                Buffer.BlockCopy(BitConverter.GetBytes(MAGIC_HEADER), 0, rejHeader, 0, 4);
+                                rejHeader[4] = 5;
+                                Buffer.BlockCopy(BitConverter.GetBytes(4), 0, rejHeader, 5, 4);
+                                lock (streamWriteLock)
+                                {
+                                    netStream.Write(rejHeader, 0, 9);
+                                    netStream.Write(new byte[4], 0, 4);
+                                }
+                            }
+                            catch { }
+                            continue;
+                        }
+
                         long existingBytes = 0;
                         if (File.Exists(currentPartPath))
                         {
@@ -5493,9 +7268,12 @@ namespace AetherTunnelNative
                         currentOutFile = new FileStream(currentPartPath, existingBytes > 0 ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.None, CHUNK_SIZE, FileOptions.SequentialScan);
                         if (alignedBytes > 0) currentOutFile.Seek(alignedBytes, SeekOrigin.Begin);
                         receivedPlainBytes = alignedBytes;
+                        tcpSessionStartBytes = alignedBytes;
+                        tcpUiWinBytes = 0;
+                        tcpSmoothedLiveMbps = 0.0;
+                        tcpUiSw.Restart();
                         rxSw = Stopwatch.StartNew();
 
-                        // Send Frame Type 4 (Resume ACK) back to sender
                         try
                         {
                             byte[] resumeAckPayload = BitConverter.GetBytes(resumeFromChunk);
@@ -5516,9 +7294,20 @@ namespace AetherTunnelNative
                         else
                             Log("Receiving directly to disk: " + currentOutPath + " (" + FormatBytes(expectedFileSize) + ")");
                     }
+                    else if (frameType == 6)
+                    {
+                        kernelTcpWaitAccept = true;
+                        kernelTcpResumeEvent.Set();
+                    }
+                    else if (frameType == 5)
+                    {
+                        kernelTcpRejected = true;
+                        kernelTcpResumeEvent.Set();
+                    }
                     else if (frameType == 4 && payloadLen >= 4)
                     {
                         kernelTcpResumeChunk = BitConverter.ToInt32(payload, 0);
+                        kernelTcpResumeReceived = true;
                         kernelTcpResumeEvent.Set();
                     }
                     else if (frameType == 2 && currentOutFile != null)
@@ -5547,15 +7336,25 @@ namespace AetherTunnelNative
                         currentOutFile.Seek(writeOffset, SeekOrigin.Begin);
                         currentOutFile.Write(plain, 0, plain.Length);
                         receivedPlainBytes = Math.Max(receivedPlainBytes, writeOffset + plain.Length);
+                        tcpUiWinBytes += plain.Length;
 
                         double elapsedSec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
-                        double mbps = (receivedPlainBytes / (1024.0 * 1024.0)) / elapsedSec;
+                        double avgMbps = (Math.Max(1L, receivedPlainBytes - tcpSessionStartBytes) / (1024.0 * 1024.0)) / elapsedSec;
+                        double winSec = tcpUiSw.Elapsed.TotalSeconds;
+                        if (winSec >= 0.35)
+                        {
+                            double inst = (tcpUiWinBytes / (1024.0 * 1024.0)) / winSec;
+                            tcpSmoothedLiveMbps = tcpSmoothedLiveMbps <= 0.0 ? inst : (tcpSmoothedLiveMbps * 0.35) + (inst * 0.65);
+                            tcpUiWinBytes = 0;
+                            tcpUiSw.Restart();
+                        }
+                        double liveMbps = tcpSmoothedLiveMbps > 0.0 ? tcpSmoothedLiveMbps : avgMbps;
                         int permille = (int)((receivedPlainBytes * 1000L) / Math.Max(1L, expectedFileSize));
-                        UpdateTransferUi("Receiving to Disk: " + currentFileName, receivedPlainBytes, expectedFileSize, mbps, permille);
+                        UpdateTransferUi("Receiving to Disk: " + currentFileName, receivedPlainBytes, expectedFileSize, liveMbps, avgMbps, permille);
                     }
                     else if (frameType == 3 && currentOutFile != null)
                     {
-                        currentOutFile.Flush();
+                        currentOutFile.Flush(false);
                         currentOutFile.Close();
                         currentOutFile = null;
                         rxSw.Stop();
@@ -5568,8 +7367,9 @@ namespace AetherTunnelNative
                         catch { }
 
                         double totalSec = Math.Max(0.005, rxSw.Elapsed.TotalSeconds);
-                        double finalMbps = (expectedFileSize / (1024.0 * 1024.0)) / totalSec;
-                        UpdateTransferUi("Saved to Disk: " + currentFileName, expectedFileSize, expectedFileSize, finalMbps, 1000);
+                        long sessionDelta = Math.Max(1L, expectedFileSize - tcpSessionStartBytes);
+                        double finalMbps = (sessionDelta / (1024.0 * 1024.0)) / totalSec;
+                        UpdateTransferUi("Saved to Disk: " + currentFileName, expectedFileSize, expectedFileSize, finalMbps, finalMbps, 1000, true);
                         Log(String.Format("RX COMPLETE & SAVED: {0} ({1:F2} MB/s · {2:F2} Gbps)",
                             currentOutPath, finalMbps, (finalMbps * 8.0) / 1000.0));
                     }
@@ -5605,22 +7405,27 @@ namespace AetherTunnelNative
             return true;
         }
 
-        private void UpdateTransferUi(string statusText, long doneBytes, long totalBytes, double mbps, int permille, bool force = false)
+        private void UpdateTransferUi(string statusText, long doneBytes, long totalBytes, double liveMbps, double avgMbps, int permille, bool force = false)
         {
             if (!force && permille < 1000)
             {
                 int nowTick = Environment.TickCount;
-                if (nowTick - lastUiUpdateTick < 100) return;
+                if (unchecked(nowTick - lastUiUpdateTick) < 100) return;
                 lastUiUpdateTick = nowTick;
             }
             if (this.InvokeRequired)
             {
-                this.BeginInvoke(new Action<string, long, long, double, int, bool>(UpdateTransferUi), statusText, doneBytes, totalBytes, mbps, permille, true);
+                this.BeginInvoke(new Action<string, long, long, double, double, int, bool>(UpdateTransferUi), statusText, doneBytes, totalBytes, liveMbps, avgMbps, permille, true);
                 return;
             }
-            double gbps = (mbps * 8.0) / 1000.0;
-            lblSpeedMetric.Text = String.Format("{0:F2} MB/s  ({1:F2} Gbps)", mbps, gbps);
-            lblProgressDetail.Text = String.Format("{0} — {1} / {2} ({3}%)", statusText, FormatBytes(doneBytes), FormatBytes(totalBytes), permille / 10);
+            double liveGbps = (liveMbps * 8.0) / 1000.0;
+            double avgGbps = (avgMbps * 8.0) / 1000.0;
+            lblSpeedMetric.Text = String.Format("{0:F2} MB/s  ({1:F2} Gbps)", liveMbps, liveGbps);
+            if (lblTransferStats != null)
+            {
+                lblTransferStats.Text = String.Format("Siirretty: {0} / {1}  |  Keskinopeus: {2:F2} MB/s ({3:F2} Gbps)", FormatBytes(doneBytes), FormatBytes(totalBytes), avgMbps, avgGbps);
+            }
+            lblProgressDetail.Text = String.Format("{0} — {1}%", statusText, permille / 10);
             progressBar.Value = Math.Max(0, Math.Min(1000, permille));
         }
 
@@ -5638,9 +7443,14 @@ namespace AetherTunnelNative
         private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
             isRunning = false;
+            try { transferResumeEvent.Set(); } catch { }
+            try { transferQueueEvent.Set(); } catch { }
             try { udpRxDataEvent.Set(); } catch { }
             try { diskWriteEvent.Set(); } catch { }
             try { udpAckEvent.Set(); } catch { }
+            try { udpResumeEvent.Set(); } catch { }
+            try { kernelTcpResumeEvent.Set(); } catch { }
+            try { cloudResumeEvent.Set(); } catch { }
             try { udpWriterExitedEvent.WaitOne(2500); } catch { }
             try { udpDiskIoExitedEvent.WaitOne(2500); } catch { }
             try { if (tcpListener != null) tcpListener.Stop(); } catch { }

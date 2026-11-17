@@ -178,14 +178,14 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                           <div className="font-medium text-slate-100 text-xs">
                             {item.name}
                           </div>
-                          <div className="text-xs text-slate-400">
-                            {item.direction === 'outgoing' ? 'Sent' : 'Received'} · {formatSpeed(item.speedBps)}
+                          <div className="text-xs text-slate-400 font-mono tabular-nums">
+                            {item.direction === 'outgoing' ? 'Sent' : 'Received'} · {formatSpeed(item.speedBps)} · Avg: {formatSpeed(item.avgSpeedBps ?? item.speedBps)}
                           </div>
                         </div>
                       </div>
                     </td>
                     <td className="py-3.5 px-4 font-mono text-xs text-slate-200 text-right tabular-nums">
-                      {formatBytes(item.size)}
+                      {formatBytes(item.bytesTransferred)} / {formatBytes(item.size)}
                     </td>
                     <td className="py-3.5 px-4 font-mono text-xs text-slate-300 text-right tabular-nums">
                       {item.transferredChunks} / {item.totalChunks}
@@ -202,6 +202,19 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                           <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-medium">
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             Verified
+                          </span>
+                        ) : item.status === 'rejected' ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-400 font-medium">
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            Declined
+                          </span>
+                        ) : item.status === 'awaiting_acceptance' ? (
+                          <span className="text-xs font-mono text-amber-300">
+                            Awaiting approval...
+                          </span>
+                        ) : item.status === 'paused' ? (
+                          <span className="text-xs font-mono text-amber-400 tabular-nums">
+                            Pysäytetty · {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
                           </span>
                         ) : item.status === 'error' ? (
                           <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">

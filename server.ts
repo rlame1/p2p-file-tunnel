@@ -17,8 +17,13 @@ interface PeerClient {
   roomCode: string;
   deviceLabel: string;
   natType: string;
+  clientType: 'browser' | 'exe';
+  cloudId?: string;
+  binaryTargetId?: string;
   joinedAt: number;
 }
+
+const MAX_ROOM_PEERS = 8;
 
 export interface WorkflowStepStatus {
   id: string;
@@ -61,7 +66,7 @@ function computeFileSha256(content: Buffer | string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon'): string {
+function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
   return `<!doctype html>
 <html lang="en" class="dark">
 <head>
@@ -89,12 +94,12 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
       <div class="md:col-span-5 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
         <h2 class="text-base font-semibold">1. Wormhole Pairing Code</h2>
-        <p class="text-xs text-slate-400">Enter the same pairing code on both devices to establish a direct encrypted P2P tunnel across any NAT or firewall.</p>
+        <p class="text-xs text-slate-400">Enter the same pairing code on both devices and click Yhdistä to establish a direct encrypted P2P tunnel.</p>
         <div>
-          <label class="block text-xs text-slate-400 mb-1">Tunnel Room Code</label>
+          <label class="block text-xs text-slate-400 mb-1">Tunnelin nimi</label>
           <div class="flex gap-2">
-            <input id="room-input" type="text" value="${defaultRoom}" class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
-            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Connect</button>
+            <input id="room-input" type="text" value="${defaultRoom}" placeholder="Kirjoita tunnelin nimi..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
+            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Yhdistä</button>
           </div>
         </div>
 
@@ -104,9 +109,9 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
               <span id="peer-presence-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
               <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">Ei toista peeriä huoneessa (No peer yet)</span>
             </div>
-            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/2 PEERS</span>
+            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/8 KÄYTTÄJÄÄ</span>
           </div>
-          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan toista laitetta samalla huonekoodilla...</div>
+          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan muita käyttäjiä samalla tunnelinimellä (max 8)...</div>
         </div>
 
         <div>
@@ -123,12 +128,21 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         </div>
         <div class="pt-3 border-t border-slate-800 text-xs space-y-1">
           <div class="flex justify-between"><span class="text-slate-400">AES-256-GCM Key Fingerprint:</span><span id="fp-label" class="font-mono text-emerald-400">Computing...</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">WebRTC Direct SCTP + Global WSS Bus</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Transport Engine:</span><span class="font-mono text-slate-200">WebRTC Mesh (Max 8) + Global WSS Bus</span></div>
         </div>
       </div>
 
       <div class="md:col-span-7 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
-        <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
+          <button id="pause-btn" type="button" class="px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer">Pysäytä</button>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-950 border border-slate-800 rounded-lg">
+          <label for="target-peer-select" class="text-xs font-medium text-slate-300 whitespace-nowrap">Kenelle lähetetään:</label>
+          <select id="target-peer-select" class="flex-1 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg font-mono text-sky-300">
+            <option value="*">Kaikki huoneessa (0 käyttäjää)</option>
+          </select>
+        </div>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
@@ -146,6 +160,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     const MAGIC_AETP = 0x41455450;
     const HIGH_WATER = 8 * 1024 * 1024;
     const LOW_WATER = 4 * 1024 * 1024;
+    const MAX_ROOM_PEERS = 8;
     const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
     const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
 
@@ -154,18 +169,37 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     let activeRoom = '';
     let activeTopic = '';
     let mqttSockets = [];
-    let pc = null;
-    let dc = null;
-    let remoteBrowserId = '';
-    let lastBrowserSeen = 0;
-    let exePeerId = '';
-    let lastExeSeen = 0;
+    const peersMap = new Map();
     let incomingFile = null;
     let partialFrames = new Map();
     let resumeCheckpoints = new Map();
     let pendingResumeResolver = null;
     let cloudAckResolver = null;
     let rxCloudFile = null;
+    let transferPaused = false;
+
+    function togglePauseState() {
+      transferPaused = !transferPaused;
+      const btn = document.getElementById('pause-btn');
+      if (btn) {
+        if (transferPaused) {
+          btn.textContent = 'Jatka';
+          btn.className = 'px-3 py-1.5 text-xs font-semibold bg-emerald-400 text-slate-950 rounded-lg hover:bg-emerald-300 cursor-pointer';
+        } else {
+          btn.textContent = 'Pysäytä';
+          btn.className = 'px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer';
+        }
+      }
+    }
+
+    async function waitWhilePaused(onPauseMs) {
+      if (!transferPaused) return;
+      const pStart = performance.now();
+      while (transferPaused) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (onPauseMs) onPauseMs(performance.now() - pStart);
+    }
 
     function buildMqttPacket(typeFlags, payload) {
       const rem = [];
@@ -205,6 +239,30 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       sendBusEnvelope({ type: 'CANDIDATE', src: myId, dst: dst || '*', payload });
     }
 
+    function syncTargetSelectorUi() {
+      const sel = document.getElementById('target-peer-select');
+      if (!sel) return;
+      const prevVal = sel.value || '*';
+      const activeList = Array.from(peersMap.values());
+      sel.innerHTML = '';
+      const allOpt = document.createElement('option');
+      allOpt.value = '*';
+      allOpt.textContent = 'Kaikki huoneessa (' + activeList.length + ' käyttäjää)';
+      sel.appendChild(allOpt);
+      for (const p of activeList) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const via = p.dc && p.dc.readyState === 'open' ? 'WebRTC P2P' : (p.type === 'exe' ? 'Windows .EXE' : 'Cloud Bridge');
+        opt.textContent = (p.label || p.id.slice(-8)) + ' (' + via + ')';
+        sel.appendChild(opt);
+      }
+      if (prevVal !== '*' && peersMap.has(prevVal)) {
+        sel.value = prevVal;
+      } else {
+        sel.value = '*';
+      }
+    }
+
     function updatePeerPresenceUi(hasPeer, peerLabel, roomCode) {
       const box = document.getElementById('peer-presence-box');
       const dot = document.getElementById('peer-presence-dot');
@@ -212,30 +270,32 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       const badge = document.getElementById('peer-count-badge');
       const sub = document.getElementById('peer-presence-sub');
       const headerBadge = document.getElementById('status-badge');
+      const totalUsers = activeRoom ? Math.min(MAX_ROOM_PEERS, peersMap.size + 1) : 0;
 
-      if (hasPeer) {
+      if (hasPeer || peersMap.size > 0) {
         box.className = 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
         title.className = 'text-xs font-semibold text-emerald-300';
-        title.textContent = 'Toinen peer on huoneessa! (Peer in room)';
+        title.textContent = peersMap.size + ' käyttäjää huoneessa! (Max ' + MAX_ROOM_PEERS + ')';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
-        badge.textContent = '2/2 PEERS';
+        badge.textContent = totalUsers + '/' + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
         sub.className = 'text-[11px] font-mono text-emerald-200/90 mt-1';
-        sub.textContent = 'Yhdistetty: ' + peerLabel + ' [' + roomCode + ']';
-        headerBadge.textContent = 'PEER IN ROOM: YES — Connected (' + peerLabel + ')';
+        sub.textContent = 'Yhdistetty: ' + (peerLabel || (peersMap.size + ' peeriä')) + ' [' + roomCode + ']';
+        headerBadge.textContent = 'HUONE [' + roomCode + ']: ' + totalUsers + '/' + MAX_ROOM_PEERS + ' käyttäjää';
         headerBadge.className = 'text-xs font-mono text-emerald-400 font-semibold';
       } else {
         box.className = 'p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
         title.className = 'text-xs font-semibold text-amber-300';
-        title.textContent = 'Ei toista peeriä huoneessa (Waiting for peer)';
+        title.textContent = 'Ei toista käyttäjää huoneessa (Waiting for peers)';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
-        badge.textContent = '1/2 PEERS';
+        badge.textContent = (activeRoom ? '1/' : '0/') + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
         sub.className = 'text-[11px] font-mono text-slate-400 mt-1';
-        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — avaa sama koodi toisella laitteella.';
-        headerBadge.textContent = 'PEER IN ROOM: NO — Listening on [' + roomCode + ']';
+        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — max ' + MAX_ROOM_PEERS + ' käyttäjää.';
+        headerBadge.textContent = activeRoom ? ('LISTENING ON [' + roomCode + '] · 1/' + MAX_ROOM_PEERS) : 'Odottaa tunnelin nimeä';
         headerBadge.className = 'text-xs font-mono text-amber-400';
       }
+      syncTargetSelectorUi();
     }
 
     async function deriveKey(code, pass) {
@@ -322,7 +382,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       return false;
     }
 
-    function handleControlJson(msg) {
+    function handleControlJson(msg, srcPeer) {
       if (!msg || typeof msg !== 'object') return;
       if (msg.kind === 'file:meta') {
         const rKey = msg.name + '::' + msg.size;
@@ -336,10 +396,11 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0 };
         resumeCheckpoints.set(rKey, incomingFile);
         const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk };
-        if (dc && dc.readyState === 'open') {
-          try { dc.send(JSON.stringify(ack)); } catch {}
+        const peerObj = srcPeer ? peersMap.get(srcPeer) : null;
+        if (peerObj && peerObj.dc && peerObj.dc.readyState === 'open') {
+          try { peerObj.dc.send(JSON.stringify(ack)); } catch {}
         }
-        sendCloudCandidate(remoteBrowserId || '*', ack);
+        sendCloudCandidate(srcPeer || '*', ack);
         const pct = Math.round((resumeFromChunk / Math.max(1, msg.totalChunks)) * 100);
         renderStatus((resumeFromChunk > 0 ? 'Resuming: ' : 'Receiving: ') + msg.name + ' (' + pct + '%)');
       } else if ((msg.kind === 'file:resume-ack' || msg.kind === 'exe:resume-ack') && pendingResumeResolver) {
@@ -348,16 +409,20 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       }
     }
 
-    function bindDataChannel(channel) {
-      dc = channel;
-      dc.binaryType = 'arraybuffer';
-      dc.bufferedAmountLowThreshold = LOW_WATER;
-      dc.onopen = () => {
-        lastBrowserSeen = Date.now();
-        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Peer') + ')', activeRoom);
+    function bindDataChannel(channel, peerEntry) {
+      peerEntry.dc = channel;
+      channel.binaryType = 'arraybuffer';
+      channel.bufferedAmountLowThreshold = LOW_WATER;
+      channel.onopen = () => {
+        peerEntry.lastSeen = Date.now();
+        updatePeerPresenceUi(true, peerEntry.label, activeRoom);
       };
-      dc.onmessage = async (ev) => {
-        lastBrowserSeen = Date.now();
+      channel.onclose = () => {
+        if (peerEntry.dc === channel) peerEntry.dc = null;
+        syncTargetSelectorUi();
+      };
+      channel.onmessage = async (ev) => {
+        peerEntry.lastSeen = Date.now();
         let data = ev.data;
         if (data instanceof Blob) data = await data.arrayBuffer();
         if (data instanceof ArrayBuffer) {
@@ -365,34 +430,38 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
           try { data = new TextDecoder().decode(data); } catch { return; }
         }
         if (typeof data === 'string') {
-          try { handleControlJson(JSON.parse(data)); } catch {}
+          try { handleControlJson(JSON.parse(data), peerEntry.id); } catch {}
         }
       };
     }
 
     async function ensureWebRtc(isInitiator, targetPeer) {
+      if (!targetPeer) return;
+      const peerEntry = peersMap.get(targetPeer);
+      if (!peerEntry) return;
       try {
-        if (pc && !isInitiator) {
-          try { pc.close(); } catch {}
-          pc = null;
+        if (peerEntry.pc && !isInitiator) {
+          try { peerEntry.pc.close(); } catch {}
+          peerEntry.pc = null;
         }
-        if (!pc) {
-          pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        if (!peerEntry.pc) {
+          const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+          peerEntry.pc = pc;
           pc.onicecandidate = (ev) => {
             if (ev.candidate) {
-              sendCloudCandidate(targetPeer || remoteBrowserId || '*', {
+              sendCloudCandidate(targetPeer, {
                 kind: 'webrtc:signal',
                 signalType: 'candidate',
                 candidate: ev.candidate
               });
             }
           };
-          pc.ondatachannel = (ev) => bindDataChannel(ev.channel);
+          pc.ondatachannel = (ev) => bindDataChannel(ev.channel, peerEntry);
         }
-        if (isInitiator && (!dc || dc.readyState !== 'open')) {
-          bindDataChannel(pc.createDataChannel('aethertunnel-lane-0', { ordered: false }));
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
+        if (isInitiator && (!peerEntry.dc || peerEntry.dc.readyState !== 'open')) {
+          bindDataChannel(peerEntry.pc.createDataChannel('aethertunnel-lane-0', { ordered: false }), peerEntry);
+          const offer = await peerEntry.pc.createOffer();
+          await peerEntry.pc.setLocalDescription(offer);
           sendCloudCandidate(targetPeer, {
             kind: 'webrtc:signal',
             signalType: 'offer',
@@ -402,57 +471,71 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       } catch {}
     }
 
+    function upsertRoomPeer(src, type, label) {
+      let existing = peersMap.get(src);
+      if (!existing) {
+        if (peersMap.size >= MAX_ROOM_PEERS - 1) {
+          return null;
+        }
+        existing = { id: src, type, label: label || src.slice(-8), lastSeen: Date.now(), pc: null, dc: null };
+        peersMap.set(src, existing);
+        return { peer: existing, isNew: true };
+      }
+      existing.lastSeen = Date.now();
+      if (label) existing.label = label;
+      return { peer: existing, isNew: false };
+    }
+
     function handleBusMessage(rawJson) {
       let msg;
       try { msg = JSON.parse(rawJson); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
       const src = typeof msg.src === 'string' ? msg.src : '';
       if (!src || src === myId) return;
-      if (msg.dst && msg.dst !== '*' && msg.dst !== myId && !String(msg.dst).startsWith('aethertunnel-v1-') && !String(msg.dst).startsWith('aethertunnel-web-')) return;
+      if (msg.dst && msg.dst !== '*' && msg.dst !== myId) return;
 
       const p = msg.payload || msg;
       if (!p || typeof p !== 'object') return;
 
-      if (p.kind === 'exe:hello') {
-        const isNew = exePeerId !== src || (Date.now() - lastExeSeen > 9000);
-        exePeerId = src;
-        lastExeSeen = Date.now();
-        updatePeerPresenceUi(true, 'Windows .EXE (' + src + ')', activeRoom);
-        if (isNew) {
+      if (p.kind === 'exe:hello' || p.kind === 'exe:hello-reply') {
+        const res = upsertRoomPeer(src, 'exe', p.displayName || ('Windows .EXE (' + src.slice(-6) + ')'));
+        if (!res) return;
+        updatePeerPresenceUi(true, res.peer.label, activeRoom);
+        if (p.kind === 'exe:hello' && res.isNew) {
           sendCloudCandidate(src, { kind: 'browser:hello', roomCode: activeRoom });
         }
         return;
       }
 
       if (p.kind === 'browser:hello' || p.kind === 'browser:hello-ack' || p.kind === 'web:hello') {
-        const isNew = remoteBrowserId !== src || (Date.now() - lastBrowserSeen > 9000);
-        remoteBrowserId = src;
-        lastBrowserSeen = Date.now();
-        updatePeerPresenceUi(true, 'Browser Peer (' + src + ')', activeRoom);
-        if (p.kind === 'browser:hello' && isNew) {
+        const res = upsertRoomPeer(src, 'browser', p.displayName || ('Selain (' + src.slice(-6) + ')'));
+        if (!res) return;
+        updatePeerPresenceUi(true, res.peer.label, activeRoom);
+        if (p.kind === 'browser:hello' && res.isNew) {
           sendCloudCandidate(src, { kind: 'browser:hello-ack', roomCode: activeRoom });
         }
-        if (myId < src && (!dc || dc.readyState !== 'open')) {
+        if (myId < src && (!res.peer.dc || res.peer.dc.readyState !== 'open')) {
           ensureWebRtc(true, src);
         }
         return;
       }
 
       if (p.kind === 'webrtc:signal') {
-        remoteBrowserId = src;
-        lastBrowserSeen = Date.now();
+        const res = upsertRoomPeer(src, 'browser', 'Selain (' + src.slice(-6) + ')');
+        if (!res) return;
+        const peerEntry = res.peer;
         (async () => {
           try {
             if (p.signalType === 'offer' && p.sdp) {
               await ensureWebRtc(false, src);
-              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
+              await peerEntry.pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+              const answer = await peerEntry.pc.createAnswer();
+              await peerEntry.pc.setLocalDescription(answer);
               sendCloudCandidate(src, { kind: 'webrtc:signal', signalType: 'answer', sdp: answer });
-            } else if (p.signalType === 'answer' && p.sdp && pc) {
-              await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
-            } else if (p.signalType === 'candidate' && p.candidate && pc) {
-              await pc.addIceCandidate(new RTCIceCandidate(p.candidate));
+            } else if (p.signalType === 'answer' && p.sdp && peerEntry.pc) {
+              await peerEntry.pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+            } else if (p.signalType === 'candidate' && p.candidate && peerEntry.pc) {
+              await peerEntry.pc.addIceCandidate(new RTCIceCandidate(p.candidate));
             }
           } catch {}
         })();
@@ -468,8 +551,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         return;
       }
 
-      if (p.kind === 'exe:resume-ack' || p.kind === 'file:resume-ack') {
-        handleControlJson(p);
+      if (p.kind === 'exe:resume-ack' || p.kind === 'file:resume-ack' || p.kind === 'browser:resume-ack') {
+        handleControlJson(p, src);
         return;
       }
 
@@ -580,7 +663,13 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
     }
 
     async function connectRoom() {
-      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '') || 'default';
+      const code = document.getElementById('room-input').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (!code) {
+        activeRoom = '';
+        activeTopic = '';
+        document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+        return;
+      }
       const pass = document.getElementById('pass-input').value;
       activeRoom = code;
       activeTopic = 'aethertunnel/v1/room/' + code;
@@ -588,10 +677,10 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
 
       for (const s of mqttSockets) { try { s.close(); } catch {} }
       mqttSockets = [];
-      if (pc) { try { pc.close(); } catch {} pc = null; }
-      dc = null;
-      remoteBrowserId = '';
-      exePeerId = '';
+      for (const p of peersMap.values()) {
+        try { if (p.pc) p.pc.close(); } catch {}
+      }
+      peersMap.clear();
       updatePeerPresenceUi(false, '', code);
 
       for (const url of BROKERS) {
@@ -608,38 +697,108 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
         }
       }
       const now = Date.now();
-      if (dc && dc.readyState === 'open') {
-        updatePeerPresenceUi(true, 'WebRTC P2P (' + (remoteBrowserId || 'Connected') + ')', activeRoom);
-      } else if (exePeerId && now - lastExeSeen < 10000) {
-        updatePeerPresenceUi(true, 'Windows .EXE (' + exePeerId + ')', activeRoom);
-      } else if (remoteBrowserId && now - lastBrowserSeen < 10000) {
-        updatePeerPresenceUi(true, 'Browser Peer (' + remoteBrowserId + ')', activeRoom);
-      } else {
+      let pruned = false;
+      for (const [pid, peer] of peersMap.entries()) {
+        const dcOpen = peer.dc && peer.dc.readyState === 'open';
+        if (!dcOpen && now - peer.lastSeen > 12000) {
+          try { if (peer.pc) peer.pc.close(); } catch {}
+          peersMap.delete(pid);
+          pruned = true;
+        }
+      }
+      if (peersMap.size > 0) {
+        updatePeerPresenceUi(true, peersMap.size + ' käyttäjää', activeRoom);
+      } else if (pruned || peersMap.size === 0) {
         updatePeerPresenceUi(false, '', activeRoom);
       }
     }, 2200);
 
     document.getElementById('connect-btn').addEventListener('click', connectRoom);
+    document.getElementById('pause-btn').addEventListener('click', togglePauseState);
     document.getElementById('file-input').addEventListener('change', async (e) => {
       const files = e.target.files;
       if (!files.length) return;
       const file = files[0];
-      const hasWebRtc = dc && dc.readyState === 'open';
-      const hasExeOrCloudPeer = (exePeerId && Date.now() - lastExeSeen < 12000) || (remoteBrowserId && Date.now() - lastBrowserSeen < 12000);
+      const targetId = (document.getElementById('target-peer-select') && document.getElementById('target-peer-select').value) || '*';
+      const targetPeers = targetId === '*'
+        ? Array.from(peersMap.values())
+        : (peersMap.has(targetId) ? [peersMap.get(targetId)] : []);
 
-      if (!hasWebRtc && !hasExeOrCloudPeer) {
-        renderStatus('Wait for a remote peer to connect to room "' + activeRoom + '" first.');
+      if (targetPeers.length === 0) {
+        renderStatus('Valittu vastaanottaja ei ole paikalla huoneessa "' + activeRoom + '".');
         return;
       }
 
-      const startedAt = performance.now();
+      const webrtcPeers = targetPeers.filter(p => p.dc && p.dc.readyState === 'open');
+      const bridgePeers = targetPeers.filter(p => !(p.dc && p.dc.readyState === 'open'));
 
-      if (!hasWebRtc && hasExeOrCloudPeer) {
-        const dst = exePeerId || remoteBrowserId;
-        const isExe = Boolean(exePeerId);
+      let startedAt = performance.now();
+
+      if (webrtcPeers.length > 0) {
+        const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
+        const chunkSize = chunkKb * 1024;
+        const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+        const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
+
+        const resumePromise = new Promise(resolve => {
+          pendingResumeResolver = resolve;
+          setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 650);
+        });
+
+        const metaMsg = JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' });
+        for (const p of webrtcPeers) {
+          try { p.dc.send(metaMsg); } catch {}
+        }
+        const startChunk = Math.max(0, Math.min(await resumePromise, totalChunks));
+        const batchSize = 32;
+
+        for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
+          if (transferPaused) {
+            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((bStart / totalChunks) * 100) + '%)');
+            await waitWhilePaused((ms) => { startedAt += ms; });
+          }
+          const bEnd = Math.min(totalChunks, bStart + batchSize);
+          const slab = await file.slice(bStart * chunkSize, Math.min(file.size, bEnd * chunkSize)).arrayBuffer();
+
+          const frames = await Promise.all(Array.from({ length: bEnd - bStart }, async (_, idx) => {
+            const cIdx = bStart + idx;
+            const lStart = idx * chunkSize;
+            const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
+            const iv = new Uint8Array(12);
+            crypto.getRandomValues(iv);
+            new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
+            const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
+            const frame = new Uint8Array(24 + enc.byteLength);
+            const hv = new DataView(frame.buffer);
+            hv.setUint32(0, MAGIC_AETH, false);
+            hv.setUint32(4, transferNumId >>> 0, false);
+            hv.setUint32(8, cIdx >>> 0, false);
+            frame.set(iv, 12);
+            frame.set(new Uint8Array(enc), 24);
+            return frame.buffer;
+          }));
+
+          for (const frame of frames) {
+            for (const p of webrtcPeers) {
+              while (p.dc && p.dc.readyState === 'open' && p.dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
+                await new Promise(r => setTimeout(r, 4));
+              }
+              try { if (p.dc && p.dc.readyState === 'open') p.dc.send(frame.slice(0)); } catch {}
+            }
+          }
+
+          const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
+          const mbps = (Math.min(file.size, bEnd * chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
+          renderStatus('Streaming Encrypted (' + webrtcPeers.length + ' peers): ' + file.name + ' (' + Math.round((bEnd / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
+        }
+      }
+
+      for (const bp of bridgePeers) {
+        const dst = bp.id;
+        const isExe = bp.type === 'exe';
         const cSize = 49152;
         const totalChunks = Math.max(1, Math.ceil(file.size / cSize));
-        const fileId = 'f-' + Date.now();
+        const fileId = 'f-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5);
 
         const resumePromise = new Promise(resolve => {
           pendingResumeResolver = resolve;
@@ -657,6 +816,10 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
 
         let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
         for (let off = cIdx * cSize; off < file.size; off += cSize) {
+          if (transferPaused) {
+            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '%)');
+            await waitWhilePaused((ms) => { startedAt += ms; });
+          }
           const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
           const bytes = new Uint8Array(buf);
           let bin = '';
@@ -670,7 +833,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
           cIdx++;
           const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
           const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
-          renderStatus('Sending via Wormhole Bridge: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
+          renderStatus('Sending to ' + bp.label + ': ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
           if (cIdx % 8 === 0) {
             await new Promise(resolve => {
               cloudAckResolver = resolve;
@@ -679,57 +842,6 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
           }
         }
         sendCloudCandidate(dst, { kind: isExe ? 'exe:file-end' : 'browser:file-end', fileId });
-        const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
-        renderStatus('Completed & Verified: ' + file.name + ' (' + (file.size / (1024 * 1024) / totalElapsed).toFixed(2) + ' MB/s average)');
-        return;
-      }
-
-      const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
-      const chunkSize = chunkKb * 1024;
-      const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-      const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
-
-      const resumePromise = new Promise(resolve => {
-        pendingResumeResolver = resolve;
-        setTimeout(() => { if (pendingResumeResolver === resolve) { pendingResumeResolver = null; resolve(0); } }, 650);
-      });
-
-      dc.send(JSON.stringify({ kind: 'file:meta', fileId: 'f-' + Date.now(), transferNumId, name: file.name, size: file.size, chunkSize, mimeType: file.type, totalChunks, sha256: 'streaming-aes-gcm' }));
-      const startChunk = Math.max(0, Math.min(await resumePromise, totalChunks));
-      const batchSize = 32;
-
-      for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
-        const bEnd = Math.min(totalChunks, bStart + batchSize);
-        const slab = await file.slice(bStart * chunkSize, Math.min(file.size, bEnd * chunkSize)).arrayBuffer();
-
-        const frames = await Promise.all(Array.from({ length: bEnd - bStart }, async (_, idx) => {
-          const cIdx = bStart + idx;
-          const lStart = idx * chunkSize;
-          const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
-          const iv = new Uint8Array(12);
-          crypto.getRandomValues(iv);
-          new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
-          const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
-          const frame = new Uint8Array(24 + enc.byteLength);
-          const hv = new DataView(frame.buffer);
-          hv.setUint32(0, MAGIC_AETH, false);
-          hv.setUint32(4, transferNumId >>> 0, false);
-          hv.setUint32(8, cIdx >>> 0, false);
-          frame.set(iv, 12);
-          frame.set(new Uint8Array(enc), 24);
-          return frame.buffer;
-        }));
-
-        for (const frame of frames) {
-          while (dc.bufferedAmount + frame.byteLength > HIGH_WATER) {
-            await new Promise(r => setTimeout(r, 4));
-          }
-          dc.send(frame);
-        }
-
-        const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
-        const mbps = (Math.min(file.size, bEnd * chunkSize) / (1024 * 1024) / elapsed).toFixed(2);
-        renderStatus('Streaming Encrypted: ' + file.name + ' (' + Math.round((bEnd / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');
       }
 
       const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
@@ -737,7 +849,11 @@ function generateSelfContainedAppHtml(defaultRoom: string = '742-cobalt-falcon')
       renderStatus('Completed & Verified: ' + file.name + ' (' + finalMbps + ' MB/s average)');
     });
 
-    connectRoom();
+    if (document.getElementById('room-input').value.trim()) {
+      connectRoom();
+    } else {
+      document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+    }
   </script>
 </body>
 </html>`;
@@ -800,7 +916,7 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
   try {
     // Step 1: Build Standalone HTML Web Page
     const t0 = Date.now();
-    const standaloneHtml = generateSelfContainedAppHtml('742-cobalt-falcon');
+    const standaloneHtml = generateSelfContainedAppHtml('');
     const htmlPath = path.join(releaseDir, 'AetherTunnel-Portable-Standalone.html');
     fs.writeFileSync(htmlPath, standaloneHtml, 'utf8');
     const htmlBuf = Buffer.from(standaloneHtml, 'utf8');
@@ -847,7 +963,7 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
     const { createRequire } = await import('module');
     const requireCjs = createRequire(import.meta.url);
     const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
-    const winExeBuf: Buffer = buildWindowsGuiExe('742-cobalt-falcon');
+    const winExeBuf: Buffer = buildWindowsGuiExe('');
     const winExePath = path.join(releaseDir, 'AetherTunnel-win-x64.exe');
     fs.writeFileSync(winExePath, winExeBuf);
     artifacts.push({
@@ -948,10 +1064,17 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
   return currentWorkflowState;
 }
 
-function broadcastToRoom(roomCode: string, senderId: string, payload: unknown) {
+function sendToRoomTarget(roomCode: string, senderId: string, toPeerId: string | undefined, payload: unknown) {
   const room = rooms.get(roomCode);
   if (!room) return;
   const serialized = JSON.stringify(payload);
+  if (toPeerId && toPeerId !== '*' && room.has(toPeerId) && toPeerId !== senderId) {
+    const targetClient = room.get(toPeerId)!;
+    if (targetClient.ws.readyState === WebSocket.OPEN) {
+      targetClient.ws.send(serialized);
+    }
+    return;
+  }
   for (const [peerId, client] of room.entries()) {
     if (peerId !== senderId && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(serialized);
@@ -959,10 +1082,21 @@ function broadcastToRoom(roomCode: string, senderId: string, payload: unknown) {
   }
 }
 
-// Zero-Copy Raw Binary Frame Relay Broadcast (0% Base64 / 0% JSON parsing overhead!)
-function broadcastBinaryToRoom(roomCode: string, senderId: string, rawBinary: Buffer | ArrayBuffer | Buffer[]) {
+function broadcastToRoom(roomCode: string, senderId: string, payload: unknown) {
+  sendToRoomTarget(roomCode, senderId, '*', payload);
+}
+
+// Zero-Copy Raw Binary Frame Relay Broadcast / Targeted Relay (0% Base64 / 0% JSON parsing overhead!)
+function broadcastBinaryToRoom(roomCode: string, senderId: string, rawBinary: Buffer | ArrayBuffer | Buffer[], toPeerId?: string) {
   const room = rooms.get(roomCode);
   if (!room) return;
+  if (toPeerId && toPeerId !== '*' && room.has(toPeerId) && toPeerId !== senderId) {
+    const targetClient = room.get(toPeerId)!;
+    if (targetClient.ws.readyState === WebSocket.OPEN) {
+      targetClient.ws.send(rawBinary, { binary: true });
+    }
+    return;
+  }
   for (const [peerId, client] of room.entries()) {
     if (peerId !== senderId && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(rawBinary, { binary: true });
@@ -977,6 +1111,8 @@ function getRoomPeerSummaries(roomCode: string) {
     id: c.id,
     deviceLabel: c.deviceLabel,
     natType: c.natType,
+    clientType: c.clientType,
+    cloudId: c.cloudId,
     joinedAt: c.joinedAt,
   }));
 }
@@ -1011,7 +1147,7 @@ async function startServer() {
         const wsProto = proto === 'https' ? 'wss' : 'ws';
         const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
         const cloudWsUrl = `${wsProto}://${host}/ws-tunnel`;
-        const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? req.query.room.trim() : '742-cobalt-falcon';
+        const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? req.query.room.trim() : '';
         const { createRequire } = await import('module');
         const requireCjs = createRequire(import.meta.url);
         const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
@@ -1074,6 +1210,7 @@ async function startServer() {
       roomCode: code,
       exists: Boolean(room && room.size > 0),
       peerCount: room ? room.size : 0,
+      maxPeers: MAX_ROOM_PEERS,
     });
   });
 
@@ -1091,7 +1228,7 @@ async function startServer() {
       // FAST PATH: Raw Binary Frame ('AETH' / 'AETP') -> Forward directly without JSON parsing!
       if (isBinary) {
         if (currentPeer) {
-          broadcastBinaryToRoom(currentPeer.roomCode, currentPeer.id, rawData);
+          broadcastBinaryToRoom(currentPeer.roomCode, currentPeer.id, rawData, currentPeer.binaryTargetId);
         }
         return;
       }
@@ -1105,16 +1242,22 @@ async function startServer() {
             const peerId = String(msg.peerId || '');
             const deviceLabel = String(msg.deviceLabel || 'Desktop Peer');
             const natType = String(msg.natType || 'Port-Restricted Cone NAT');
+            const clientType: 'browser' | 'exe' =
+              msg.clientType === 'exe' || peerId.startsWith('exe-kernel-') || peerId.startsWith('aethertunnel-exe-')
+                ? 'exe'
+                : 'browser';
+            const cloudId = msg.cloudId ? String(msg.cloudId) : undefined;
 
             if (!roomCode || !peerId) return;
 
-            if (currentPeer && rooms.has(currentPeer.roomCode)) {
+            if (currentPeer && rooms.has(currentPeer.roomCode) && currentPeer.roomCode !== roomCode) {
               const prevRoom = rooms.get(currentPeer.roomCode)!;
               prevRoom.delete(currentPeer.id);
               broadcastToRoom(currentPeer.roomCode, currentPeer.id, {
                 type: 'peer:left',
                 peerId: currentPeer.id,
                 peers: getRoomPeerSummaries(currentPeer.roomCode),
+                maxPeers: MAX_ROOM_PEERS,
               });
             }
 
@@ -1123,12 +1266,27 @@ async function startServer() {
             }
             const room = rooms.get(roomCode)!;
 
+            if (!room.has(peerId) && room.size >= MAX_ROOM_PEERS) {
+              ws.send(
+                JSON.stringify({
+                  type: 'room:full',
+                  roomCode,
+                  maxPeers: MAX_ROOM_PEERS,
+                  peerCount: room.size,
+                })
+              );
+              return;
+            }
+
             currentPeer = {
               id: peerId,
               ws,
               roomCode,
               deviceLabel,
               natType,
+              clientType,
+              cloudId,
+              binaryTargetId: '*',
               joinedAt: Date.now(),
             };
             room.set(peerId, currentPeer);
@@ -1141,6 +1299,7 @@ async function startServer() {
                 roomCode,
                 peerId,
                 peers: peersList,
+                maxPeers: MAX_ROOM_PEERS,
               })
             );
 
@@ -1150,18 +1309,29 @@ async function startServer() {
                 id: peerId,
                 deviceLabel,
                 natType,
+                clientType,
+                cloudId,
                 joinedAt: currentPeer.joinedAt,
               },
               peers: peersList,
+              maxPeers: MAX_ROOM_PEERS,
             });
+            break;
+          }
+
+          case 'relay:target': {
+            if (!currentPeer) return;
+            currentPeer.binaryTargetId = msg.toPeerId ? String(msg.toPeerId) : '*';
             break;
           }
 
           case 'webrtc:signal': {
             if (!currentPeer) return;
-            broadcastToRoom(currentPeer.roomCode, currentPeer.id, {
+            sendToRoomTarget(currentPeer.roomCode, currentPeer.id, msg.toPeerId ? String(msg.toPeerId) : '*', {
               type: 'webrtc:signal',
+              sigId: msg.sigId,
               fromPeerId: currentPeer.id,
+              toPeerId: msg.toPeerId ? String(msg.toPeerId) : '*',
               signalType: msg.signalType,
               laneIdx: msg.laneIdx,
               sdp: msg.sdp,
@@ -1172,9 +1342,10 @@ async function startServer() {
 
           case 'relay:packet': {
             if (!currentPeer) return;
-            broadcastToRoom(currentPeer.roomCode, currentPeer.id, {
+            sendToRoomTarget(currentPeer.roomCode, currentPeer.id, msg.toPeerId ? String(msg.toPeerId) : '*', {
               type: 'relay:packet',
               fromPeerId: currentPeer.id,
+              toPeerId: msg.toPeerId ? String(msg.toPeerId) : '*',
               packet: msg.packet,
             });
             break;
@@ -1182,10 +1353,21 @@ async function startServer() {
 
           case 'CANDIDATE': {
             if (!currentPeer) return;
-            broadcastToRoom(currentPeer.roomCode, currentPeer.id, {
+            const dst = msg.dst ? String(msg.dst) : '*';
+            const room = rooms.get(currentPeer.roomCode);
+            let targetWsId = '*';
+            if (dst !== '*' && room) {
+              for (const [rid, rc] of room.entries()) {
+                if (rid === dst || rc.cloudId === dst) {
+                  targetWsId = rid;
+                  break;
+                }
+              }
+            }
+            sendToRoomTarget(currentPeer.roomCode, currentPeer.id, targetWsId, {
               type: 'CANDIDATE',
               src: msg.src || currentPeer.id,
-              dst: msg.dst || '*',
+              dst,
               payload: msg.payload,
             });
             break;

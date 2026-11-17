@@ -13,6 +13,10 @@ export interface PeerSummary {
   deviceLabel: string;
   natType: string;
   joinedAt: number;
+  clientType?: 'browser' | 'exe' | 'local_exe';
+  displayName?: string;
+  cloudId?: string;
+  isLocalBridge?: boolean;
 }
 
 export interface TransferItem {
@@ -24,7 +28,17 @@ export interface TransferItem {
   transferredChunks: number;
   bytesTransferred: number;
   speedBps: number;
-  status: 'queued' | 'encrypting' | 'transferring' | 'verifying' | 'completed' | 'error';
+  avgSpeedBps?: number;
+  status:
+    | 'queued'
+    | 'encrypting'
+    | 'awaiting_acceptance'
+    | 'transferring'
+    | 'paused'
+    | 'verifying'
+    | 'completed'
+    | 'rejected'
+    | 'error';
   sha256: string;
   verified: boolean;
   direction: 'outgoing' | 'incoming';
@@ -33,6 +47,9 @@ export interface TransferItem {
   completedAt?: number;
   downloadUrl?: string;
   errorMessage?: string;
+  queueItemId?: string;
+  recipientId?: string;
+  recipientLabel?: string;
 }
 
 export interface IceCandidateRecord {
@@ -66,6 +83,7 @@ export interface NatProbeReport {
 export interface EncryptedNote {
   id: string;
   senderLabel: string;
+  recipientLabel?: string;
   text: string;
   timestamp: number;
   verified: boolean;
