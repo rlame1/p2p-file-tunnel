@@ -12,7 +12,11 @@ import {
   HardDrive,
   RefreshCw,
 } from 'lucide-react';
-import { downloadNativeWindowsKernelExe } from '../utils/standaloneBuilder';
+import {
+  downloadNativeWindowsKernelExe,
+  generateStandalonePortableHtml,
+  triggerBrowserDownload,
+} from '../utils/standaloneBuilder';
 
 interface ClientInspectorViewProps {
   roomCode: string;
@@ -62,13 +66,27 @@ export const ClientInspectorView: React.FC<ClientInspectorViewProps> = ({
             Examine and verify the execution status, socket channels, and secure parameters of both the Windows Native Desktop Executable and the Web Browser Client.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => downloadNativeWindowsKernelExe(roomCode, `${window.location.origin.replace(/^http/, 'ws')}/ws-tunnel`)}
+            className="px-4 py-2 text-xs font-semibold bg-emerald-400 text-slate-950 hover:bg-emerald-300 rounded-lg flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Download Windows .EXE (V1.01)
+          </button>
+          <button
+            onClick={() => {
+              const html = generateStandalonePortableHtml(roomCode);
+              triggerBrowserDownload(
+                'AetherTunnel-Portable-Standalone.html',
+                html,
+                'text/html;charset=utf-8'
+              );
+            }}
             className="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 hover:bg-sky-300 rounded-lg flex items-center gap-2 cursor-pointer transition-colors"
           >
             <Download className="w-4 h-4" />
-            Download Windows .EXE
+            Download Portable HTML (V1.01)
           </button>
         </div>
       </div>

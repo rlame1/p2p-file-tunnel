@@ -56,7 +56,11 @@ import {
 import { NatDiagnosticsView } from './components/NatDiagnosticsView';
 import { TransferLedgerView } from './components/TransferLedgerView';
 import { ClientInspectorView } from './components/ClientInspectorView';
-import { downloadNativeWindowsKernelExe } from './utils/standaloneBuilder';
+import {
+  downloadNativeWindowsKernelExe,
+  generateStandalonePortableHtml,
+  triggerBrowserDownload,
+} from './utils/standaloneBuilder';
 
 type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
@@ -4276,6 +4280,21 @@ export default function App() {
                   >
                     <HardDriveDownload className="w-3.5 h-3.5" />
                     Download Standalone P2P .EXE (V1.01)
+                  </button>
+                  <button
+                    onClick={() => {
+                      const html = generateStandalonePortableHtml(roomCode);
+                      triggerBrowserDownload(
+                        'AetherTunnel-Portable-Standalone.html',
+                        html,
+                        'text/html;charset=utf-8'
+                      );
+                    }}
+                    className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    title="Downloads the single-file Portable HTML version (V1.01 · Zero-install client that runs directly in any browser via WebRTC & MQTT)"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download Portable HTML (V1.01)
                   </button>
                 </div>
               </div>
