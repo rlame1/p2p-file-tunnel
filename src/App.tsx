@@ -35,6 +35,8 @@ import {
   decryptChunk,
   encryptChunkBinaryFrame,
   decryptChunkBinaryFrame,
+  splitFrameForSctpLanes,
+  MAX_SCTP_SLICE_BYTES,
   BINARY_FRAME_MAGIC,
   BINARY_SUBFRAME_MAGIC,
   computeSha256Hex,
@@ -65,10 +67,10 @@ import {
 type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
 const WIRE_CHUNK_BYTES = 240 * 1024;
-const MAX_PARALLEL_LANES = 2; // Palautettu 2:een, kuten aiemmin todettiin
+const MAX_PARALLEL_LANES = 2; // 2 parallel RTCPeerConnection/RTCDataChannel lanes per browser peer
 const CHUNKS_PER_WAVE = 48;
-const HIGH_WATER_MARK = 24 * 1024 * 1024; // Rennompi WebRTC-puskuri
-const LOW_WATER_MARK = 12 * 1024 * 1024;
+const HIGH_WATER_MARK = 6 * 1024 * 1024; // Safe headroom under Chromium's 16 MB SCTP send queue cap
+const LOW_WATER_MARK = Math.floor(1.5 * 1024 * 1024);
 const MAX_ROOM_PEERS = 8;
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
@@ -211,6 +213,7 @@ export default function App() {
   const peerConnsByPeerRef = useRef<Map<string, Map<number, RTCPeerConnection>>>(new Map());
   const pendingIceByPeerRef = useRef<Map<string, Map<number, RTCIceCandidateInit[]>>>(new Map());
   const dataChannelsByPeerRef = useRef<Map<string, RTCDataChannel[]>>(new Map());
+  const channelToPcRef = useRef<WeakMap<RTCDataChannel, RTCPeerConnection>>(new WeakMap());
   const peerJsInstanceRef = useRef<Peer | null>(null);
   const peerJsConnsRef = useRef<DataConnection[]>([]);
   const incomingBuffersRef = useRef<Map<string, IncomingFileBuffer>>(new Map());
@@ -220,6 +223,11 @@ export default function App() {
   const resumeAckResolversRef = useRef<Map<string, (chunkIdx: number) => void>>(new Map());
   const waitAcceptHandlersRef = useRef<Map<string, () => void>>(new Map());
   const rejectHandlersRef = useRef<Map<string, () => void>>(new Map());
+  const rxCompleteHandlersRef = useRef<Map<string, () => void>>(new Map());
+  const rxProgressMapRef = useRef<Map<string, { receivedCount: number; at: number }>>(new Map());
+  const rxErrorHandlersRef = useRef<Map<string, (reason: string) => void>>(new Map());
+  const decryptionErrorReportedRef = useRef<Set<string>>(new Set());
+  const lastRxProgressEmitAtRef = useRef<Map<string, number>>(new Map());
   const partialSubFramesRef = useRef<Map<string, PartialSubFrameAssembly>>(
     new Map()
   );
@@ -508,6 +516,41 @@ export default function App() {
     return rawId;
   }, []);
 
+  const sendControlReplyEverywhere = useCallback((replyPkt: Record<string, unknown>) => {
+    const serializedReply = JSON.stringify(replyPkt);
+    for (const dcs of dataChannelsByPeerRef.current.values()) {
+      for (const dc of dcs) {
+        if (dc.readyState === 'open') {
+          try {
+            dc.send(serializedReply);
+          } catch {}
+        }
+      }
+    }
+    for (const conn of peerJsConnsRef.current) {
+      if (conn.open) {
+        try {
+          conn.send(serializedReply);
+        } catch {}
+      }
+    }
+    if (localBusRef.current && localBusPeersRef.current.length > 0) {
+      try {
+        localBusRef.current.postMessage({ type: 'bus:packet', packet: replyPkt });
+      } catch {}
+    }
+    if (sendCloudCandidateRef.current && cloudWebPeersRef.current.length > 0) {
+      for (const pDst of cloudWebPeersRef.current) {
+        sendCloudCandidateRef.current(pDst, { kind: 'browser:packet', packet: replyPkt });
+      }
+    }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({ type: 'relay:packet', packet: replyPkt }));
+      } catch {}
+    }
+  }, []);
+
   const finalizeIncomingBufferIfComplete = useCallback(
     (bufEntry: IncomingFileBuffer) => {
       if (bufEntry.rejected || bufEntry.awaitingAcceptance) return false;
@@ -568,13 +611,24 @@ export default function App() {
         )
       );
 
+      sendControlReplyEverywhere({
+        kind: 'file:rx-complete',
+        fileId,
+        name: bufEntry.name,
+        size: bufEntry.size,
+        receivedCount: bufEntry.totalChunks,
+        totalChunks: bufEntry.totalChunks,
+      });
+
       incomingBuffersRef.current.delete(fileId);
       resumeBuffersByKeyRef.current.delete(`${bufEntry.name}::${bufEntry.size}`);
       numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+      decryptionErrorReportedRef.current.delete(fileId);
+      lastRxProgressEmitAtRef.current.delete(fileId);
       setIncomingFileAlert(null);
       return true;
     },
-    []
+    [sendControlReplyEverywhere]
   );
 
   const recordDecryptedChunk = useCallback(
@@ -601,6 +655,17 @@ export default function App() {
 
       const now = performance.now();
       const fileId = bufEntry.id;
+
+      const lastEmit = lastRxProgressEmitAtRef.current.get(fileId) || 0;
+      if (now - lastEmit >= 450 || bufEntry.receivedCount === 1) {
+        lastRxProgressEmitAtRef.current.set(fileId, now);
+        sendControlReplyEverywhere({
+          kind: 'file:rx-progress',
+          fileId,
+          receivedCount: bufEntry.receivedCount,
+          totalChunks: bufEntry.totalChunks,
+        });
+      }
 
       if (now - bufEntry.lastUiUpdateAt >= 120) {
         let filledCount = 0;
@@ -643,7 +708,7 @@ export default function App() {
         );
       }
     },
-    [finalizeIncomingBufferIfComplete]
+    [finalizeIncomingBufferIfComplete, sendControlReplyEverywhere]
   );
 
   const handleCompleteAethFrame = useCallback(
@@ -678,10 +743,31 @@ export default function App() {
         const { plainBuffer } = await decryptChunkBinaryFrame(key, frameBuffer);
         recordDecryptedChunk(bufEntry, chunkIndex, plainBuffer);
       } catch {
-        // Ignore frame if authentication tag fails
+        if (!decryptionErrorReportedRef.current.has(fileId)) {
+          decryptionErrorReportedRef.current.add(fileId);
+          const errMsg =
+            'AES-256-GCM decryption failed — verify Room Name & E2EE Passphrase match sender';
+          setIncomingFileAlert(errMsg);
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fileId && item.direction === 'incoming'
+                ? {
+                    ...item,
+                    status: 'error',
+                    errorMessage: errMsg,
+                  }
+                : item
+            )
+          );
+          sendControlReplyEverywhere({
+            kind: 'file:rx-error',
+            fileId,
+            reason: errMsg,
+          });
+        }
       }
     },
-    [recordDecryptedChunk]
+    [recordDecryptedChunk, sendControlReplyEverywhere]
   );
 
   const handleRawBinaryFrame = useCallback(
@@ -775,6 +861,34 @@ export default function App() {
 
       if (!packet || typeof packet !== 'object') return;
 
+      if (packet.kind === 'file:rx-progress' && packet.fileId) {
+        rxProgressMapRef.current.set(String(packet.fileId), {
+          receivedCount: Number(packet.receivedCount) || 0,
+          at: performance.now(),
+        });
+        return;
+      }
+
+      if (packet.kind === 'file:rx-complete' && packet.fileId) {
+        const fidStr = String(packet.fileId);
+        const handler = rxCompleteHandlersRef.current.get(fidStr);
+        if (handler) {
+          rxCompleteHandlersRef.current.delete(fidStr);
+          handler();
+        }
+        return;
+      }
+
+      if (packet.kind === 'file:rx-error' && packet.fileId) {
+        const fidStr = String(packet.fileId);
+        const handler = rxErrorHandlersRef.current.get(fidStr);
+        if (handler) {
+          rxErrorHandlersRef.current.delete(fidStr);
+          handler(String(packet.reason || 'Recipient failed to decrypt incoming file'));
+        }
+        return;
+      }
+
       if (packet.kind === 'file:resume-ack' || packet.kind === 'exe:resume-ack' || packet.kind === 'browser:resume-ack') {
         const resumeKey = `${packet.name || ''}::${Number(packet.size) || 0}`;
         const resumeChunk = Math.max(0, Number(packet.resumeFromChunk) || 0);
@@ -827,8 +941,54 @@ export default function App() {
         const numId =
           typeof transferNumId === 'number' ? transferNumId : 1001;
         const resumeKey = `${name}::${size}`;
-        const existingCheckpoint = resumeBuffersByKeyRef.current.get(resumeKey);
 
+        // Deduplicate repeated file:meta arrivals across multiple buses/retries so an in-progress
+        // buffer (or pending Accept modal closure) is never overwritten!
+        const existingSameFile = incomingBuffersRef.current.get(fileId);
+        if (
+          existingSameFile &&
+          existingSameFile.totalChunks === totalChunks &&
+          !existingSameFile.rejected
+        ) {
+          numIdToFileIdRef.current.set(numId, fileId);
+          if (sourceTransport === 'WebRTC Direct (UDP/DTLS)' && existingSameFile.transportUsed !== sourceTransport) {
+            existingSameFile.transportUsed = sourceTransport;
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fileId && t.direction === 'incoming'
+                  ? { ...t, transportUsed: sourceTransport }
+                  : t
+              )
+            );
+          }
+          let missIdx = 0;
+          while (
+            missIdx < totalChunks &&
+            existingSameFile.receivedChunks[missIdx] !== undefined
+          ) {
+            missIdx++;
+          }
+          if (existingSameFile.awaitingAcceptance) {
+            sendControlReplyEverywhere({
+              kind: 'file:wait-accept',
+              fileId,
+              name,
+              size,
+            });
+          } else {
+            sendControlReplyEverywhere({
+              kind: 'file:resume-ack',
+              fileId,
+              name,
+              size,
+              resumeFromChunk: missIdx,
+              receivedCount: existingSameFile.receivedCount,
+            });
+          }
+          return;
+        }
+
+        const existingCheckpoint = resumeBuffersByKeyRef.current.get(resumeKey);
         let activeBuf: IncomingFileBuffer;
         let firstMissingChunk = 0;
 
@@ -840,6 +1000,9 @@ export default function App() {
           existingCheckpoint.receivedCount < totalChunks &&
           !existingCheckpoint.rejected
         ) {
+          if (existingCheckpoint.id !== fileId) {
+            incomingBuffersRef.current.delete(existingCheckpoint.id);
+          }
           existingCheckpoint.id = fileId;
           existingCheckpoint.transferNumId = numId;
           existingCheckpoint.transportUsed = sourceTransport;
@@ -881,41 +1044,6 @@ export default function App() {
           resumeBuffersByKeyRef.current.set(resumeKey, activeBuf);
         }
 
-        const sendReplyPacket = (replyPkt: Record<string, unknown>) => {
-          const serializedReply = JSON.stringify(replyPkt);
-          for (const dcs of dataChannelsByPeerRef.current.values()) {
-            for (const dc of dcs) {
-              if (dc.readyState === 'open') {
-                try {
-                  dc.send(serializedReply);
-                } catch {}
-              }
-            }
-          }
-          for (const conn of peerJsConnsRef.current) {
-            if (conn.open) {
-              try {
-                conn.send(serializedReply);
-              } catch {}
-            }
-          }
-          if (localBusRef.current && localBusPeersRef.current.length > 0) {
-            try {
-              localBusRef.current.postMessage({ type: 'bus:packet', packet: replyPkt });
-            } catch {}
-          }
-          if (sendCloudCandidateRef.current && cloudWebPeersRef.current.length > 0) {
-            for (const pDst of cloudWebPeersRef.current) {
-              sendCloudCandidateRef.current(pDst, { kind: 'browser:packet', packet: replyPkt });
-            }
-          }
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            try {
-              wsRef.current.send(JSON.stringify({ type: 'relay:packet', packet: replyPkt }));
-            } catch {}
-          }
-        };
-
         const needsConfirm =
           !autoAcceptIncomingRef.current &&
           !acceptedPromptKeysRef.current.has(resumeKey);
@@ -923,6 +1051,7 @@ export default function App() {
         activeBuf.awaitingAcceptance = needsConfirm;
         numIdToFileIdRef.current.set(numId, fileId);
         incomingBuffersRef.current.set(fileId, activeBuf);
+        decryptionErrorReportedRef.current.delete(fileId);
 
         const alreadyBytes = Math.min(size, activeBuf.receivedCount * activeBuf.chunkSize);
 
@@ -966,11 +1095,30 @@ export default function App() {
                 const ohv = new DataView(orphanBuf);
                 const oChunkIndex = ohv.getUint32(8, false);
                 if (bufEntry.receivedChunks[oChunkIndex] === undefined) {
-                  try {
-                    void decryptChunkBinaryFrame(key, orphanBuf).then(({ plainBuffer }) => {
+                  void decryptChunkBinaryFrame(key, orphanBuf)
+                    .then(({ plainBuffer }) => {
                       recordDecryptedChunk(bufEntry, oChunkIndex, plainBuffer);
+                    })
+                    .catch(() => {
+                      if (!decryptionErrorReportedRef.current.has(fileId)) {
+                        decryptionErrorReportedRef.current.add(fileId);
+                        const errMsg =
+                          'AES-256-GCM decryption failed — verify Room Name & E2EE Passphrase match sender';
+                        setIncomingFileAlert(errMsg);
+                        setTransfers((prev) =>
+                          prev.map((item) =>
+                            item.id === fileId && item.direction === 'incoming'
+                              ? { ...item, status: 'error', errorMessage: errMsg }
+                              : item
+                          )
+                        );
+                        sendControlReplyEverywhere({
+                          kind: 'file:rx-error',
+                          fileId,
+                          reason: errMsg,
+                        });
+                      }
                     });
-                  } catch {}
                 }
               }
             }
@@ -981,7 +1129,7 @@ export default function App() {
           setIncomingFileAlert(
             `Confirmation required: ${name} (${formatBytes(size)}) — Accept or decline the incoming transfer above.`
           );
-          sendReplyPacket({
+          sendControlReplyEverywhere({
             kind: 'file:wait-accept',
             fileId,
             name,
@@ -1017,7 +1165,7 @@ export default function App() {
                       : item
                   )
                 );
-                sendReplyPacket({
+                sendControlReplyEverywhere({
                   kind: 'file:reject',
                   fileId,
                   name,
@@ -1033,7 +1181,7 @@ export default function App() {
               activeBuf.lastWindowBytes = activeBuf.initialBytes;
               activeBuf.smoothedLiveBps = 0;
               setIncomingFileAlert(
-                `Vastaanotetaan: ${name} (${formatBytes(size)})...`
+                `Receiving: ${name} (${formatBytes(size)})...`
               );
               setTransfers((prev) =>
                 prev.map((item) =>
@@ -1042,7 +1190,7 @@ export default function App() {
                     : item
                 )
               );
-              sendReplyPacket({
+              sendControlReplyEverywhere({
                 kind: 'file:resume-ack',
                 fileId,
                 name,
@@ -1061,19 +1209,19 @@ export default function App() {
           setIncomingFileAlert(
             `Resuming Interrupted File: ${name} from ${resumePct}% (${firstMissingChunk}/${totalChunks} chunks already in memory)...`
           );
-          sendReplyPacket({
-            kind: 'file:resume-ack',
-            fileId,
-            name,
-            size,
-            resumeFromChunk: firstMissingChunk,
-            receivedCount: activeBuf.receivedCount,
-          });
         } else {
           setIncomingFileAlert(
             `Incoming File Detected: ${name} (${formatBytes(size)}) — Receiving and preparing download...`
           );
         }
+        sendControlReplyEverywhere({
+          kind: 'file:resume-ack',
+          fileId,
+          name,
+          size,
+          resumeFromChunk: firstMissingChunk,
+          receivedCount: activeBuf.receivedCount,
+        });
 
         flushOrphansForBuf();
         return;
@@ -1143,25 +1291,26 @@ export default function App() {
         }
       }
     },
-    [handleRawBinaryFrame, recordDecryptedChunk, finalizeIncomingBufferIfComplete]
+    [
+      handleRawBinaryFrame,
+      recordDecryptedChunk,
+      finalizeIncomingBufferIfComplete,
+      sendControlReplyEverywhere,
+    ]
   );
 
   const registerDataChannelLane = useCallback(
-    (remotePeerKey: string, channel: RTCDataChannel, managedByPeerJs = false) => {
+    (
+      remotePeerKey: string,
+      channel: RTCDataChannel,
+      managedByPeerJs = false,
+      ownerPc?: RTCPeerConnection
+    ) => {
       channel.binaryType = 'arraybuffer';
       channel.bufferedAmountLowThreshold = LOW_WATER_MARK;
-
-      channel.addEventListener('message', async (ev: MessageEvent) => {
-        let data = ev.data;
-        if (data instanceof Blob) {
-          try {
-            data = await data.arrayBuffer();
-          } catch {}
-        }
-        if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) {
-          return;
-        }
-      });
+      if (ownerPc) {
+        channelToPcRef.current.set(channel, ownerPc);
+      }
 
       if (!managedByPeerJs) {
         channel.onmessage = async (ev: MessageEvent) => {
@@ -1169,9 +1318,22 @@ export default function App() {
           if (data instanceof Blob) {
             try {
               data = await data.arrayBuffer();
-            } catch {}
+            } catch {
+              return;
+            }
           }
-          if (data instanceof ArrayBuffer && handleRawBinaryFrame(data)) {
+          if (data instanceof ArrayBuffer) {
+            if (handleRawBinaryFrame(data)) return;
+            void handleTunnelPacket(data, 'WebRTC Direct (UDP/DTLS)');
+            return;
+          }
+          if (ArrayBuffer.isView(data)) {
+            const copy = data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength
+            );
+            if (handleRawBinaryFrame(copy as ArrayBuffer)) return;
+            void handleTunnelPacket(copy, 'WebRTC Direct (UDP/DTLS)');
             return;
           }
           void handleTunnelPacket(data, 'WebRTC Direct (UDP/DTLS)');
@@ -1191,20 +1353,25 @@ export default function App() {
         syncPoolCount();
       });
 
-      channel.addEventListener('close', () => {
+      const removeDeadChannel = () => {
         const list = dataChannelsByPeerRef.current.get(remotePeerKey) || [];
         dataChannelsByPeerRef.current.set(
           remotePeerKey,
-          list.filter((c) => c !== channel && c.readyState !== 'closed')
+          list.filter((c) => c !== channel && c.readyState !== 'closed' && c.readyState !== 'closing')
         );
         syncPoolCount();
-      });
+      };
 
-      const list = dataChannelsByPeerRef.current.get(remotePeerKey) || [];
+      channel.addEventListener('close', removeDeadChannel);
+      channel.addEventListener('error', removeDeadChannel);
+
+      const list = (dataChannelsByPeerRef.current.get(remotePeerKey) || []).filter(
+        (c) => c.readyState !== 'closed' && c.readyState !== 'closing'
+      );
       if (!list.includes(channel)) {
         list.push(channel);
-        dataChannelsByPeerRef.current.set(remotePeerKey, list);
       }
+      dataChannelsByPeerRef.current.set(remotePeerKey, list);
       syncPoolCount();
     },
     [handleRawBinaryFrame, handleTunnelPacket]
@@ -1371,8 +1538,28 @@ export default function App() {
     [peerId]
   );
 
+  const purgeChannelsForPc = useCallback(
+    (peerKey: string, pcToPurge: RTCPeerConnection) => {
+      const list = dataChannelsByPeerRef.current.get(peerKey);
+      if (!list) return;
+      const filtered = list.filter(
+        (dc) =>
+          channelToPcRef.current.get(dc) !== pcToPurge &&
+          dc.readyState !== 'closed' &&
+          dc.readyState !== 'closing'
+      );
+      dataChannelsByPeerRef.current.set(peerKey, filtered);
+    },
+    []
+  );
+
   const initWebRtcConnectionPool = useCallback(
-    async (targetPeerRaw: string, isInitiator: boolean, specificLaneIndex?: number) => {
+    async (
+      targetPeerRaw: string,
+      isInitiator: boolean,
+      specificLaneIndex?: number,
+      forceRebuild = false
+    ) => {
       if (transportStrategy === 'websocket_relay') {
         setConnectionState('connected_relay');
         return;
@@ -1400,14 +1587,23 @@ export default function App() {
         try {
           const existingPc = pcMap.get(laneIdx);
           if (
+            !forceRebuild &&
             existingPc &&
-            (existingPc.connectionState === 'connected' ||
-              existingPc.iceConnectionState === 'connected' ||
-              existingPc.iceConnectionState === 'completed')
+            existingPc.signalingState !== 'closed' &&
+            existingPc.connectionState !== 'failed' &&
+            existingPc.connectionState !== 'closed' &&
+            existingPc.iceConnectionState !== 'failed' &&
+            existingPc.iceConnectionState !== 'disconnected' &&
+            existingPc.iceConnectionState !== 'closed'
           ) {
             continue;
           }
-          existingPc?.close();
+          if (existingPc) {
+            purgeChannelsForPc(targetPeerKey, existingPc);
+            try {
+              existingPc.close();
+            } catch {}
+          }
           pendMap.set(laneIdx, []);
 
           const pc = new RTCPeerConnection({
@@ -1418,12 +1614,12 @@ export default function App() {
           if (isInitiator) {
             const channel = pc.createDataChannel(
               `aethertunnel-lane-${laneIdx}`,
-              { ordered: false }
+              { ordered: true }
             );
-            registerDataChannelLane(targetPeerKey, channel);
+            registerDataChannelLane(targetPeerKey, channel, false, pc);
           } else {
             pc.ondatachannel = (ev) => {
-              registerDataChannelLane(targetPeerKey, ev.channel);
+              registerDataChannelLane(targetPeerKey, ev.channel, false, pc);
             };
           }
 
@@ -1440,6 +1636,8 @@ export default function App() {
           pc.onconnectionstatechange = () => {
             if (pc.connectionState === 'connected') {
               setConnectionState('connected_p2p');
+            } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+              purgeChannelsForPc(targetPeerKey, pc);
             }
           };
 
@@ -1449,6 +1647,11 @@ export default function App() {
               pc.iceConnectionState === 'completed'
             ) {
               setConnectionState('connected_p2p');
+            } else if (
+              pc.iceConnectionState === 'failed' ||
+              pc.iceConnectionState === 'closed'
+            ) {
+              purgeChannelsForPc(targetPeerKey, pc);
             }
           };
 
@@ -1461,7 +1664,14 @@ export default function App() {
         } catch {}
       }
     },
-    [peerId, registerDataChannelLane, resolveCanonicalPeerKey, sendWebRtcSignalEverywhere, transportStrategy]
+    [
+      peerId,
+      purgeChannelsForPc,
+      registerDataChannelLane,
+      resolveCanonicalPeerKey,
+      sendWebRtcSignalEverywhere,
+      transportStrategy,
+    ]
   );
 
   const handleIncomingWebRtcSignal = useCallback(
@@ -1503,11 +1713,38 @@ export default function App() {
       let pc = pcMap.get(laneIdx);
 
       if (msg.signalType === 'offer' && msg.sdp) {
-        if (!pc || pc.signalingState !== 'stable') {
-          await initWebRtcConnectionPool(senderKey, false, laneIdx);
+        const cleanRoom = roomCodeRef.current.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+        const localCompareId = rawSender.startsWith('aethertunnel-web-') && !rawSender.includes('peer-')
+          ? `aethertunnel-web-${cleanRoom}-${peerId}`
+          : peerId;
+        const remoteCompareId = rawSender.startsWith('aethertunnel-web-') && !rawSender.includes('peer-')
+          ? rawSender
+          : senderKey;
+        const isPolite = localCompareId < remoteCompareId;
+
+        if (
+          !pc ||
+          pc.signalingState === 'closed' ||
+          pc.connectionState === 'failed' ||
+          pc.connectionState === 'closed'
+        ) {
+          await initWebRtcConnectionPool(senderKey, false, laneIdx, true);
           pc = peerConnsByPeerRef.current.get(senderKey)?.get(laneIdx);
+        } else if (pc.signalingState !== 'stable') {
+          if (!isPolite) {
+            return;
+          }
+          try {
+            await pc.setLocalDescription({ type: 'rollback' });
+          } catch {
+            await initWebRtcConnectionPool(senderKey, false, laneIdx, true);
+            pc = peerConnsByPeerRef.current.get(senderKey)?.get(laneIdx);
+          }
         }
         if (!pc) return;
+        pc.ondatachannel = (ev) => {
+          registerDataChannelLane(senderKey, ev.channel, false, pc!);
+        };
         const queue = pendMap.get(laneIdx) || [];
         setConnectionState('hole_punching');
         await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
@@ -1532,8 +1769,8 @@ export default function App() {
         }
         pendMap.set(laneIdx, []);
       } else if (msg.signalType === 'candidate' && msg.candidate) {
-        if (!pc) {
-          await initWebRtcConnectionPool(senderKey, false, laneIdx);
+        if (!pc || pc.signalingState === 'closed') {
+          await initWebRtcConnectionPool(senderKey, false, laneIdx, true);
           pc = peerConnsByPeerRef.current.get(senderKey)?.get(laneIdx);
         }
         if (!pc) return;
@@ -1548,7 +1785,13 @@ export default function App() {
         }
       }
     },
-    [peerId, initWebRtcConnectionPool, resolveCanonicalPeerKey, sendWebRtcSignalEverywhere]
+    [
+      peerId,
+      initWebRtcConnectionPool,
+      registerDataChannelLane,
+      resolveCanonicalPeerKey,
+      sendWebRtcSignalEverywhere,
+    ]
   );
 
   useEffect(() => {
@@ -2252,10 +2495,13 @@ export default function App() {
         const activeIds = Array.from(cloudPeerLastSeenRef.current.keys());
         setCloudWebPeers(activeIds);
         setPeers((prev) =>
-          prev.filter(
-            (p) =>
-              !p.id.startsWith('aethertunnel-web-') || activeIds.includes(p.id)
-          )
+          prev.filter((p) => {
+            if (p.isLocalBridge || p.clientType === 'exe') return true;
+            if (p.cloudId && activeIds.includes(p.cloudId)) return true;
+            const dcs = dataChannelsByPeerRef.current.get(p.id) || [];
+            if (dcs.some((dc) => dc.readyState === 'open')) return true;
+            return p.id.startsWith('peer-') && wsRef.current?.readyState === WebSocket.OPEN;
+          })
         );
       }
 
@@ -2403,6 +2649,12 @@ export default function App() {
             displayName: localDisplayNameRef.current,
           });
         }
+      } else if (
+        payload.kind === 'file:rx-progress' ||
+        payload.kind === 'file:rx-complete' ||
+        payload.kind === 'file:rx-error'
+      ) {
+        void handleTunnelPacket(payload, 'Encrypted WS Relay (TCP/443)');
       } else if (
         payload.kind === 'exe:resume-ack' ||
         payload.kind === 'file:resume-ack' ||
@@ -2795,6 +3047,19 @@ export default function App() {
     handleTunnelPacket,
   ]);
 
+  const isDataChannelHealthy = useCallback((dc: RTCDataChannel): boolean => {
+    if (dc.readyState !== 'open') return false;
+    const pc = channelToPcRef.current.get(dc);
+    if (!pc) return true;
+    return (
+      pc.signalingState !== 'closed' &&
+      pc.connectionState !== 'closed' &&
+      pc.connectionState !== 'failed' &&
+      pc.iceConnectionState !== 'closed' &&
+      pc.iceConnectionState !== 'failed'
+    );
+  }, []);
+
   const getOpenDataChannelLanes = useCallback(
     (targetPeerId?: string): RTCDataChannel[] => {
       if (transportStrategy === 'websocket_relay') return [];
@@ -2802,19 +3067,19 @@ export default function App() {
       if (targetPeerId && targetPeerId !== 'all') {
         const key = resolveCanonicalPeerKey(targetPeerId);
         return (dataChannelsByPeerRef.current.get(key) || []).filter(
-          (dc) => dc.readyState === 'open'
+          isDataChannelHealthy
         );
       }
 
       const allOpen: RTCDataChannel[] = [];
       for (const dcs of dataChannelsByPeerRef.current.values()) {
         for (const dc of dcs) {
-          if (dc.readyState === 'open') allOpen.push(dc);
+          if (isDataChannelHealthy(dc)) allOpen.push(dc);
         }
       }
       return allOpen;
     },
-    [transportStrategy, resolveCanonicalPeerKey]
+    [transportStrategy, resolveCanonicalPeerKey, isDataChannelHealthy]
   );
 
   const getTargetPeerLaneGroups = useCallback(
@@ -2824,22 +3089,37 @@ export default function App() {
       if (targetPeerId && targetPeerId !== 'all') {
         const key = resolveCanonicalPeerKey(targetPeerId);
         const lanes = (dataChannelsByPeerRef.current.get(key) || []).filter(
-          (dc) => dc.readyState === 'open'
+          isDataChannelHealthy
         );
         if (lanes.length > 0) groups.push(lanes);
         return groups;
       }
       for (const dcs of dataChannelsByPeerRef.current.values()) {
-        const open = dcs.filter((dc) => dc.readyState === 'open');
+        const open = dcs.filter(isDataChannelHealthy);
         if (open.length > 0) groups.push(open);
       }
       return groups;
     },
-    [transportStrategy, resolveCanonicalPeerKey]
+    [transportStrategy, resolveCanonicalPeerKey, isDataChannelHealthy]
   );
 
-  const trySendFrameToLaneGroup = useCallback(
-    (lanes: RTCDataChannel[], packet: ArrayBuffer): boolean => {
+  const getSafeSctpSliceLimitForLanes = useCallback(
+    (lanes: RTCDataChannel[]): number => {
+      let limit = MAX_SCTP_SLICE_BYTES;
+      for (const dc of lanes) {
+        const pc = channelToPcRef.current.get(dc);
+        const maxMsg = pc?.sctp?.maxMessageSize;
+        if (typeof maxMsg === 'number' && Number.isFinite(maxMsg) && maxMsg > 0) {
+          limit = Math.min(limit, Math.max(8192, maxMsg - 128));
+        }
+      }
+      return limit;
+    },
+    []
+  );
+
+  const trySendSingleSliceToLaneGroup = useCallback(
+    (lanes: RTCDataChannel[], sliceBuf: ArrayBuffer): boolean => {
       if (lanes.length === 0) return false;
       let bestLane = lanes[laneRoundRobinRef.current % lanes.length];
       laneRoundRobinRef.current += 1;
@@ -2848,9 +3128,9 @@ export default function App() {
           bestLane = lanes[i];
         }
       }
-      if (bestLane.bufferedAmount + packet.byteLength <= HIGH_WATER_MARK) {
+      if (bestLane.bufferedAmount + sliceBuf.byteLength <= HIGH_WATER_MARK) {
         try {
-          bestLane.send(packet.slice(0));
+          bestLane.send(sliceBuf.slice(0));
           return true;
         } catch {
           return false;
@@ -2861,15 +3141,15 @@ export default function App() {
     []
   );
 
-  const sendFrameToLaneGroupSafely = useCallback(
-    async (lanes: RTCDataChannel[], packet: ArrayBuffer): Promise<void> => {
-      if (trySendFrameToLaneGroup(lanes, packet)) return;
+  const sendSliceToLaneGroupSafely = useCallback(
+    async (lanes: RTCDataChannel[], sliceBuf: ArrayBuffer): Promise<void> => {
+      if (trySendSingleSliceToLaneGroup(lanes, sliceBuf)) return;
       for (let attempt = 0; attempt < 20000; attempt++) {
-        const openLanes = lanes.filter((c) => c.readyState === 'open');
+        const openLanes = lanes.filter(isDataChannelHealthy);
         if (openLanes.length === 0) {
           throw new Error('No open WebRTC DataChannel lanes available for peer');
         }
-        if (trySendFrameToLaneGroup(openLanes, packet)) return;
+        if (trySendSingleSliceToLaneGroup(openLanes, sliceBuf)) return;
         await new Promise<void>((resolve) => {
           let settled = false;
           const cleanup = () => {
@@ -2889,7 +3169,7 @@ export default function App() {
       }
       throw new Error('WebRTC DataChannel send timed out waiting for queue drain');
     },
-    [trySendFrameToLaneGroup]
+    [isDataChannelHealthy, trySendSingleSliceToLaneGroup]
   );
 
   const trySendBinaryPacketSync = useCallback(
@@ -2908,13 +3188,24 @@ export default function App() {
       }
 
       for (const lanes of groups) {
-        if (!trySendFrameToLaneGroup(lanes, packet)) {
-          return false;
+        const sliceLimit = getSafeSctpSliceLimitForLanes(lanes);
+        const slices =
+          packet.byteLength <= sliceLimit + 24
+            ? [packet]
+            : splitFrameForSctpLanes(packet, sliceLimit);
+        for (const sl of slices) {
+          if (!trySendSingleSliceToLaneGroup(lanes, sl)) {
+            return false;
+          }
         }
       }
       return true;
     },
-    [getTargetPeerLaneGroups, trySendFrameToLaneGroup]
+    [
+      getTargetPeerLaneGroups,
+      getSafeSctpSliceLimitForLanes,
+      trySendSingleSliceToLaneGroup,
+    ]
   );
 
   const sendBinaryPacketSafely = useCallback(
@@ -2931,10 +3222,21 @@ export default function App() {
       }
 
       for (const lanes of groups) {
-        await sendFrameToLaneGroupSafely(lanes, packet);
+        const sliceLimit = getSafeSctpSliceLimitForLanes(lanes);
+        const slices =
+          packet.byteLength <= sliceLimit + 24
+            ? [packet]
+            : splitFrameForSctpLanes(packet, sliceLimit);
+        for (const sl of slices) {
+          await sendSliceToLaneGroupSafely(lanes, sl);
+        }
       }
     },
-    [getTargetPeerLaneGroups, sendFrameToLaneGroupSafely]
+    [
+      getTargetPeerLaneGroups,
+      getSafeSctpSliceLimitForLanes,
+      sendSliceToLaneGroupSafely,
+    ]
   );
 
   const transmitEncryptedPacket = useCallback(
@@ -3548,9 +3850,19 @@ export default function App() {
           const confirmPromise = waitForConfirmationHandshake(
             fileId,
             fileResumeKey,
-            600,
+            1500,
             queueItemId
           );
+
+          let rxCompletedConfirmed = false;
+          let rxRemoteError: string | null = null;
+          rxProgressMapRef.current.delete(fileId);
+          rxCompleteHandlersRef.current.set(fileId, () => {
+            rxCompletedConfirmed = true;
+          });
+          rxErrorHandlersRef.current.set(fileId, (reason) => {
+            rxRemoteError = reason;
+          });
 
           transmitEncryptedPacket(metaPayload, targetPeerId);
           await new Promise((r) => window.setTimeout(r, 120));
@@ -3560,6 +3872,8 @@ export default function App() {
 
           const confirmRes = await confirmPromise;
           if (!confirmRes.accepted) {
+            rxCompleteHandlersRef.current.delete(fileId);
+            rxErrorHandlersRef.current.delete(fileId);
             if (!anyCompleted) {
               markRejected();
               return 'rejected';
@@ -3642,6 +3956,9 @@ export default function App() {
               waveStart < totalChunks;
               waveStart += chunksPerWave
             ) {
+              if (rxRemoteError) {
+                throw new Error(rxRemoteError);
+              }
               await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                 activeStartedAt += pausedMs;
                 lastWindowAt = performance.now();
@@ -3658,6 +3975,9 @@ export default function App() {
 
               if (currentLanes.length > 0) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (rxRemoteError) {
+                    throw new Error(rxRemoteError);
+                  }
                   await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
@@ -3701,6 +4021,9 @@ export default function App() {
                 (targetPeerId === 'all' || localBusPeersRef.current.includes(targetPeerId))
               ) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (rxRemoteError) {
+                    throw new Error(rxRemoteError);
+                  }
                   await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
@@ -3727,6 +4050,9 @@ export default function App() {
                 }
               } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (rxRemoteError) {
+                    throw new Error(rxRemoteError);
+                  }
                   await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
@@ -3755,13 +4081,39 @@ export default function App() {
               }
             }
 
-            for (let drainWait = 0; drainWait < 400; drainWait++) {
+            for (let drainWait = 0; drainWait < 600; drainWait++) {
+              if (rxCompletedConfirmed || rxRemoteError) break;
               const totalBuffered = getOpenDataChannelLanes(targetPeerId).reduce(
                 (sum, dc) => sum + dc.bufferedAmount,
                 0
               );
-              if (totalBuffered <= 256 * 1024) break;
-              await new Promise<void>((r) => window.setTimeout(r, 10));
+              if (totalBuffered === 0) break;
+              await new Promise<void>((r) => window.setTimeout(r, 15));
+            }
+
+            const confirmDeadlineStart = performance.now();
+            while (!rxCompletedConfirmed && !rxRemoteError) {
+              const lastProg = rxProgressMapRef.current.get(fileId);
+              const lastActivityAt = lastProg?.at || confirmDeadlineStart;
+              const idleLimitMs = lastProg ? 6000 : 4000;
+              if (performance.now() - lastActivityAt > idleLimitMs) {
+                break;
+              }
+              await new Promise<void>((r) => window.setTimeout(r, 40));
+            }
+
+            rxCompleteHandlersRef.current.delete(fileId);
+            rxErrorHandlersRef.current.delete(fileId);
+            const progSnapshot = rxProgressMapRef.current.get(fileId);
+            rxProgressMapRef.current.delete(fileId);
+
+            if (rxRemoteError) {
+              throw new Error(rxRemoteError);
+            }
+            if (!rxCompletedConfirmed && (!progSnapshot || progSnapshot.receivedCount === 0)) {
+              throw new Error(
+                'Recipient did not acknowledge incoming chunks — verify tunnel name, passphrase, and P2P connection'
+              );
             }
             anyCompleted = true;
           }

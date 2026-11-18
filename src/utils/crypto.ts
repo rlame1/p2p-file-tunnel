@@ -148,9 +148,16 @@ export async function encryptChunkBinaryFrame(
  *   [22..23] Uint16 totalParts
  *   [24..]   Raw slice of the 'AETH' frame
  */
-export function splitFrameForSctpLanes(frameBuffer: ArrayBuffer): ArrayBuffer[] {
+export function splitFrameForSctpLanes(
+  frameBuffer: ArrayBuffer,
+  maxSliceBytes: number = MAX_SCTP_SLICE_BYTES
+): ArrayBuffer[] {
+  const effectiveSliceBytes = Math.max(
+    8192,
+    Math.min(MAX_SCTP_SLICE_BYTES, Math.floor(maxSliceBytes))
+  );
   const totalFrameBytes = frameBuffer.byteLength;
-  if (totalFrameBytes <= MAX_SCTP_SLICE_BYTES + 24) {
+  if (totalFrameBytes <= effectiveSliceBytes + 24) {
     return [frameBuffer];
   }
 
@@ -158,13 +165,13 @@ export function splitFrameForSctpLanes(frameBuffer: ArrayBuffer): ArrayBuffer[] 
   const transferNumId = mainHeader.getUint32(4, false);
   const chunkIndex = mainHeader.getUint32(8, false);
 
-  const totalParts = Math.ceil(totalFrameBytes / MAX_SCTP_SLICE_BYTES);
+  const totalParts = Math.ceil(totalFrameBytes / effectiveSliceBytes);
   const subFrames: ArrayBuffer[] = new Array(totalParts);
   const srcBytes = new Uint8Array(frameBuffer);
 
   for (let partIndex = 0; partIndex < totalParts; partIndex++) {
-    const byteOffset = partIndex * MAX_SCTP_SLICE_BYTES;
-    const sliceLen = Math.min(MAX_SCTP_SLICE_BYTES, totalFrameBytes - byteOffset);
+    const byteOffset = partIndex * effectiveSliceBytes;
+    const sliceLen = Math.min(effectiveSliceBytes, totalFrameBytes - byteOffset);
     const subFrame = new Uint8Array(24 + sliceLen);
     const subView = new DataView(subFrame.buffer);
 
