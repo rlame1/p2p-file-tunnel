@@ -45,7 +45,7 @@ interface WorkflowRunState {
 }
 
 const STATIC_FALLBACK_STATE: WorkflowRunState = {
-  runId: 'gh-pages-release-V1.01',
+  runId: 'gh-pages-release-V1.02',
   status: 'completed',
   startedAt: Date.now() - 1200,
   completedAt: Date.now(),
@@ -285,7 +285,7 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
-              Download Native Kernel-Socket .EXE (V1.01 High-DPI)
+              Download Native Kernel-Socket .EXE (V1.02 High-DPI)
             </button>
             <button
               onClick={handleDownloadStandaloneHtml}
@@ -336,7 +336,7 @@ export const GitHubReleaseStudio: React.FC<GitHubReleaseStudioProps> = ({
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors whitespace-nowrap cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Download Kernel .EXE (V1.01)
+                        Download Kernel .EXE (V1.02)
                       </button>
                     ) : (
                       <a

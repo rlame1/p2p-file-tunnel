@@ -72,7 +72,7 @@ export const ClientInspectorView: React.FC<ClientInspectorViewProps> = ({
             className="px-4 py-2 text-xs font-semibold bg-emerald-400 text-slate-950 hover:bg-emerald-300 rounded-lg flex items-center gap-2 cursor-pointer transition-colors"
           >
             <Download className="w-4 h-4" />
-            Download Windows .EXE (V1.01)
+            Download Windows .EXE (V1.02)
           </button>
           <button
             onClick={() => {
@@ -86,7 +86,7 @@ export const ClientInspectorView: React.FC<ClientInspectorViewProps> = ({
             className="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 hover:bg-sky-300 rounded-lg flex items-center gap-2 cursor-pointer transition-colors"
           >
             <Download className="w-4 h-4" />
-            Download Portable HTML (V1.01)
+            Download Portable HTML (V1.02)
           </button>
         </div>
       </div>
@@ -103,7 +103,7 @@ export const ClientInspectorView: React.FC<ClientInspectorViewProps> = ({
               </div>
               <div>
                 <h2 className="text-base font-semibold text-slate-100">Windows Native Desktop App</h2>
-                <span className="text-xs font-mono text-slate-400">AetherTunnel-win-x64.exe (V1.01 NAT-P2P High-DPI)</span>
+                <span className="text-xs font-mono text-slate-400">AetherTunnel-win-x64.exe (V1.02 NAT-P2P High-DPI)</span>
               </div>
             </div>
             <span

@@ -38,8 +38,8 @@ using System.Reflection;
 
 [assembly: AssemblyTitle("AetherTunnel P2P Engine")]
 [assembly: AssemblyProduct("AetherTunnel")]
-[assembly: AssemblyVersion("1.0.1.0")]
-[assembly: AssemblyFileVersion("1.0.1.0")]
+[assembly: AssemblyVersion("1.0.2.0")]
+[assembly: AssemblyFileVersion("1.0.2.0")]
 
 namespace AetherTunnelNative
 {
@@ -393,7 +393,7 @@ namespace AetherTunnelNative
             }
 
             this.AutoScaleMode = AutoScaleMode.None;
-            this.Text = "AetherTunnel V1.01 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
+            this.Text = "AetherTunnel V1.02 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
             this.ClientSize = new Size(S(1020), S(668));
             this.MinimumSize = new Size(S(920), S(600));
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -489,7 +489,7 @@ namespace AetherTunnelNative
             headerPanel.BackColor = Color.FromArgb(12, 18, 30);
 
             Label lblTitle = CreateCleanLabel(
-                "AetherTunnel V1.01 — Standalone P2P & NAT-Punching Engine (.EXE)",
+                "AetherTunnel V1.02 — Standalone P2P & NAT-Punching Engine (.EXE)",
                 new Font("Segoe UI Semibold", 14.5f, FontStyle.Bold),
                 Color.FromArgb(248, 250, 252),
                 new Point(S(24), S(12)),
@@ -1389,7 +1389,7 @@ namespace AetherTunnelNative
 
             string localIps = GetLocalIpList();
             lblLocalEndpoint.Text = "LAN: " + localIps + "  |  STUN WAN: Probing...";
-            Log("AetherTunnel V1.01 High-DPI active [BDP-Safe v8 · Queue & Confirmation · SSD-Safe] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
+            Log("AetherTunnel V1.02 High-DPI active [BDP-Safe v8 · Queue & Confirmation · SSD-Safe] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
 
             Thread stunThread = new Thread(StunAndUpnpProbeLoop);
             stunThread.IsBackground = true;
@@ -4464,6 +4464,18 @@ namespace AetherTunnelNative
 
                 string kind = ExtractJsonString(text, "kind");
                 if (kind.Length == 0) return;
+
+                if (kind == "browser:bye" || kind == "web:bye" || kind == "exe:bye")
+                {
+                    RoomPeerInfo byeRem;
+                    if (roomPeers.TryRemove(srcPeer, out byeRem))
+                    {
+                        try { if (byeRem != null && byeRem.TcpClientConn != null) byeRem.TcpClientConn.Close(); } catch { }
+                        SyncTargetPeerDropdown();
+                        Log("Peer left room: " + (byeRem != null ? byeRem.DisplayName : srcPeer));
+                    }
+                    return;
+                }
 
                 if (kind == "browser:hello" || kind == "web:hello" || kind == "browser:hello-ack")
                 {

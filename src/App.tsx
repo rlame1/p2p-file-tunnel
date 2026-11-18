@@ -239,7 +239,8 @@ export default function App() {
   const cloudExeWsRef = useRef<WebSocket | null>(null);
   const cloudExePeersRef = useRef<Map<string, { lastSeen: number; label: string }>>(new Map());
   const [cloudExePeers, setCloudExePeers] = useState<string[]>([]);
-  const cloudAckResolverRef = useRef<(() => void) | null>(null);
+  const cloudAckResolversRef = useRef<Map<string, () => void>>(new Map());
+  const lastWsBinaryTargetRef = useRef<string>('*');
   const [cloudWebPeers, setCloudWebPeers] = useState<string[]>([]);
   const cloudWebPeersRef = useRef<string[]>([]);
   cloudWebPeersRef.current = cloudWebPeers;
@@ -504,6 +505,8 @@ export default function App() {
   >(null);
   const seenSignalIdsRef = useRef<Set<string>>(new Set());
   const cloudPeerLastSeenRef = useRef<Map<string, number>>(new Map());
+  const wsPeerIdsRef = useRef<Set<string>>(new Set());
+  const localBusLastSeenRef = useRef<Map<string, number>>(new Map());
 
   const resolveCanonicalPeerKey = useCallback((rawId: string): string => {
     if (!rawId) return '';
@@ -515,6 +518,191 @@ export default function App() {
     if (idx >= 0) return rawId.slice(idx);
     return rawId;
   }, []);
+
+  const syncOpenPoolCount = useCallback(() => {
+    let openCount = 0;
+    for (const dcs of dataChannelsByPeerRef.current.values()) {
+      openCount += dcs.filter((c) => c.readyState === 'open').length;
+    }
+    setOpenPoolCount(Math.max(1, openCount));
+  }, []);
+
+  const hasHealthyWebRtcForPeer = useCallback((peerKey: string): boolean => {
+    const dcs = dataChannelsByPeerRef.current.get(peerKey) || [];
+    return dcs.some((dc) => {
+      if (dc.readyState !== 'open') return false;
+      const pc = channelToPcRef.current.get(dc);
+      if (!pc) return false;
+      return (
+        pc.signalingState !== 'closed' &&
+        pc.connectionState === 'connected' &&
+        pc.iceConnectionState !== 'disconnected' &&
+        pc.iceConnectionState !== 'failed' &&
+        pc.iceConnectionState !== 'closed'
+      );
+    });
+  }, []);
+
+  const sweepStalePeers = useCallback(() => {
+    const localBridgeAlive =
+      allowLocalExeBridgeRef.current &&
+      exeWsRef.current?.readyState === WebSocket.OPEN;
+    const toDrop: PeerSummary[] = [];
+
+    for (const p of peersRef.current) {
+      if (p.id === 'native-exe-bridge' || p.isLocalBridge) {
+        if (!localBridgeAlive) toDrop.push(p);
+        continue;
+      }
+      if (wsPeerIdsRef.current.has(p.id)) continue;
+      if (localBusLastSeenRef.current.has(p.id)) continue;
+      if (
+        cloudPeerLastSeenRef.current.has(p.id) ||
+        (p.cloudId && cloudPeerLastSeenRef.current.has(p.cloudId))
+      ) {
+        continue;
+      }
+      if (
+        cloudExePeersRef.current.has(p.id) ||
+        (p.cloudId && cloudExePeersRef.current.has(p.cloudId))
+      ) {
+        continue;
+      }
+      if (hasHealthyWebRtcForPeer(p.id)) continue;
+      toDrop.push(p);
+    }
+
+    if (toDrop.length === 0) return;
+
+    const dropKeys = new Set<string>();
+    for (const p of toDrop) {
+      dropKeys.add(p.id);
+      if (p.cloudId) dropKeys.add(p.cloudId);
+    }
+
+    for (const key of dropKeys) {
+      const pcMap = peerConnsByPeerRef.current.get(key);
+      if (pcMap) {
+        for (const pc of pcMap.values()) {
+          try {
+            pc.close();
+          } catch {}
+        }
+        peerConnsByPeerRef.current.delete(key);
+      }
+      dataChannelsByPeerRef.current.delete(key);
+      pendingIceByPeerRef.current.delete(key);
+    }
+    syncOpenPoolCount();
+
+    setPeers((prev) =>
+      prev.filter(
+        (p) => !dropKeys.has(p.id) && !(p.cloudId && dropKeys.has(p.cloudId))
+      )
+    );
+  }, [hasHealthyWebRtcForPeer, syncOpenPoolCount]);
+
+  const removeDepartedPeer = useCallback(
+    (targetId: string, altCloudId?: string) => {
+      const keysToRemove = new Set<string>();
+      if (targetId) keysToRemove.add(targetId);
+      if (altCloudId) keysToRemove.add(altCloudId);
+      const canonical = targetId ? resolveCanonicalPeerKey(targetId) : '';
+      if (canonical) keysToRemove.add(canonical);
+
+      for (const p of peersRef.current) {
+        if (
+          keysToRemove.has(p.id) ||
+          (p.cloudId && keysToRemove.has(p.cloudId))
+        ) {
+          keysToRemove.add(p.id);
+          if (p.cloudId) keysToRemove.add(p.cloudId);
+        }
+      }
+      if (keysToRemove.size === 0) return;
+
+      for (const key of keysToRemove) {
+        const pcMap = peerConnsByPeerRef.current.get(key);
+        if (pcMap) {
+          for (const pc of pcMap.values()) {
+            try {
+              pc.close();
+            } catch {}
+          }
+          peerConnsByPeerRef.current.delete(key);
+        }
+        dataChannelsByPeerRef.current.delete(key);
+        pendingIceByPeerRef.current.delete(key);
+        wsPeerIdsRef.current.delete(key);
+        cloudPeerLastSeenRef.current.delete(key);
+        localBusLastSeenRef.current.delete(key);
+        cloudExePeersRef.current.delete(key);
+      }
+
+      syncOpenPoolCount();
+      setCloudWebPeers(Array.from(cloudPeerLastSeenRef.current.keys()));
+      setCloudExePeers(Array.from(cloudExePeersRef.current.keys()));
+      setLocalBusPeers(Array.from(localBusLastSeenRef.current.keys()));
+      if (
+        cloudExePeersRef.current.size === 0 &&
+        exeWsRef.current?.readyState !== WebSocket.OPEN
+      ) {
+        setExeBridgeConnected(false);
+      }
+      setPeers((prev) =>
+        prev.filter(
+          (p) =>
+            !keysToRemove.has(p.id) &&
+            !(p.cloudId && keysToRemove.has(p.cloudId))
+        )
+      );
+    },
+    [resolveCanonicalPeerKey, syncOpenPoolCount]
+  );
+
+  const sendDepartureNotice = useCallback(() => {
+    const activeCode = roomCodeRef.current
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '');
+    if (activeCode && sendCloudCandidateRef.current) {
+      try {
+        sendCloudCandidateRef.current('*', {
+          kind: 'browser:bye',
+          roomCode: activeCode,
+          peerId,
+        });
+      } catch {}
+    }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'room:leave',
+            roomCode: activeCode,
+            peerId,
+          })
+        );
+      } catch {}
+    }
+    if (localBusRef.current) {
+      try {
+        localBusRef.current.postMessage({ type: 'bus:bye', peerId });
+      } catch {}
+    }
+  }, [peerId]);
+
+  useEffect(() => {
+    const onUnload = () => {
+      sendDepartureNotice();
+    };
+    window.addEventListener('beforeunload', onUnload);
+    window.addEventListener('pagehide', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      window.removeEventListener('pagehide', onUnload);
+    };
+  }, [sendDepartureNotice]);
 
   const sendControlReplyEverywhere = useCallback((replyPkt: Record<string, unknown>) => {
     const serializedReply = JSON.stringify(replyPkt);
@@ -712,7 +900,10 @@ export default function App() {
   );
 
   const handleCompleteAethFrame = useCallback(
-    async (rawBuffer: ArrayBuffer) => {
+    async (
+      rawBuffer: ArrayBuffer,
+      sourceTransport?: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)'
+    ) => {
       const key = cryptoKeyRef.current;
       if (!key || rawBuffer.byteLength < 24) return;
 
@@ -737,6 +928,20 @@ export default function App() {
       const bufEntry = incomingBuffersRef.current.get(fileId);
       if (!bufEntry || bufEntry.receivedChunks[chunkIndex] !== undefined) {
         return;
+      }
+
+      if (
+        sourceTransport === 'WebRTC Direct (UDP/DTLS)' &&
+        bufEntry.transportUsed !== sourceTransport
+      ) {
+        bufEntry.transportUsed = sourceTransport;
+        setTransfers((prev) =>
+          prev.map((item) =>
+            item.id === fileId && item.direction === 'incoming'
+              ? { ...item, transportUsed: sourceTransport }
+              : item
+          )
+        );
       }
 
       try {
@@ -771,13 +976,16 @@ export default function App() {
   );
 
   const handleRawBinaryFrame = useCallback(
-    (frameBuffer: ArrayBuffer): boolean => {
+    (
+      frameBuffer: ArrayBuffer,
+      sourceTransport?: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)'
+    ): boolean => {
       if (frameBuffer.byteLength < 24) return false;
       const view = new DataView(frameBuffer);
       const magic = view.getUint32(0, false);
 
       if (magic === BINARY_FRAME_MAGIC) {
-        void handleCompleteAethFrame(frameBuffer);
+        void handleCompleteAethFrame(frameBuffer, sourceTransport);
         return true;
       }
 
@@ -805,7 +1013,7 @@ export default function App() {
 
         if (assembly.receivedParts >= assembly.totalParts) {
           partialSubFramesRef.current.delete(assemblyKey);
-          void handleCompleteAethFrame(assembly.buffer.buffer as ArrayBuffer);
+          void handleCompleteAethFrame(assembly.buffer.buffer as ArrayBuffer, sourceTransport);
         }
         return true;
       }
@@ -824,7 +1032,7 @@ export default function App() {
       if (!key) return;
 
       if (packet instanceof ArrayBuffer) {
-        if (handleRawBinaryFrame(packet)) return;
+        if (handleRawBinaryFrame(packet, sourceTransport)) return;
         try {
           const text = new TextDecoder().decode(packet);
           if (text.startsWith('{')) {
@@ -840,7 +1048,7 @@ export default function App() {
           packet.byteOffset,
           packet.byteOffset + packet.byteLength
         );
-        if (handleRawBinaryFrame(buf as ArrayBuffer)) return;
+        if (handleRawBinaryFrame(buf as ArrayBuffer, sourceTransport)) return;
         try {
           const text = new TextDecoder().decode(buf);
           if (text.startsWith('{')) {
@@ -1323,7 +1531,7 @@ export default function App() {
             }
           }
           if (data instanceof ArrayBuffer) {
-            if (handleRawBinaryFrame(data)) return;
+            if (handleRawBinaryFrame(data, 'WebRTC Direct (UDP/DTLS)')) return;
             void handleTunnelPacket(data, 'WebRTC Direct (UDP/DTLS)');
             return;
           }
@@ -1332,7 +1540,7 @@ export default function App() {
               data.byteOffset,
               data.byteOffset + data.byteLength
             );
-            if (handleRawBinaryFrame(copy as ArrayBuffer)) return;
+            if (handleRawBinaryFrame(copy as ArrayBuffer, 'WebRTC Direct (UDP/DTLS)')) return;
             void handleTunnelPacket(copy, 'WebRTC Direct (UDP/DTLS)');
             return;
           }
@@ -1341,11 +1549,7 @@ export default function App() {
       }
 
       const syncPoolCount = () => {
-        let openCount = 0;
-        for (const dcs of dataChannelsByPeerRef.current.values()) {
-          openCount += dcs.filter((c) => c.readyState === 'open').length;
-        }
-        setOpenPoolCount(Math.max(1, openCount));
+        syncOpenPoolCount();
       };
 
       channel.addEventListener('open', () => {
@@ -1355,11 +1559,38 @@ export default function App() {
 
       const removeDeadChannel = () => {
         const list = dataChannelsByPeerRef.current.get(remotePeerKey) || [];
-        dataChannelsByPeerRef.current.set(
-          remotePeerKey,
-          list.filter((c) => c !== channel && c.readyState !== 'closed' && c.readyState !== 'closing')
+        const remaining = list.filter(
+          (c) => c !== channel && c.readyState !== 'closed' && c.readyState !== 'closing'
         );
+        dataChannelsByPeerRef.current.set(remotePeerKey, remaining);
         syncPoolCount();
+        if (remaining.length === 0) {
+          const pc = channelToPcRef.current.get(channel);
+          const pcDead =
+            !pc ||
+            pc.connectionState === 'closed' ||
+            pc.connectionState === 'failed' ||
+            pc.iceConnectionState === 'closed' ||
+            pc.iceConnectionState === 'failed';
+          if (pcDead) {
+            const matched = peersRef.current.find(
+              (p) => p.id === remotePeerKey || p.cloudId === remotePeerKey
+            );
+            const cloudKey = matched?.cloudId || '';
+            const lastSeen =
+              cloudPeerLastSeenRef.current.get(cloudKey) ??
+              cloudPeerLastSeenRef.current.get(remotePeerKey) ??
+              0;
+            if (
+              !wsPeerIdsRef.current.has(remotePeerKey) &&
+              (lastSeen === 0 || Date.now() - lastSeen > 4500)
+            ) {
+              removeDepartedPeer(remotePeerKey, cloudKey || undefined);
+              return;
+            }
+          }
+          sweepStalePeers();
+        }
       };
 
       channel.addEventListener('close', removeDeadChannel);
@@ -1374,7 +1605,13 @@ export default function App() {
       dataChannelsByPeerRef.current.set(remotePeerKey, list);
       syncPoolCount();
     },
-    [handleRawBinaryFrame, handleTunnelPacket]
+    [
+      handleRawBinaryFrame,
+      handleTunnelPacket,
+      removeDepartedPeer,
+      sweepStalePeers,
+      syncOpenPoolCount,
+    ]
   );
 
   useEffect(() => {
@@ -1385,6 +1622,7 @@ export default function App() {
     const cleanCode = roomCode.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     if (!cleanCode) {
       localBusRef.current = null;
+      localBusLastSeenRef.current.clear();
       setLocalBusPeers([]);
       return;
     }
@@ -1395,7 +1633,7 @@ export default function App() {
     bus.onmessage = (ev: MessageEvent) => {
       if (!ev.data) return;
       if (ev.data instanceof ArrayBuffer) {
-        handleRawBinaryFrame(ev.data);
+        handleRawBinaryFrame(ev.data, 'WebRTC Direct (UDP/DTLS)');
         return;
       }
       const msg = ev.data;
@@ -1403,11 +1641,12 @@ export default function App() {
         return;
       }
       if (msg.type === 'bus:frame' && msg.frame instanceof ArrayBuffer) {
-        handleRawBinaryFrame(msg.frame);
+        handleRawBinaryFrame(msg.frame, 'WebRTC Direct (UDP/DTLS)');
         return;
       }
       if (msg.type === 'bus:hello' && msg.peerId !== peerId) {
-        setLocalBusPeers((prev) => Array.from(new Set([...prev, msg.peerId])).slice(0, MAX_ROOM_PEERS - 1));
+        localBusLastSeenRef.current.set(String(msg.peerId), Date.now());
+        setLocalBusPeers(Array.from(localBusLastSeenRef.current.keys()).slice(0, MAX_ROOM_PEERS - 1));
         setPeers((prev) => {
           const existing = prev.find((p) => p.id === msg.peerId);
           if (existing) {
@@ -1439,7 +1678,8 @@ export default function App() {
           });
         } catch {}
       } else if (msg.type === 'bus:hello-reply' && msg.peerId !== peerId) {
-        setLocalBusPeers((prev) => Array.from(new Set([...prev, msg.peerId])).slice(0, MAX_ROOM_PEERS - 1));
+        localBusLastSeenRef.current.set(String(msg.peerId), Date.now());
+        setLocalBusPeers(Array.from(localBusLastSeenRef.current.keys()).slice(0, MAX_ROOM_PEERS - 1));
         setPeers((prev) => {
           const existing = prev.find((p) => p.id === msg.peerId);
           if (existing) return prev;
@@ -1459,8 +1699,7 @@ export default function App() {
       } else if (msg.type === 'bus:packet' && msg.packet) {
         void handleTunnelPacket(msg.packet, 'WebRTC Direct (UDP/DTLS)');
       } else if (msg.type === 'bus:bye' && msg.peerId) {
-        setLocalBusPeers((prev) => prev.filter((id) => id !== msg.peerId));
-        setPeers((prev) => prev.filter((p) => p.id !== msg.peerId));
+        removeDepartedPeer(String(msg.peerId));
       }
     };
 
@@ -1480,6 +1719,18 @@ export default function App() {
           deviceLabel: `${localDisplayNameRef.current} (Local Tab)`,
         });
       } catch {}
+      const now = Date.now();
+      let prunedBus = false;
+      for (const [bid, ts] of localBusLastSeenRef.current.entries()) {
+        if (now - ts > 6000) {
+          localBusLastSeenRef.current.delete(bid);
+          prunedBus = true;
+        }
+      }
+      if (prunedBus) {
+        setLocalBusPeers(Array.from(localBusLastSeenRef.current.keys()));
+        sweepStalePeers();
+      }
     }, 1500);
 
     return () => {
@@ -1489,9 +1740,10 @@ export default function App() {
         bus.close();
       } catch {}
       localBusRef.current = null;
+      localBusLastSeenRef.current.clear();
       setLocalBusPeers([]);
     };
-  }, [roomCode, peerId, handleRawBinaryFrame, handleTunnelPacket]);
+  }, [roomCode, peerId, handleRawBinaryFrame, handleTunnelPacket, removeDepartedPeer, sweepStalePeers]);
 
   const sendWebRtcSignalEverywhere = useCallback(
     (
@@ -1636,8 +1888,38 @@ export default function App() {
           pc.onconnectionstatechange = () => {
             if (pc.connectionState === 'connected') {
               setConnectionState('connected_p2p');
-            } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+              syncOpenPoolCount();
+            } else if (
+              pc.connectionState === 'failed' ||
+              pc.connectionState === 'closed' ||
+              pc.connectionState === 'disconnected'
+            ) {
               purgeChannelsForPc(targetPeerKey, pc);
+              syncOpenPoolCount();
+              const remainingOpen = (dataChannelsByPeerRef.current.get(targetPeerKey) || []).filter(
+                (c) => c.readyState === 'open'
+              );
+              if (
+                (pc.connectionState === 'failed' || pc.connectionState === 'closed') &&
+                remainingOpen.length === 0
+              ) {
+                const matched = peersRef.current.find(
+                  (p) => p.id === targetPeerKey || p.cloudId === targetPeerKey
+                );
+                const cloudKey = matched?.cloudId || '';
+                const lastSeen =
+                  cloudPeerLastSeenRef.current.get(cloudKey) ??
+                  cloudPeerLastSeenRef.current.get(targetPeerKey) ??
+                  0;
+                if (
+                  !wsPeerIdsRef.current.has(targetPeerKey) &&
+                  (lastSeen === 0 || Date.now() - lastSeen > 4500)
+                ) {
+                  removeDepartedPeer(targetPeerKey, cloudKey || undefined);
+                  return;
+                }
+              }
+              sweepStalePeers();
             }
           };
 
@@ -1647,11 +1929,15 @@ export default function App() {
               pc.iceConnectionState === 'completed'
             ) {
               setConnectionState('connected_p2p');
+              syncOpenPoolCount();
             } else if (
               pc.iceConnectionState === 'failed' ||
-              pc.iceConnectionState === 'closed'
+              pc.iceConnectionState === 'closed' ||
+              pc.iceConnectionState === 'disconnected'
             ) {
               purgeChannelsForPc(targetPeerKey, pc);
+              syncOpenPoolCount();
+              sweepStalePeers();
             }
           };
 
@@ -1668,8 +1954,11 @@ export default function App() {
       peerId,
       purgeChannelsForPc,
       registerDataChannelLane,
+      removeDepartedPeer,
       resolveCanonicalPeerKey,
       sendWebRtcSignalEverywhere,
+      sweepStalePeers,
+      syncOpenPoolCount,
       transportStrategy,
     ]
   );
@@ -1809,12 +2098,16 @@ export default function App() {
 
     const mergeWsPeers = (serverPeers: PeerSummary[]) => {
       const otherPeers = serverPeers.filter((p) => p.id !== peerId);
+      wsPeerIdsRef.current = new Set(otherPeers.map((p) => p.id));
       setPeers((prev) => {
         const preserved = prev.filter(
           (p) =>
             p.id === 'native-exe-bridge' ||
-            p.id.startsWith('aethertunnel-exe-') ||
-            (p.id.startsWith('aethertunnel-web-') &&
+            cloudExePeersRef.current.has(p.id) ||
+            (p.cloudId && cloudExePeersRef.current.has(p.cloudId)) ||
+            localBusLastSeenRef.current.has(p.id) ||
+            ((cloudPeerLastSeenRef.current.has(p.id) ||
+              (p.cloudId && cloudPeerLastSeenRef.current.has(p.cloudId))) &&
               !otherPeers.some((op) => op.cloudId === p.id || op.id === p.id))
         );
         const merged = [...preserved];
@@ -1871,7 +2164,7 @@ export default function App() {
           }
 
           if (rawData instanceof ArrayBuffer) {
-            handleRawBinaryFrame(rawData);
+            handleRawBinaryFrame(rawData, 'Encrypted WS Relay (TCP/443)');
             return;
           }
 
@@ -1922,28 +2215,14 @@ export default function App() {
               }
             } else if (msg.type === 'peer:left') {
               const leftId = msg.peerId ? String(msg.peerId) : '';
-              if (leftId) {
-                const pcMap = peerConnsByPeerRef.current.get(leftId);
-                if (pcMap) {
-                  for (const pc of pcMap.values()) {
-                    try { pc.close(); } catch {}
-                  }
-                  peerConnsByPeerRef.current.delete(leftId);
-                }
-                dataChannelsByPeerRef.current.delete(leftId);
-              }
+              const leftCloudId = msg.cloudId ? String(msg.cloudId) : undefined;
               const otherPeers: PeerSummary[] = (msg.peers || []).filter(
                 (p: PeerSummary) => p.id !== peerId
               );
-              setPeers((prev) =>
-                prev.filter(
-                  (p) =>
-                    p.id !== leftId &&
-                    (p.id === 'native-exe-bridge' ||
-                      p.id.startsWith('aethertunnel-') ||
-                      otherPeers.some((op) => op.id === p.id))
-                )
-              );
+              wsPeerIdsRef.current = new Set(otherPeers.map((p) => p.id));
+              if (leftId || leftCloudId) {
+                removeDepartedPeer(leftId, leftCloudId);
+              }
               mergeWsPeers(otherPeers);
             } else if (msg.type === 'webrtc:signal') {
               await handleIncomingWebRtcSignal(msg);
@@ -1956,6 +2235,8 @@ export default function App() {
         };
 
         ws.onclose = () => {
+          wsPeerIdsRef.current.clear();
+          sweepStalePeers();
           if (!unmounted) {
             reconnectTimer = window.setTimeout(connectTunnelWs, 2000);
           }
@@ -1968,6 +2249,18 @@ export default function App() {
     return () => {
       unmounted = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(
+            JSON.stringify({
+              type: 'room:leave',
+              roomCode: cleanCode,
+              peerId,
+            })
+          );
+        } catch {}
+      }
+      wsPeerIdsRef.current.clear();
       for (const pcMap of peerConnsByPeerRef.current.values()) {
         for (const pc of pcMap.values()) {
           try { pc.close(); } catch {}
@@ -1985,6 +2278,8 @@ export default function App() {
     handleIncomingWebRtcSignal,
     handleTunnelPacket,
     handleRawBinaryFrame,
+    removeDepartedPeer,
+    sweepStalePeers,
   ]);
 
   useEffect(() => {
@@ -2486,28 +2781,18 @@ export default function App() {
       const now = Date.now();
       let prunedWeb = false;
       for (const [pid, lastSeen] of cloudPeerLastSeenRef.current.entries()) {
-        if (now - lastSeen > 10000) {
+        if (now - lastSeen > 7000) {
           cloudPeerLastSeenRef.current.delete(pid);
           prunedWeb = true;
         }
       }
       if (prunedWeb) {
-        const activeIds = Array.from(cloudPeerLastSeenRef.current.keys());
-        setCloudWebPeers(activeIds);
-        setPeers((prev) =>
-          prev.filter((p) => {
-            if (p.isLocalBridge || p.clientType === 'exe') return true;
-            if (p.cloudId && activeIds.includes(p.cloudId)) return true;
-            const dcs = dataChannelsByPeerRef.current.get(p.id) || [];
-            if (dcs.some((dc) => dc.readyState === 'open')) return true;
-            return p.id.startsWith('peer-') && wsRef.current?.readyState === WebSocket.OPEN;
-          })
-        );
+        setCloudWebPeers(Array.from(cloudPeerLastSeenRef.current.keys()));
       }
 
       let prunedExe = false;
       for (const [eid, info] of cloudExePeersRef.current.entries()) {
-        if (now - info.lastSeen > 12000) {
+        if (now - info.lastSeen > 9000) {
           cloudExePeersRef.current.delete(eid);
           prunedExe = true;
         }
@@ -2515,16 +2800,12 @@ export default function App() {
       if (prunedExe) {
         const activeExes = Array.from(cloudExePeersRef.current.keys());
         setCloudExePeers(activeExes);
-        setPeers((prev) =>
-          prev.filter(
-            (p) =>
-              !p.id.startsWith('aethertunnel-exe-') || activeExes.includes(p.id)
-          )
-        );
         if (activeExes.length === 0 && exeWsRef.current?.readyState !== WebSocket.OPEN) {
           setExeBridgeConnected(false);
         }
       }
+
+      sweepStalePeers();
     };
 
     const handleWormholeEnvelope = (msg: any) => {
@@ -2536,6 +2817,16 @@ export default function App() {
 
       const payload = msg.payload;
       if (!payload || typeof payload !== 'object') return;
+
+      if (
+        payload.kind === 'browser:bye' ||
+        payload.kind === 'web:bye' ||
+        payload.kind === 'exe:bye'
+      ) {
+        const byeId = payload.peerId ? String(payload.peerId) : srcPeer;
+        removeDepartedPeer(byeId, srcPeer);
+        return;
+      }
 
       if (
         (payload.kind === 'browser:hello' ||
@@ -2700,10 +2991,13 @@ export default function App() {
         payload.kind === 'exe:chunk-ack' ||
         payload.kind === 'browser:chunk-ack'
       ) {
-        if (cloudAckResolverRef.current) {
-          const resolve = cloudAckResolverRef.current;
-          cloudAckResolverRef.current = null;
-          resolve();
+        const resolver =
+          (payload.fileId && cloudAckResolversRef.current.get(String(payload.fileId))) ||
+          cloudAckResolversRef.current.get(srcPeer);
+        if (resolver) {
+          if (payload.fileId) cloudAckResolversRef.current.delete(String(payload.fileId));
+          cloudAckResolversRef.current.delete(srcPeer);
+          resolver();
         }
       } else if (
         payload.kind === 'exe:file-start' ||
@@ -3031,6 +3325,13 @@ export default function App() {
     return () => {
       unmounted = true;
       if (hbTimer !== null) window.clearInterval(hbTimer);
+      try {
+        publishToCloudBus('*', {
+          kind: 'browser:bye',
+          roomCode: cleanCode,
+          peerId,
+        });
+      } catch {}
       sendCloudCandidateRef.current = null;
       cloudPeerLastSeenRef.current.clear();
       for (const s of sockets) {
@@ -3045,6 +3346,8 @@ export default function App() {
     initWebRtcConnectionPool,
     handleIncomingWebRtcSignal,
     handleTunnelPacket,
+    removeDepartedPeer,
+    sweepStalePeers,
   ]);
 
   const isDataChannelHealthy = useCallback((dc: RTCDataChannel): boolean => {
@@ -3055,8 +3358,10 @@ export default function App() {
       pc.signalingState !== 'closed' &&
       pc.connectionState !== 'closed' &&
       pc.connectionState !== 'failed' &&
+      pc.connectionState !== 'disconnected' &&
       pc.iceConnectionState !== 'closed' &&
-      pc.iceConnectionState !== 'failed'
+      pc.iceConnectionState !== 'failed' &&
+      pc.iceConnectionState !== 'disconnected'
     );
   }, []);
 
@@ -3419,8 +3724,8 @@ export default function App() {
       const activeChunkSize = WIRE_CHUNK_BYTES;
       const chunksPerWave = CHUNKS_PER_WAVE;
 
-      const fileResumeKey = `${transferName}::${file.size}`;
-      selectedFilesByKeyRef.current.set(fileResumeKey, file);
+      const fileResumeKey = `${targetPeerId}::${transferName}::${file.size}`;
+      selectedFilesByKeyRef.current.set(`${transferName}::${file.size}`, file);
       const fileId = `tx-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
       const totalChunks = Math.max(1, Math.ceil(file.size / activeChunkSize));
@@ -3527,6 +3832,7 @@ export default function App() {
               t.direction === 'outgoing' &&
               t.name === transferName &&
               t.size === file.size &&
+              (t.recipientId || 'all') === targetPeerId &&
               t.status !== 'completed'
             )
         ),
@@ -3693,14 +3999,23 @@ export default function App() {
 
           if (chunkIdx % 24 === 0) {
             await new Promise<void>((resolve) => {
+              const cleanup = () => {
+                cloudAckResolversRef.current.delete(fileId);
+                if (cloudAckResolversRef.current.get(dstPeer) === wake) {
+                  cloudAckResolversRef.current.delete(dstPeer);
+                }
+              };
               const timer = window.setTimeout(() => {
-                cloudAckResolverRef.current = null;
+                cleanup();
                 resolve();
               }, 350);
-              cloudAckResolverRef.current = () => {
+              const wake = () => {
                 window.clearTimeout(timer);
+                cleanup();
                 resolve();
               };
+              cloudAckResolversRef.current.set(fileId, wake);
+              cloudAckResolversRef.current.set(dstPeer, wake);
             });
           }
         }
@@ -3823,12 +4138,14 @@ export default function App() {
 
         if (hasWsOrLocalBusTarget) {
           anySent = true;
+          const wsTargetId = targetPeerId === 'all' ? '*' : targetPeerId;
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             try {
+              lastWsBinaryTargetRef.current = wsTargetId;
               wsRef.current.send(
                 JSON.stringify({
                   type: 'relay:target',
-                  toPeerId: targetPeerId === 'all' ? '*' : targetPeerId,
+                  toPeerId: wsTargetId,
                 })
               );
             } catch {}
@@ -4071,7 +4388,19 @@ export default function App() {
                   ) {
                     await new Promise<void>((r) => window.setTimeout(r, 4));
                   }
-                  wsRef.current?.send(frame);
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    const desiredWsTarget = targetPeerId === 'all' ? '*' : targetPeerId;
+                    if (lastWsBinaryTargetRef.current !== desiredWsTarget) {
+                      lastWsBinaryTargetRef.current = desiredWsTarget;
+                      wsRef.current.send(
+                        JSON.stringify({
+                          type: 'relay:target',
+                          toPeerId: desiredWsTarget,
+                        })
+                      );
+                    }
+                    wsRef.current.send(frame);
+                  }
 
                   const chunksDone = chunkIndex + 1;
                   const rawBytesQueued = Math.min(file.size, chunksDone * WIRE_CHUNK_BYTES);
@@ -4081,15 +4410,27 @@ export default function App() {
               }
             }
 
-            for (let drainWait = 0; drainWait < 600; drainWait++) {
-              if (rxCompletedConfirmed || rxRemoteError) break;
+            let lastDrainBuffered = Infinity;
+            let lastDrainProgressAt = performance.now();
+            while (!rxCompletedConfirmed && !rxRemoteError) {
               const totalBuffered = getOpenDataChannelLanes(targetPeerId).reduce(
                 (sum, dc) => sum + dc.bufferedAmount,
                 0
               );
               if (totalBuffered === 0) break;
-              await new Promise<void>((r) => window.setTimeout(r, 15));
+              const nowDrain = performance.now();
+              if (totalBuffered < lastDrainBuffered) {
+                lastDrainBuffered = totalBuffered;
+                lastDrainProgressAt = nowDrain;
+                pushProgressUi(totalChunks, Math.max(0, file.size - totalBuffered));
+              }
+              const lastProgAt = rxProgressMapRef.current.get(fileId)?.at || 0;
+              if (nowDrain - Math.max(lastDrainProgressAt, lastProgAt) > 15000) {
+                break;
+              }
+              await new Promise<void>((r) => window.setTimeout(r, 25));
             }
+            pushProgressUi(totalChunks, file.size);
 
             const confirmDeadlineStart = performance.now();
             while (!rxCompletedConfirmed && !rxRemoteError) {
@@ -4391,8 +4732,13 @@ export default function App() {
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, '');
+    if (cleaned !== roomCode) {
+      sendDepartureNotice();
+    }
     cloudPeerLastSeenRef.current.clear();
     cloudExePeersRef.current.clear();
+    wsPeerIdsRef.current.clear();
+    localBusLastSeenRef.current.clear();
     setCloudExePeers([]);
     setCloudWebPeers([]);
     setLocalBusPeers([]);
@@ -4409,8 +4755,11 @@ export default function App() {
   };
 
   const handleDisconnectTunnel = () => {
+    sendDepartureNotice();
     cloudPeerLastSeenRef.current.clear();
     cloudExePeersRef.current.clear();
+    wsPeerIdsRef.current.clear();
+    localBusLastSeenRef.current.clear();
     setCloudExePeers([]);
     setCloudWebPeers([]);
     setLocalBusPeers([]);
@@ -4492,12 +4841,75 @@ export default function App() {
     (async () => {
       let finalStatus: 'completed' | 'rejected' | 'error' = 'error';
       try {
-        finalStatus = await sendSingleFile(nextItem.file, {
-          displayName: nextItem.displayName,
-          queueItemId: nextItem.id,
-          targetPeerId: nextItem.targetPeerId || 'all',
-          targetLabel: nextItem.targetLabel,
-        });
+        const rawTarget = nextItem.targetPeerId || 'all';
+        if (rawTarget === 'all') {
+          const targets: Array<{ id: string; label: string }> = [];
+          const seenKeys = new Set<string>();
+          const addTarget = (id: string, label: string) => {
+            const normKey = resolveCanonicalPeerKey(id);
+            if (!id || seenKeys.has(id) || seenKeys.has(normKey)) return;
+            seenKeys.add(id);
+            seenKeys.add(normKey);
+            targets.push({ id, label });
+          };
+
+          for (const p of peersRef.current) {
+            if (p.id === 'native-exe-bridge') {
+              if (allowLocalExeBridgeRef.current && exeWsRef.current?.readyState === WebSocket.OPEN) {
+                addTarget(p.id, p.deviceLabel);
+              }
+            } else {
+              if (p.cloudId) seenKeys.add(p.cloudId);
+              addTarget(p.id, p.deviceLabel);
+            }
+          }
+          if (allowLocalExeBridgeRef.current && exeWsRef.current?.readyState === WebSocket.OPEN) {
+            addTarget('native-exe-bridge', 'Local Machine .EXE');
+          }
+          for (const [eid, info] of cloudExePeersRef.current.entries()) {
+            addTarget(eid, info.label);
+          }
+          for (const bid of localBusPeersRef.current) {
+            addTarget(bid, `Local Tab (${bid.slice(-4)})`);
+          }
+          for (const cid of cloudWebPeersRef.current) {
+            addTarget(cid, `Browser (${cid.slice(-4)})`);
+          }
+
+          if (targets.length > 0) {
+            const results = await Promise.all(
+              targets.map((tp) =>
+                sendSingleFile(nextItem.file, {
+                  displayName: nextItem.displayName,
+                  queueItemId: nextItem.id,
+                  targetPeerId: tp.id,
+                  targetLabel: tp.label,
+                })
+              )
+            );
+            if (results.some((r) => r === 'completed')) {
+              finalStatus = 'completed';
+            } else if (results.every((r) => r === 'rejected')) {
+              finalStatus = 'rejected';
+            } else {
+              finalStatus = 'error';
+            }
+          } else {
+            finalStatus = await sendSingleFile(nextItem.file, {
+              displayName: nextItem.displayName,
+              queueItemId: nextItem.id,
+              targetPeerId: 'all',
+              targetLabel: nextItem.targetLabel,
+            });
+          }
+        } else {
+          finalStatus = await sendSingleFile(nextItem.file, {
+            displayName: nextItem.displayName,
+            queueItemId: nextItem.id,
+            targetPeerId: rawTarget,
+            targetLabel: nextItem.targetLabel,
+          });
+        }
       } catch {
         finalStatus = 'error';
       } finally {
@@ -4520,7 +4932,7 @@ export default function App() {
         );
       }
     })();
-  }, [uploadQueue, isPeerConnected, isTransferPaused, sendSingleFile, peers]);
+  }, [uploadQueue, isPeerConnected, isTransferPaused, sendSingleFile, peers, resolveCanonicalPeerKey]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -4533,7 +4945,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">V1.01</span>
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">V1.02</span>
         </a>
 
         <nav className="flex items-center gap-6 text-sm font-medium text-slate-400 overflow-x-auto">
@@ -4628,10 +5040,10 @@ export default function App() {
                       )
                     }
                     className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                    title="Downloads the High-DPI Standalone Windows P2P NAT-Punching & Kernel-Socket .EXE (V1.01 · STUN + UDP Hole Punching + Resumable Transfers)"
+                    title="Downloads the High-DPI Standalone Windows P2P NAT-Punching & Kernel-Socket .EXE (V1.02 · STUN + UDP Hole Punching + Resumable Transfers)"
                   >
                     <HardDriveDownload className="w-3.5 h-3.5" />
-                    Download Standalone P2P .EXE (V1.01)
+                    Download Standalone P2P .EXE (V1.02)
                   </button>
                   <button
                     onClick={() => {
@@ -4643,10 +5055,10 @@ export default function App() {
                       );
                     }}
                     className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                    title="Downloads the single-file Portable HTML version (V1.01 · Zero-install client that runs directly in any browser via WebRTC & MQTT)"
+                    title="Downloads the single-file Portable HTML version (V1.02 · Zero-install client that runs directly in any browser via WebRTC & MQTT)"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Download Portable HTML (V1.01)
+                    Download Portable HTML (V1.02)
                   </button>
                 </div>
               </div>
@@ -5344,8 +5756,8 @@ export default function App() {
                         No files transferred yet. Drop a file or folder above to start queued P2P transfer.
                       </div>
                     ) : (
-                      <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
-                        {transfers.slice(0, 6).map((item) => {
+                      <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                        {transfers.slice(0, 14).map((item) => {
                           const pct = Math.min(
                             100,
                             Math.round(
