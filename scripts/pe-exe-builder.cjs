@@ -38,6 +38,8 @@ using System.Reflection;
 
 [assembly: AssemblyTitle("AetherTunnel P2P Engine")]
 [assembly: AssemblyProduct("AetherTunnel")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 
 namespace AetherTunnelNative
 {
@@ -391,7 +393,7 @@ namespace AetherTunnelNative
             }
 
             this.AutoScaleMode = AutoScaleMode.None;
-            this.Text = "AetherTunnel v1.0 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
+            this.Text = "AetherTunnel V1.01 — Standalone P2P NAT-Punching & Kernel-Socket Edition";
             this.ClientSize = new Size(S(1020), S(668));
             this.MinimumSize = new Size(S(920), S(600));
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -487,7 +489,7 @@ namespace AetherTunnelNative
             headerPanel.BackColor = Color.FromArgb(12, 18, 30);
 
             Label lblTitle = CreateCleanLabel(
-                "AetherTunnel v1.0 — Standalone P2P & NAT-Punching Engine (.EXE)",
+                "AetherTunnel V1.01 — Standalone P2P & NAT-Punching Engine (.EXE)",
                 new Font("Segoe UI Semibold", 14.5f, FontStyle.Bold),
                 Color.FromArgb(248, 250, 252),
                 new Point(S(24), S(12)),
@@ -532,7 +534,7 @@ namespace AetherTunnelNative
             leftCard.Controls.Add(lblSec1);
 
             Label lblCodeTitle = CreateCleanLabel(
-                "Tunnelin nimi (Kirjoita nimi ja paina Yhdistä):",
+                "Tunnel Name (Enter a name and click Connect):",
                 null,
                 fgMuted,
                 new Point(S(20), S(42)),
@@ -559,7 +561,7 @@ namespace AetherTunnelNative
 
             Button btnConnectRoom = new Button();
             btnConnectRoom.UseMnemonic = false;
-            btnConnectRoom.Text = "Yhdistä";
+            btnConnectRoom.Text = "Connect";
             btnConnectRoom.FlatStyle = FlatStyle.Flat;
             btnConnectRoom.BackColor = accentSky;
             btnConnectRoom.ForeColor = Color.FromArgb(9, 13, 22);
@@ -573,7 +575,7 @@ namespace AetherTunnelNative
 
             Button btnNewCode = new Button();
             btnNewCode.UseMnemonic = false;
-            btnNewCode.Text = "Arvo";
+            btnNewCode.Text = "Random";
             btnNewCode.FlatStyle = FlatStyle.Flat;
             btnNewCode.BackColor = Color.FromArgb(30, 41, 59);
             btnNewCode.ForeColor = Color.White;
@@ -593,7 +595,7 @@ namespace AetherTunnelNative
             pnlRoomPresence.Size = new Size(S(396), S(36));
 
             lblRoomPresence = CreateCleanLabel(
-                String.IsNullOrEmpty("${safeRoom}") ? "Kirjoita tunnelin nimi ja paina Yhdistä" : "[1/8 KÄYTTÄJÄÄ] Ei muita käyttäjiä huoneessa...",
+                String.IsNullOrEmpty("${safeRoom}") ? "Enter tunnel name and click Connect" : "[1/8 USERS] No other users in room...",
                 new Font("Consolas", 8.6f, FontStyle.Bold),
                 Color.FromArgb(251, 191, 36),
                 new Point(S(8), S(9)),
@@ -603,7 +605,7 @@ namespace AetherTunnelNative
             leftCard.Controls.Add(pnlRoomPresence);
 
             Label lblNameTitle = CreateCleanLabel(
-                "Oma näyttönimi huoneessa (max 8 käyttäjää):",
+                "Your display name in room (max 8 users):",
                 null,
                 fgMuted,
                 new Point(S(20), S(140)),
@@ -734,7 +736,7 @@ namespace AetherTunnelNative
 
             chkAutoAccept = new CheckBox();
             chkAutoAccept.UseMnemonic = false;
-            chkAutoAccept.Text = "Hyväksy saapuvat siirrot automaattisesti";
+            chkAutoAccept.Text = "Auto-accept incoming transfers";
             chkAutoAccept.ForeColor = Color.FromArgb(203, 213, 225);
             chkAutoAccept.BackColor = bgCard;
             chkAutoAccept.Font = new Font("Segoe UI", 9.0f, FontStyle.Regular);
@@ -747,7 +749,7 @@ namespace AetherTunnelNative
             leftCard.Controls.Add(chkAutoAccept);
 
             Label lblConfirmHint = CreateCleanLabel(
-                "Kun pois päältä, jokainen saapuva tiedosto vaatii vastaanottajan hyväksynnän.",
+                "When unchecked, each incoming file requires recipient confirmation.",
                 new Font("Segoe UI", 8.2f),
                 fgMuted,
                 new Point(S(20), S(466)),
@@ -775,35 +777,46 @@ namespace AetherTunnelNative
 
             btnSendFile = new Button();
             btnSendFile.UseMnemonic = false;
-            btnSendFile.Text = "+ Lisää tiedosto(ja) jonoon\\n(Tai raahaa & pudota tiedostoja / kansioita tähän)";
+            btnSendFile.Text = "+ Add File(s) to Queue\\n(Or drag & drop files / folders here)";
             btnSendFile.FlatStyle = FlatStyle.Flat;
             btnSendFile.BackColor = Color.FromArgb(14, 28, 48);
             btnSendFile.ForeColor = accentSky;
             btnSendFile.Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold);
             btnSendFile.Location = new Point(S(20), S(40));
-            btnSendFile.Size = new Size(S(248), S(52));
+            btnSendFile.Size = new Size(S(248), S(48));
             btnSendFile.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             btnSendFile.Click += OnSelectFilesClicked;
             rightCard.Controls.Add(btnSendFile);
 
             btnSendFolder = new Button();
             btnSendFolder.UseMnemonic = false;
-            btnSendFolder.Text = "+ Lisää kansio jonoon\\n(Kaikki alikansiot)";
+            btnSendFolder.Text = "+ Add Folder to Queue\\n(All subfolders)";
             btnSendFolder.FlatStyle = FlatStyle.Flat;
             btnSendFolder.BackColor = Color.FromArgb(16, 36, 42);
             btnSendFolder.ForeColor = accentEmerald;
             btnSendFolder.Font = new Font("Segoe UI Semibold", 9.2f, FontStyle.Bold);
             btnSendFolder.Location = new Point(S(276), S(40));
-            btnSendFolder.Size = new Size(S(222), S(52));
+            btnSendFolder.Size = new Size(S(222), S(48));
             btnSendFolder.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnSendFolder.Click += OnSelectFolderClicked;
             rightCard.Controls.Add(btnSendFolder);
 
+            Label lblFileLimitInfo = CreateCleanLabel(
+                "Max file size: .EXE <-> .EXE ~2.6 TB (UDP) / Disk limit (TCP)\\r\\nBrowser Web App / Portable HTML: ~2 GB max receive (RAM Blob)",
+                new Font("Segoe UI", 7.9f),
+                fgMuted,
+                new Point(S(20), S(92)),
+                false
+            );
+            lblFileLimitInfo.Size = new Size(S(478), S(28));
+            lblFileLimitInfo.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            rightCard.Controls.Add(lblFileLimitInfo);
+
             Label lblTargetCap = CreateCleanLabel(
-                "Kenelle lähetetään:",
+                "Send to:",
                 new Font("Segoe UI", 8.8f, FontStyle.Bold),
                 fgMuted,
-                new Point(S(20), S(101)),
+                new Point(S(20), S(124)),
                 true
             );
             rightCard.Controls.Add(lblTargetCap);
@@ -814,10 +827,10 @@ namespace AetherTunnelNative
             cmbTargetPeer.BackColor = bgInput;
             cmbTargetPeer.ForeColor = accentSky;
             cmbTargetPeer.Font = new Font("Consolas", 9.0f, FontStyle.Bold);
-            cmbTargetPeer.Location = new Point(S(148), S(98));
+            cmbTargetPeer.Location = new Point(S(148), S(121));
             cmbTargetPeer.Size = new Size(S(350), S(24));
             cmbTargetPeer.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            cmbTargetPeer.Items.Add("Kaikki huoneessa (0 käyttäjää)");
+            cmbTargetPeer.Items.Add("Everyone in room (0 users)");
             targetPeerIds.Clear();
             targetPeerIds.Add("*");
             cmbTargetPeer.SelectedIndex = 0;
@@ -831,10 +844,10 @@ namespace AetherTunnelNative
             rightCard.Controls.Add(cmbTargetPeer);
 
             Label lblMaxSpeedCap = CreateCleanLabel(
-                "Max lähetysnopeus (MB/s):",
+                "Max upload speed (MB/s):",
                 new Font("Segoe UI", 8.6f, FontStyle.Bold),
                 fgMuted,
-                new Point(S(20), S(130)),
+                new Point(S(20), S(152)),
                 true
             );
             rightCard.Controls.Add(lblMaxSpeedCap);
@@ -845,7 +858,7 @@ namespace AetherTunnelNative
             txtMaxUploadMBps.BorderStyle = BorderStyle.FixedSingle;
             txtMaxUploadMBps.Font = new Font("Consolas", 9.2f, FontStyle.Bold);
             txtMaxUploadMBps.Text = initialMaxSpeedText;
-            txtMaxUploadMBps.Location = new Point(S(194), S(127));
+            txtMaxUploadMBps.Location = new Point(S(194), S(149));
             txtMaxUploadMBps.Size = new Size(S(80), S(23));
             txtMaxUploadMBps.TextChanged += delegate {
                 try
@@ -874,10 +887,10 @@ namespace AetherTunnelNative
             rightCard.Controls.Add(txtMaxUploadMBps);
 
             Label lblMaxSpeedHint = CreateCleanLabel(
-                "(0 = rajoittamaton)",
+                "(0 = unlimited)",
                 new Font("Segoe UI", 8.2f),
                 fgMuted,
-                new Point(S(282), S(130)),
+                new Point(S(282), S(152)),
                 true
             );
             rightCard.Controls.Add(lblMaxSpeedHint);
@@ -886,29 +899,29 @@ namespace AetherTunnelNative
                 "0.00 MB/s (0.00 Gbps)",
                 new Font("Consolas", 14.0f, FontStyle.Bold),
                 accentEmerald,
-                new Point(S(20), S(158)),
+                new Point(S(20), S(179)),
                 true
             );
             rightCard.Controls.Add(lblSpeedMetric);
 
             btnPauseResume = new Button();
             btnPauseResume.UseMnemonic = false;
-            btnPauseResume.Text = "Pysäytä";
+            btnPauseResume.Text = "Pause";
             btnPauseResume.FlatStyle = FlatStyle.Flat;
             btnPauseResume.BackColor = Color.FromArgb(45, 34, 14);
             btnPauseResume.ForeColor = Color.FromArgb(251, 191, 36);
             btnPauseResume.Font = new Font("Segoe UI Semibold", 8.8f, FontStyle.Bold);
-            btnPauseResume.Location = new Point(S(366), S(156));
+            btnPauseResume.Location = new Point(S(366), S(177));
             btnPauseResume.Size = new Size(S(132), S(26));
             btnPauseResume.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnPauseResume.Click += OnPauseResumeClicked;
             rightCard.Controls.Add(btnPauseResume);
 
             lblTransferStats = CreateCleanLabel(
-                "Siirretty: 0 B / 0 B  |  Keskinopeus: 0.00 MB/s (0.00 Gbps)",
+                "Transferred: 0 B / 0 B  |  Avg Speed: 0.00 MB/s (0.00 Gbps)",
                 new Font("Consolas", 9.0f, FontStyle.Bold),
                 Color.FromArgb(125, 211, 252),
-                new Point(S(20), S(187)),
+                new Point(S(20), S(208)),
                 false
             );
             lblTransferStats.Size = new Size(S(478), S(20));
@@ -919,7 +932,7 @@ namespace AetherTunnelNative
                 "Auto Dynamic P2P Pacing active — Enter shared Wormhole Code to pair automatically.",
                 null,
                 fgMuted,
-                new Point(S(20), S(209)),
+                new Point(S(20), S(230)),
                 false
             );
             lblProgressDetail.Size = new Size(S(478), S(20));
@@ -927,29 +940,29 @@ namespace AetherTunnelNative
             rightCard.Controls.Add(lblProgressDetail);
 
             progressBar = new ProgressBar();
-            progressBar.Location = new Point(S(20), S(232));
+            progressBar.Location = new Point(S(20), S(253));
             progressBar.Size = new Size(S(478), S(15));
             progressBar.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             progressBar.Maximum = 1000;
             rightCard.Controls.Add(progressBar);
 
             lblQueueSummary = CreateCleanLabel(
-                "Siirtojono (0 odottaa · 0 valmis)",
+                "Transfer Queue (0 queued · 0 completed)",
                 new Font("Segoe UI Semibold", 9.0f, FontStyle.Bold),
                 Color.White,
-                new Point(S(20), S(255)),
+                new Point(S(20), S(276)),
                 true
             );
             rightCard.Controls.Add(lblQueueSummary);
 
             btnRetryQueue = new Button();
             btnRetryQueue.UseMnemonic = false;
-            btnRetryQueue.Text = "Jatka / Uudelleen";
+            btnRetryQueue.Text = "Resume / Retry";
             btnRetryQueue.FlatStyle = FlatStyle.Flat;
             btnRetryQueue.BackColor = Color.FromArgb(14, 52, 38);
             btnRetryQueue.ForeColor = accentEmerald;
             btnRetryQueue.Font = new Font("Segoe UI", 8.0f, FontStyle.Bold);
-            btnRetryQueue.Location = new Point(S(206), S(252));
+            btnRetryQueue.Location = new Point(S(206), S(273));
             btnRetryQueue.Size = new Size(S(102), S(23));
             btnRetryQueue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnRetryQueue.Click += OnRetryQueueClicked;
@@ -957,12 +970,12 @@ namespace AetherTunnelNative
 
             btnRemoveQueue = new Button();
             btnRemoveQueue.UseMnemonic = false;
-            btnRemoveQueue.Text = "Poista";
+            btnRemoveQueue.Text = "Remove";
             btnRemoveQueue.FlatStyle = FlatStyle.Flat;
             btnRemoveQueue.BackColor = Color.FromArgb(30, 41, 59);
             btnRemoveQueue.ForeColor = Color.FromArgb(248, 113, 113);
             btnRemoveQueue.Font = new Font("Segoe UI", 8.0f);
-            btnRemoveQueue.Location = new Point(S(314), S(252));
+            btnRemoveQueue.Location = new Point(S(314), S(273));
             btnRemoveQueue.Size = new Size(S(78), S(23));
             btnRemoveQueue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnRemoveQueue.Click += OnRemoveSelectedQueueClicked;
@@ -970,12 +983,12 @@ namespace AetherTunnelNative
 
             btnClearQueue = new Button();
             btnClearQueue.UseMnemonic = false;
-            btnClearQueue.Text = "Tyhjennä valmiit";
+            btnClearQueue.Text = "Clear Completed";
             btnClearQueue.FlatStyle = FlatStyle.Flat;
             btnClearQueue.BackColor = Color.FromArgb(30, 41, 59);
             btnClearQueue.ForeColor = fgMuted;
             btnClearQueue.Font = new Font("Segoe UI", 8.0f);
-            btnClearQueue.Location = new Point(S(398), S(252));
+            btnClearQueue.Location = new Point(S(398), S(273));
             btnClearQueue.Size = new Size(S(100), S(23));
             btnClearQueue.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnClearQueue.Click += OnClearQueueClicked;
@@ -987,8 +1000,8 @@ namespace AetherTunnelNative
             lstQueue.Font = new Font("Consolas", 8.6f);
             lstQueue.BorderStyle = BorderStyle.FixedSingle;
             lstQueue.HorizontalScrollbar = true;
-            lstQueue.Location = new Point(S(20), S(278));
-            lstQueue.Size = new Size(S(478), S(92));
+            lstQueue.Location = new Point(S(20), S(299));
+            lstQueue.Size = new Size(S(478), S(86));
             lstQueue.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lstQueue);
 
@@ -996,7 +1009,7 @@ namespace AetherTunnelNative
                 "Live Kernel Socket & Chrome Browser Wormhole Log:",
                 null,
                 fgMuted,
-                new Point(S(20), S(378)),
+                new Point(S(20), S(392)),
                 true
             );
             rightCard.Controls.Add(lblLogCap);
@@ -1007,8 +1020,8 @@ namespace AetherTunnelNative
             lstLog.Font = new Font("Consolas", 8.8f);
             lstLog.BorderStyle = BorderStyle.FixedSingle;
             lstLog.HorizontalScrollbar = true;
-            lstLog.Location = new Point(S(20), S(398));
-            lstLog.Size = new Size(S(478), S(136));
+            lstLog.Location = new Point(S(20), S(412));
+            lstLog.Size = new Size(S(478), S(122));
             lstLog.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             rightCard.Controls.Add(lstLog);
 
@@ -1153,12 +1166,12 @@ namespace AetherTunnelNative
             if (p.ActiveUdpEp != null && (utcNow - p.LastUdpSeen).TotalSeconds < 14) return "UDP P2P";
             if (p.ClientType == "local_browser" && activeBrowserWsClient != null && activeBrowserWsClient.Connected) return "Localhost WS";
             if (!String.IsNullOrEmpty(p.CloudPeerId) && (utcNow - p.LastCloudSeen).TotalSeconds < 14) return "Cloud Bridge";
-            return "Yhdistetty";
+            return "Connected";
         }
 
         private string GetCurrentTargetLabel(string targetId)
         {
-            if (String.IsNullOrEmpty(targetId) || targetId == "*") return "Kaikki huoneessa";
+            if (String.IsNullOrEmpty(targetId) || targetId == "*") return "Everyone in room";
             RoomPeerInfo p;
             if (roomPeers.TryGetValue(targetId, out p) && !String.IsNullOrEmpty(p.DisplayName))
                 return p.DisplayName;
@@ -1188,12 +1201,12 @@ namespace AetherTunnelNative
                 List<string> newIds = new List<string>();
                 List<string> newLabels = new List<string>();
                 newIds.Add("*");
-                newLabels.Add("Kaikki huoneessa (" + activeList.Count.ToString() + " muuta)");
+                newLabels.Add("Everyone in room (" + activeList.Count.ToString() + (activeList.Count == 1 ? " other)" : " others)"));
                 for (int i = 0; i < activeList.Count; i++)
                 {
                     RoomPeerInfo p = activeList[i];
                     newIds.Add(p.PeerId);
-                    string kindTag = (p.ClientType == "exe") ? ".EXE" : (p.ClientType == "local_browser" ? "Selain 127.0.0.1" : "Selain");
+                    string kindTag = (p.ClientType == "exe") ? ".EXE" : (p.ClientType == "local_browser" ? "Browser 127.0.0.1" : "Browser");
                     newLabels.Add(p.DisplayName + " [" + kindTag + " · " + GetPeerTransportSummary(p, now) + "]");
                 }
 
@@ -1265,14 +1278,14 @@ namespace AetherTunnelNative
             cloudReconnectRequested = true;
             if (clean.Length == 0)
             {
-                UpdateStatusBadge("PEER STATUS: EI YHDISTETTY — Kirjoita tunnelin nimi ja paina Yhdistä");
-                Log("Tunneli katkaistu. Kirjoita tunnelin nimi ja paina Yhdistä.");
+                UpdateStatusBadge("PEER STATUS: NOT CONNECTED — Enter tunnel name and click Connect");
+                Log("Tunnel disconnected. Enter tunnel name and click Connect.");
                 return;
             }
             UpdateStatusBadge("PEER STATUS: WAITING FOR PEER [" + clean + "]");
             BroadcastUdpPresence();
             if (!suppressRoomBroadcast) NotifyBrowserRoomCode();
-            Log("Yhdistetään tunneliin [" + clean + "] (max " + MAX_ROOM_PEERS.ToString() + " käyttäjää)...");
+            Log("Connecting to tunnel [" + clean + "] (max " + MAX_ROOM_PEERS.ToString() + " users)...");
         }
 
         private void DeriveCryptographicKey()
@@ -1283,7 +1296,7 @@ namespace AetherTunnelNative
                 if (cleanRoom.Length == 0)
                 {
                     aesKey = new byte[32];
-                    currentFingerprint = "Odottaa tunnelin nimeä...";
+                    currentFingerprint = "Waiting for tunnel name...";
                     if (lblKeyFingerprint != null) lblKeyFingerprint.Text = currentFingerprint;
                     return;
                 }
@@ -1376,7 +1389,7 @@ namespace AetherTunnelNative
 
             string localIps = GetLocalIpList();
             lblLocalEndpoint.Text = "LAN: " + localIps + "  |  STUN WAN: Probing...";
-            Log("AetherTunnel v1.0 High-DPI active [BDP-Safe v8 · Queue & Confirmation · SSD-Safe] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
+            Log("AetherTunnel V1.01 High-DPI active [BDP-Safe v8 · Queue & Confirmation · SSD-Safe] (Scale: " + Math.Round(dpiScale * 100).ToString() + "%). TCP:" + listenPort.ToString() + " UDP:" + udpP2pPort.ToString() + (udpP2pV6Port > 0 ? " UDPv6:" + udpP2pV6Port.ToString() : ""));
 
             Thread stunThread = new Thread(StunAndUpnpProbeLoop);
             stunThread.IsBackground = true;
@@ -2472,7 +2485,7 @@ namespace AetherTunnelNative
                         string ext = Path.GetExtension(finalPath);
                         string altPath = Path.Combine(dir, nameOnly + "_" + DateTime.Now.ToString("HHmmss") + ext);
                         File.Move(partPath, altPath);
-                        Log("Tiedosto tallennettu nimellä (kohde oli lukittu): " + altPath);
+                        Log("File saved with alternate name (destination was locked): " + altPath);
                         movedOk = true;
                     }
                 }
@@ -2500,7 +2513,7 @@ namespace AetherTunnelNative
 
             if (!movedOk && lastErr != null)
             {
-                Log("Tiedoston viimeistelyvirhe (" + Path.GetFileName(finalPath) + "): " + lastErr.Message);
+                Log("File finalization error (" + Path.GetFileName(finalPath) + "): " + lastErr.Message);
             }
             return movedOk;
         }
@@ -2974,7 +2987,7 @@ namespace AetherTunnelNative
                                     {
                                         activeRxUdpFileName = "";
                                         activeRxUdpPartPath = "";
-                                        Log("Virhe avattaessa .part-tiedostoa (" + udpFileName + "): " + (openErr != null ? openErr.Message : "lukittu"));
+                                        Log("Error opening .part file (" + udpFileName + "): " + (openErr != null ? openErr.Message : "locked"));
                                         continue;
                                     }
                                     if (alignedBytes > 0) udpOutFile.Seek(alignedBytes, SeekOrigin.Begin);
@@ -2996,7 +3009,7 @@ namespace AetherTunnelNative
                                     }
 
                                     if (resumeChunk > 0)
-                                        Log("Jatketaan keskeytynyttä P2P UDP -latausta (" + udpFileName + ") kohdasta " + FormatBytes(alignedBytes) + " (lohko " + resumeChunk.ToString() + ")");
+                                        Log("Resuming interrupted P2P UDP download (" + udpFileName + ") at " + FormatBytes(alignedBytes) + " (chunk " + resumeChunk.ToString() + ")");
                                     else
                                         Log("Receiving file over High-Speed P2P NAT-UDP -> " + udpFinalPath + " (" + FormatBytes(udpExpectedSize) + ")");
                                 }
@@ -3104,7 +3117,7 @@ namespace AetherTunnelNative
                                         {
                                             udpPromptState = 3;
                                             udpPromptRejectTick = Environment.TickCount;
-                                            Log("Saapuva P2P-tiedosto hylätty: " + pFile);
+                                            Log("Incoming P2P file declined: " + pFile);
                                             if (pEp != null && udpP2pClient != null)
                                             {
                                                 byte[] rejMsg = Encoding.UTF8.GetBytes("AETHER_UDP_REJECT|" + pFile);
@@ -3489,7 +3502,7 @@ namespace AetherTunnelNative
                                 stagedPages.Clear();
                                 readyCompletedBytes = 0;
                                 udpPromptState = 0;
-                                Log("P2P UDP siirto keskeytyi — välitallennus (.ckpt) varmistettu ja tiedosto vapautettu jatkamista varten: " + udpFileName);
+                                Log("P2P UDP transfer interrupted — checkpoint (.ckpt) saved and file unlocked for resume: " + udpFileName);
                             }
                         }
 
@@ -3536,7 +3549,7 @@ namespace AetherTunnelNative
                             }
                             if (zeroPatched > 0)
                             {
-                                Log("P2P NAT-UDP: " + zeroPatched.ToString() + " puuttuvaa häntälohkoa paikattiin viimeistelyssä (" + udpFileName + ").");
+                                Log("P2P NAT-UDP: " + zeroPatched.ToString() + " missing tail chunk(s) patched during finalization (" + udpFileName + ").");
                             }
 
                             activeRxUdpFileName = "";
@@ -3575,7 +3588,7 @@ namespace AetherTunnelNative
                             }
                             else
                             {
-                                UpdateTransferUi("Viimeistely epäonnistui (.part lukittu): " + udpFileName, udpExpectedSize, udpExpectedSize, mbps, mbps, 1000, true);
+                                UpdateTransferUi("Finalization failed (.part locked): " + udpFileName, udpExpectedSize, udpExpectedSize, mbps, mbps, 1000, true);
                             }
                         }
                         else if (udpRxEndPending && udpRxDataQueue.IsEmpty)
@@ -3611,7 +3624,7 @@ namespace AetherTunnelNative
                                     stagedPages.Clear();
                                     readyCompletedBytes = 0;
                                     udpPromptState = 0;
-                                    Log("P2P UDP loppuvarmistus keskeytyi — välitallennus (.ckpt) tallennettu jatkamista varten: " + udpFileName);
+                                    Log("P2P UDP final verification interrupted — checkpoint (.ckpt) saved for resume: " + udpFileName);
                                 }
                                 else if (unchecked(nowTick - lastEndNackTick) >= 100)
                                 {
@@ -3831,13 +3844,13 @@ namespace AetherTunnelNative
 
                     string room = CleanRoomCode(currentRoomCode);
                     if (roomFullRejected)
-                        UpdateStatusBadge("PEER STATUS: HUONE TÄYNNÄ (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " käyttäjää)");
+                        UpdateStatusBadge("PEER STATUS: ROOM FULL (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " users)");
                     else if (room.Length == 0)
-                        UpdateStatusBadge("PEER STATUS: EI YHDISTETTY — Kirjoita tunnelin nimi ja paina Yhdistä");
+                        UpdateStatusBadge("PEER STATUS: NOT CONNECTED — Enter tunnel name and click Connect");
                     else if (activeCount > 0)
                     {
                         int totalUsers = Math.Min(MAX_ROOM_PEERS, activeCount + 1);
-                        UpdateStatusBadge("PEER STATUS: CONNECTED — " + activeCount.ToString() + " muuta huoneessa [" + room + "] (" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + ")");
+                        UpdateStatusBadge("PEER STATUS: CONNECTED — " + activeCount.ToString() + (activeCount == 1 ? " other in [" : " others in [") + room + "] (" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + ")");
                     }
                     else if (hasTcp)
                         UpdateStatusBadge("PEER STATUS: CONNECTED — KERNEL TCP (" + activePeerClient.Client.RemoteEndPoint.ToString() + ")");
@@ -4414,8 +4427,8 @@ namespace AetherTunnelNative
                 if (topType == "room:full")
                 {
                     roomFullRejected = true;
-                    UpdateStatusBadge("PEER STATUS: HUONE TÄYNNÄ (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " käyttäjää)");
-                    Log("Huone [" + cleanCode + "] on täynnä (enintään " + MAX_ROOM_PEERS.ToString() + " käyttäjää).");
+                    UpdateStatusBadge("PEER STATUS: ROOM FULL (" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " users)");
+                    Log("Room [" + cleanCode + "] is full (max " + MAX_ROOM_PEERS.ToString() + " users).");
                     return;
                 }
                 if (topType == "peer:left")
@@ -4428,7 +4441,7 @@ namespace AetherTunnelNative
                         if (roomPeers.TryRemove(leftId, out rem))
                         {
                             try { if (rem != null && rem.TcpClientConn != null) rem.TcpClientConn.Close(); } catch { }
-                            Log("Käyttäjä poistui huoneesta: " + (rem != null ? rem.DisplayName : leftId));
+                            Log("Peer left room: " + (rem != null ? rem.DisplayName : leftId));
                             SyncTargetPeerDropdown();
                         }
                     }
@@ -4455,12 +4468,12 @@ namespace AetherTunnelNative
                 if (kind == "browser:hello" || kind == "web:hello" || kind == "browser:hello-ack")
                 {
                     string dName = ExtractJsonString(text, "displayName");
-                    if (dName.Length == 0) dName = "Selain (" + srcPeer.Substring(Math.Max(0, srcPeer.Length - 4)) + ")";
+                    if (dName.Length == 0) dName = "Browser (" + srcPeer.Substring(Math.Max(0, srcPeer.Length - 4)) + ")";
                     bool isNewRoomPeer, fullRej;
                     RoomPeerInfo bPeer = UpsertRoomPeer(srcPeer, dName, "web", out isNewRoomPeer, out fullRej);
                     if (fullRej || bPeer == null)
                     {
-                        Log("Ohitettiin uusi selainkäyttäjä: huoneessa jo max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        Log("Skipped new browser peer: room already at max " + MAX_ROOM_PEERS.ToString() + " users.");
                         return;
                     }
                     bPeer.CloudPeerId = srcPeer;
@@ -4476,7 +4489,7 @@ namespace AetherTunnelNative
                     {
                         SyncTargetPeerDropdown();
                         UpdateStatusBadge("PEER STATUS: CONNECTED — " + bPeer.DisplayName + " [" + cleanCode + "]");
-                        Log("Yhdistetty selainkäyttäjään " + bPeer.DisplayName + " [" + cleanCode + "] (" + ch.Name + ")");
+                        Log("Connected to browser peer " + bPeer.DisplayName + " [" + cleanCode + "] (" + ch.Name + ")");
                     }
                     if (kind != "browser:hello-ack")
                     {
@@ -4497,7 +4510,7 @@ namespace AetherTunnelNative
                     RoomPeerInfo ePeer = UpsertRoomPeer(srcPeer, dName, "exe", out isNewRoomPeer, out fullRej);
                     if (fullRej || ePeer == null)
                     {
-                        Log("Ohitettiin uusi .EXE-käyttäjä: huoneessa jo max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        Log("Skipped new .EXE peer: room already at max " + MAX_ROOM_PEERS.ToString() + " users.");
                         return;
                     }
 
@@ -4543,7 +4556,7 @@ namespace AetherTunnelNative
                     {
                         SyncTargetPeerDropdown();
                         UpdateStatusBadge("PEER STATUS: CONNECTED — " + ePeer.DisplayName + " [" + cleanCode + "]");
-                        Log("Yhdistetty .EXE-käyttäjään " + ePeer.DisplayName + " [" + cleanCode + "] via " + ch.Name +
+                        Log("Connected to .EXE peer " + ePeer.DisplayName + " [" + cleanCode + "] via " + ch.Name +
                             (remoteWanUdp.Length > 0 ? " (WAN: " + remoteWanUdp + ")" : "") +
                             (remoteV6Udp.Length > 0 ? " (IPv6)" : ""));
                     }
@@ -4673,7 +4686,7 @@ namespace AetherTunnelNative
                             }
                             if (cloudOutFile == null)
                             {
-                                if (openErr != null) Log("Cloud RX tiedoston avausvirhe: " + openErr.Message);
+                                if (openErr != null) Log("Cloud RX file open error: " + openErr.Message);
                                 return;
                             }
                             if (alignedBytes > 0) cloudOutFile.Seek(alignedBytes, SeekOrigin.Begin);
@@ -4703,7 +4716,7 @@ namespace AetherTunnelNative
                             else
                             {
                                 cloudRejectedFileId = incomingFileId;
-                                Log("Saapuva Wormhole-tiedosto hylätty: " + incName);
+                                Log("Incoming Wormhole file declined: " + incName);
                                 SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:file-reject\\",\\"fileId\\":\\"" + incomingFileId + "\\"}");
                             }
                         });
@@ -4766,7 +4779,7 @@ namespace AetherTunnelNative
                         }
                         else
                         {
-                            UpdateTransferUi("Viimeistely epäonnistui (.part lukittu): " + cloudFileName, cloudExpectedSize, cloudExpectedSize, mbps, mbps, 1000, true);
+                            UpdateTransferUi("Finalization failed (.part locked): " + cloudFileName, cloudExpectedSize, cloudExpectedSize, mbps, mbps, 1000, true);
                         }
                         SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":999999}");
                     }
@@ -4826,7 +4839,7 @@ namespace AetherTunnelNative
                     }
                     if (fullRej || tcpPeer == null)
                     {
-                        Log("Hylättiin saapuva TCP-yhteys: huoneessa max " + MAX_ROOM_PEERS.ToString() + " käyttäjää.");
+                        Log("Rejected incoming TCP connection: room at max " + MAX_ROOM_PEERS.ToString() + " users.");
                         try { client.Close(); } catch { }
                         return;
                     }
@@ -4926,7 +4939,7 @@ namespace AetherTunnelNative
                 activeBrowserWsClient = client;
                 activeBrowserWsStream = netStream;
                 bool isNewLb, fullLb;
-                UpsertRoomPeer("local-browser", "Paikallinen selain (127.0.0.1)", "local_browser", out isNewLb, out fullLb);
+                UpsertRoomPeer("local-browser", "Local Browser (127.0.0.1)", "local_browser", out isNewLb, out fullLb);
                 SyncTargetPeerDropdown();
                 UpdateStatusBadge("PEER STATUS: CONNECTED — LOCAL BROWSER (127.0.0.1:" + listenPort.ToString() + ")");
                 Log("Chrome Browser connected via Direct Localhost Kernel WebSocket (127.0.0.1:" + listenPort.ToString() + ")");
@@ -5147,7 +5160,7 @@ namespace AetherTunnelNative
                             int choice = autoAcceptAllIncoming ? 1 : ShowIncomingTransferDialog("Chrome Browser (Local)", currentFileName, expectedFileSize, hasPart);
                             if (choice == 0)
                             {
-                                Log("Saapuva selain-siirto hylätty: " + currentFileName);
+                                Log("Incoming browser transfer declined: " + currentFileName);
                                 string rejJson = String.Format("{{\\"kind\\":\\"exe:file-reject\\",\\"fileId\\":\\"{0}\\"}}", incomingFileId);
                                 byte[] rejBytes = Encoding.UTF8.GetBytes(rejJson);
                                 SendWebSocketFrame(wsStream, 0x01, rejBytes, 0, rejBytes.Length);
@@ -5179,7 +5192,7 @@ namespace AetherTunnelNative
                             }
                             if (currentOutFile == null)
                             {
-                                Log("Selain-RX tiedoston avausvirhe: " + (openErr != null ? openErr.Message : "lukittu"));
+                                Log("Browser RX file open error: " + (openErr != null ? openErr.Message : "locked"));
                                 lock (rxHandleCoordLock)
                                 {
                                     if (Object.ReferenceEquals(activeWsRxClient, client)) activeWsRxPartPath = "";
@@ -5227,7 +5240,7 @@ namespace AetherTunnelNative
                             }
                             else
                             {
-                                UpdateTransferUi("Viimeistely epäonnistui (.part lukittu): " + currentFileName, expectedFileSize, expectedFileSize, mbps, mbps, 1000, true);
+                                UpdateTransferUi("Finalization failed (.part locked): " + currentFileName, expectedFileSize, expectedFileSize, mbps, mbps, 1000, true);
                             }
                         }
                     }
@@ -5341,7 +5354,7 @@ namespace AetherTunnelNative
                 return;
             }
             lblStatusBadge.Text = text;
-            bool isFull = roomFullRejected || text.IndexOf("TÄYNNÄ", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool isFull = roomFullRejected || text.IndexOf("FULL", StringComparison.OrdinalIgnoreCase) >= 0;
             bool isConnected = !isFull && text.IndexOf("CONNECTED", StringComparison.OrdinalIgnoreCase) >= 0;
             lblStatusBadge.ForeColor = isFull ? Color.FromArgb(248, 113, 113) : (isConnected ? Color.FromArgb(52, 211, 153) : Color.FromArgb(251, 191, 36));
 
@@ -5358,7 +5371,7 @@ namespace AetherTunnelNative
                 {
                     pnlRoomPresence.BackColor = Color.FromArgb(65, 18, 24);
                     lblRoomPresence.ForeColor = Color.FromArgb(248, 113, 113);
-                    lblRoomPresence.Text = "[" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " TÄYNNÄ] Huoneessa on enimmäismäärä käyttäjiä!";
+                    lblRoomPresence.Text = "[" + MAX_ROOM_PEERS.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " FULL] Room has reached maximum users!";
                 }
                 else if (isConnected || activeOthers > 0)
                 {
@@ -5366,7 +5379,7 @@ namespace AetherTunnelNative
                     string detail = text.Replace("PEER STATUS: CONNECTED — ", "").Replace("PEER STATUS: CONNECTED", "").Trim();
                     pnlRoomPresence.BackColor = Color.FromArgb(6, 46, 36);
                     lblRoomPresence.ForeColor = Color.FromArgb(52, 211, 153);
-                    lblRoomPresence.Text = "[" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " KÄYTTÄJÄÄ] Huoneessa " + Math.Max(1, activeOthers).ToString() + " muuta (" + detail + ")";
+                    lblRoomPresence.Text = "[" + totalUsers.ToString() + "/" + MAX_ROOM_PEERS.ToString() + " USERS] " + Math.Max(1, activeOthers).ToString() + (activeOthers == 1 ? " other in room (" : " others in room (") + detail + ")";
                 }
                 else
                 {
@@ -5374,8 +5387,8 @@ namespace AetherTunnelNative
                     pnlRoomPresence.BackColor = Color.FromArgb(30, 27, 22);
                     lblRoomPresence.ForeColor = Color.FromArgb(251, 191, 36);
                     lblRoomPresence.Text = room.Length == 0
-                        ? "Kirjoita tunnelin nimi ja paina Yhdistä"
-                        : "[1/" + MAX_ROOM_PEERS.ToString() + " KÄYTTÄJÄ] Ei muita huoneessa [" + room + "]";
+                        ? "Enter tunnel name and click Connect"
+                        : "[1/" + MAX_ROOM_PEERS.ToString() + " USER] No other users in [" + room + "]";
                 }
             }
         }
@@ -5571,7 +5584,7 @@ namespace AetherTunnelNative
         {
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
-                ofd.Title = "Valitse siirtojonoon lisättävät tiedostot";
+                ofd.Title = "Select files to add to transfer queue";
                 ofd.Multiselect = true;
                 if (ofd.ShowDialog() == DialogResult.OK && ofd.FileNames != null && ofd.FileNames.Length > 0)
                 {
@@ -5583,7 +5596,7 @@ namespace AetherTunnelNative
         private void OnSelectFolderClicked(object sender, EventArgs e)
         {
             if (folderPickDialog == null) folderPickDialog = new FolderBrowserDialog();
-            folderPickDialog.Description = "Valitse kansio, jonka kaikki tiedostot lisätään siirtojonoon:";
+            folderPickDialog.Description = "Select a folder to add all its files to the transfer queue:";
             if (folderPickDialog.ShowDialog() == DialogResult.OK && !String.IsNullOrEmpty(folderPickDialog.SelectedPath))
             {
                 EnqueueTransferPaths(new string[] { folderPickDialog.SelectedPath });
@@ -5599,12 +5612,12 @@ namespace AetherTunnelNative
                 if (selIdx >= 0 && selIdx < transferQueue.Count)
                 {
                     TransferQueueEntry sel = transferQueue[selIdx];
-                    if (sel.Status == "Virhe" || sel.Status == "Hylätty" || sel.Status == "Keskeytyi (jatketaan)" || sel.Status == "Odotetaan paria...")
+                    if (sel.Status == "Error" || sel.Status == "Declined" || sel.Status == "Interrupted (retrying)" || sel.Status == "Waiting for peer...")
                     {
                         cancelledQueueIds.Remove(sel.Id);
                         sel.RetryCount = 0;
                         sel.NextRetryUtc = DateTime.MinValue;
-                        sel.Status = "Odottaa";
+                        sel.Status = "Queued";
                         resetCount++;
                     }
                 }
@@ -5613,12 +5626,12 @@ namespace AetherTunnelNative
                     for (int i = 0; i < transferQueue.Count; i++)
                     {
                         TransferQueueEntry q = transferQueue[i];
-                        if (q.Status == "Virhe" || q.Status == "Hylätty" || q.Status == "Keskeytyi (jatketaan)" || q.Status == "Odotetaan paria...")
+                        if (q.Status == "Error" || q.Status == "Declined" || q.Status == "Interrupted (retrying)" || q.Status == "Waiting for peer...")
                         {
                             cancelledQueueIds.Remove(q.Id);
                             q.RetryCount = 0;
                             q.NextRetryUtc = DateTime.MinValue;
-                            q.Status = "Odottaa";
+                            q.Status = "Queued";
                             resetCount++;
                         }
                     }
@@ -5630,7 +5643,7 @@ namespace AetherTunnelNative
             }
             if (resetCount > 0)
             {
-                Log("Palautettiin siirtojonoon " + resetCount.ToString() + (resetCount == 1 ? " keskeytynyt siirto" : " keskeytynyttä siirtoa") + " jatkamista varten.");
+                Log("Re-queued " + resetCount.ToString() + (resetCount == 1 ? " interrupted transfer" : " interrupted transfers") + " for resume.");
                 RefreshQueueUi();
                 transferQueueEvent.Set();
             }
@@ -5645,9 +5658,9 @@ namespace AetherTunnelNative
                 if (idx >= 0 && idx < transferQueue.Count)
                 {
                     TransferQueueEntry item = transferQueue[idx];
-                    if (item.Id == activeQueueTransferId && item.Status == "Siirretään")
+                    if (item.Id == activeQueueTransferId && item.Status == "Transferring")
                     {
-                        Log("Aktiivista siirtoa ei voi poistaa jonosta kesken lähetyksen.");
+                        Log("Cannot remove an active transfer from the queue while sending.");
                         return;
                     }
                     cancelledQueueIds.Add(item.Id);
@@ -5664,7 +5677,7 @@ namespace AetherTunnelNative
                 for (int i = transferQueue.Count - 1; i >= 0; i--)
                 {
                     string st = transferQueue[i].Status;
-                    if (st == "Valmis" || st == "Hylätty" || st == "Virhe")
+                    if (st == "Completed" || st == "Declined" || st == "Error")
                     {
                         transferQueue.RemoveAt(i);
                     }
@@ -5681,34 +5694,34 @@ namespace AetherTunnelNative
                 transferResumeEvent.Reset();
                 if (btnPauseResume != null)
                 {
-                    btnPauseResume.Text = "Jatka";
+                    btnPauseResume.Text = "Resume";
                     btnPauseResume.BackColor = Color.FromArgb(14, 52, 38);
                     btnPauseResume.ForeColor = Color.FromArgb(52, 211, 153);
                 }
                 if (!String.IsNullOrEmpty(activeQueueTransferId))
                 {
-                    UpdateQueueEntryStatus(activeQueueTransferId, "Pysäytetty");
+                    UpdateQueueEntryStatus(activeQueueTransferId, "Paused");
                 }
                 if (lblProgressDetail != null)
                 {
-                    lblProgressDetail.Text = "Siirto pysäytetty — paina Jatka jatkaaksesi.";
+                    lblProgressDetail.Text = "Transfer paused — click Resume to continue.";
                 }
-                Log("Siirto pysäytetty käyttäjän toimesta.");
+                Log("Transfer paused by user.");
             }
             else
             {
                 transferResumeEvent.Set();
                 if (btnPauseResume != null)
                 {
-                    btnPauseResume.Text = "Pysäytä";
+                    btnPauseResume.Text = "Pause";
                     btnPauseResume.BackColor = Color.FromArgb(45, 34, 14);
                     btnPauseResume.ForeColor = Color.FromArgb(251, 191, 36);
                 }
                 if (!String.IsNullOrEmpty(activeQueueTransferId))
                 {
-                    UpdateQueueEntryStatus(activeQueueTransferId, "Siirretään");
+                    UpdateQueueEntryStatus(activeQueueTransferId, "Transferring");
                 }
-                Log("Siirtoa jatketaan.");
+                Log("Resuming transfer.");
             }
         }
 
@@ -5732,7 +5745,7 @@ namespace AetherTunnelNative
                             entry.FullPath = fi.FullName;
                             entry.DisplayName = fi.Name;
                             entry.FileSize = fi.Length;
-                            entry.Status = "Odottaa";
+                            entry.Status = "Queued";
                             entry.TargetPeerId = tgtId;
                             entry.TargetLabel = tgtLabel;
                             transferQueue.Add(entry);
@@ -5757,7 +5770,7 @@ namespace AetherTunnelNative
                                     entry.FullPath = dfi.FullName;
                                     entry.DisplayName = (!String.IsNullOrEmpty(rootFolderName) ? rootFolderName + "\\\\" + rel : rel);
                                     entry.FileSize = dfi.Length;
-                                    entry.Status = "Odottaa";
+                                    entry.Status = "Queued";
                                     entry.TargetPeerId = tgtId;
                                     entry.TargetLabel = tgtLabel;
                                     transferQueue.Add(entry);
@@ -5772,7 +5785,7 @@ namespace AetherTunnelNative
             }
             if (added > 0)
             {
-                Log("Lisättiin siirtojonoon " + added.ToString() + (added == 1 ? " tiedosto" : " tiedostoa") + " -> " + tgtLabel + ".");
+                Log("Added " + added.ToString() + (added == 1 ? " file" : " files") + " to transfer queue -> " + tgtLabel + ".");
                 RefreshQueueUi();
                 transferQueueEvent.Set();
             }
@@ -5796,13 +5809,13 @@ namespace AetherTunnelNative
                     for (int i = 0; i < transferQueue.Count; i++)
                     {
                         TransferQueueEntry q = transferQueue[i];
-                        if (q.Status == "Odottaa" || q.Status == "Odotetaan paria..." || q.Status == "Odotetaan hyväksyntää" || q.Status == "Siirretään" || q.Status == "Pysäytetty" || q.Status == "Keskeytyi (jatketaan)") waiting++;
-                        else if (q.Status == "Valmis") done++;
-                        string tLabel = String.IsNullOrEmpty(q.TargetLabel) ? "Kaikki" : q.TargetLabel;
+                        if (q.Status == "Queued" || q.Status == "Waiting for peer..." || q.Status == "Awaiting acceptance" || q.Status == "Transferring" || q.Status == "Paused" || q.Status == "Interrupted (retrying)") waiting++;
+                        else if (q.Status == "Completed") done++;
+                        string tLabel = String.IsNullOrEmpty(q.TargetLabel) ? "Everyone" : q.TargetLabel;
                         rows.Add(String.Format("[{0}] (-> {1}) {2} ({3})", q.Status, tLabel, q.DisplayName, FormatBytes(q.FileSize)));
                     }
                 }
-                lblQueueSummary.Text = String.Format("Siirtojono ({0} jonossa · {1} valmis)", waiting, done);
+                lblQueueSummary.Text = String.Format("Transfer Queue ({0} queued · {1} completed)", waiting, done);
                 int prevSel = lstQueue.SelectedIndex;
                 lstQueue.BeginUpdate();
                 lstQueue.Items.Clear();
@@ -5873,7 +5886,7 @@ namespace AetherTunnelNative
                     for (int i = 0; i < transferQueue.Count; i++)
                     {
                         TransferQueueEntry cand = transferQueue[i];
-                        if (cand.Status == "Odottaa" || cand.Status == "Odotetaan paria..." || cand.Status == "Keskeytyi (jatketaan)")
+                        if (cand.Status == "Queued" || cand.Status == "Waiting for peer..." || cand.Status == "Interrupted (retrying)")
                         {
                             if (firstWaiting == null) firstWaiting = cand;
                             if (now >= cand.NextRetryUtc && HasTargetReadyForEntry(cand, now))
@@ -5891,14 +5904,14 @@ namespace AetherTunnelNative
                     {
                         if (!HasTargetReadyForEntry(firstWaiting, now))
                         {
-                            if (firstWaiting.Status != "Odotetaan paria...")
+                            if (firstWaiting.Status != "Waiting for peer...")
                             {
-                                UpdateQueueEntryStatus(firstWaiting.Id, "Odotetaan paria...");
+                                UpdateQueueEntryStatus(firstWaiting.Id, "Waiting for peer...");
                             }
                             if (!loggedWaitingPeer)
                             {
                                 loggedWaitingPeer = true;
-                                Log("Siirtojono odottaa vastaanottajaa (" + (firstWaiting.TargetLabel ?? "Kaikki") + ") huoneessa [" + txtRoomCode.Text.Trim() + "]...");
+                                Log("Transfer queue waiting for recipient (" + (firstWaiting.TargetLabel ?? "Everyone") + ") in room [" + txtRoomCode.Text.Trim() + "]...");
                             }
                         }
                         Thread.Sleep(350);
@@ -5923,8 +5936,8 @@ namespace AetherTunnelNative
                 if (!isRunning) break;
 
                 activeQueueTransferId = next.Id;
-                UpdateQueueEntryStatus(next.Id, "Siirretään");
-                string outcome = "Virhe";
+                UpdateQueueEntryStatus(next.Id, "Transferring");
+                string outcome = "Error";
                 try
                 {
                     outcome = ExecuteQueuedTransfer(next);
@@ -5932,36 +5945,36 @@ namespace AetherTunnelNative
                 catch (Exception ex)
                 {
                     Log("Queue Transfer Exception (" + next.DisplayName + "): " + ex.Message);
-                    outcome = "Virhe";
+                    outcome = "Error";
                 }
                 finally
                 {
                     activeQueueTransferId = "";
-                    string finalStatus = String.IsNullOrEmpty(outcome) ? "Virhe" : outcome;
-                    if (finalStatus == "Virhe" && !cancelledQueueIds.Contains(next.Id) && File.Exists(next.FullPath) && isRunning)
+                    string finalStatus = String.IsNullOrEmpty(outcome) ? "Error" : outcome;
+                    if (finalStatus == "Error" && !cancelledQueueIds.Contains(next.Id) && File.Exists(next.FullPath) && isRunning)
                     {
                         bool peerOnlineNow = HasTargetReadyForEntry(next, DateTime.UtcNow);
                         if (!peerOnlineNow)
                         {
                             next.RetryCount = 0;
                             next.NextRetryUtc = DateTime.UtcNow.AddSeconds(2);
-                            finalStatus = "Odotetaan paria...";
-                            Log("Yhteys vastaanottajaan katkesi (" + next.DisplayName + ") — jatketaan automaattisesti kun pari yhdistää uudelleen.");
+                            finalStatus = "Waiting for peer...";
+                            Log("Connection to recipient lost (" + next.DisplayName + ") — will auto-resume when peer reconnects.");
                         }
                         else if (next.RetryCount < 12)
                         {
                             next.RetryCount++;
                             next.NextRetryUtc = DateTime.UtcNow.AddSeconds(3);
-                            finalStatus = "Keskeytyi (jatketaan)";
-                            Log("Siirto keskeytyi (" + next.DisplayName + ") — jatketaan automaattisesti 3s kuluttua (yritys " + next.RetryCount.ToString() + "/12)...");
+                            finalStatus = "Interrupted (retrying)";
+                            Log("Transfer interrupted (" + next.DisplayName + ") — auto-retrying in 3s (attempt " + next.RetryCount.ToString() + "/12)...");
                         }
                         else
                         {
-                            finalStatus = "Virhe";
-                            Log("Siirto keskeytyi toistuvasti (" + next.DisplayName + "). Paina 'Jatka / Uudelleen' jatkaaksesi.");
+                            finalStatus = "Error";
+                            Log("Transfer interrupted repeatedly (" + next.DisplayName + "). Click 'Resume / Retry' to continue.");
                         }
                     }
-                    else if (finalStatus == "Valmis")
+                    else if (finalStatus == "Completed")
                     {
                         next.RetryCount = 0;
                         next.NextRetryUtc = DateTime.MinValue;
@@ -5999,7 +6012,7 @@ namespace AetherTunnelNative
                 for (int i = 0; i < targets.Count && isRunning; i++)
                 {
                     RoomPeerInfo tp = targets[i];
-                    string res = "Virhe";
+                    string res = "Error";
                     if (tp.TcpClientConn != null && tp.TcpClientConn.Connected && tp.TcpStream != null)
                     {
                         res = StreamFileOverKernelTcp(entry.FullPath, entry.Id, tp);
@@ -6017,17 +6030,17 @@ namespace AetherTunnelNative
                         res = StreamFileToBrowserOverCloudBridge(entry.FullPath, entry.Id, tp.CloudPeerId, tp.DisplayName);
                     }
 
-                    if (res == "Valmis") okCount++;
-                    else if (res == "Hylätty") rejCount++;
+                    if (res == "Completed") okCount++;
+                    else if (res == "Declined") rejCount++;
                 }
-                if (okCount > 0) return "Valmis";
-                if (rejCount > 0) return "Hylätty";
-                return "Virhe";
+                if (okCount > 0) return "Completed";
+                if (rejCount > 0) return "Declined";
+                return "Error";
             }
 
             if (!String.IsNullOrEmpty(entry.TargetPeerId) && entry.TargetPeerId != "*")
             {
-                return "Virhe";
+                return "Error";
             }
 
             bool hasExePeer = (activePeerClient != null && activePeerClient.Connected && activePeerStream != null);
@@ -6041,7 +6054,7 @@ namespace AetherTunnelNative
             if (hasUdpPeer) return StreamFileOverNatPunchedUdp(entry.FullPath, entry.Id, null);
             if (hasLocalBrowserPeer) return StreamFileToBrowserOverWebSocket(entry.FullPath, entry.Id);
             if (hasCloudBrowserPeer || hasCloudExePeer) return StreamFileToBrowserOverCloudBridge(entry.FullPath, entry.Id, "", "");
-            return "Virhe";
+            return "Error";
         }
 
         private int ShowIncomingTransferDialog(string senderInfo, string fileName, long fileSize, bool hasResume)
@@ -6058,7 +6071,7 @@ namespace AetherTunnelNative
                         if (autoAcceptAllIncoming) { result = 1; return; }
                         using (Form dlg = new Form())
                         {
-                            dlg.Text = "Saapuva tiedostonsiirto — AetherTunnel";
+                            dlg.Text = "Incoming File Transfer — AetherTunnel";
                             dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
                             dlg.MaximizeBox = false;
                             dlg.MinimizeBox = false;
@@ -6071,7 +6084,7 @@ namespace AetherTunnelNative
                             dlg.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
                             Label lHead = CreateCleanLabel(
-                                "Lähettäjä (" + senderInfo + ") haluaa lähettää tiedoston:",
+                                "Sender (" + senderInfo + ") wants to send a file:",
                                 new Font("Segoe UI Semibold", 10f, FontStyle.Bold),
                                 Color.FromArgb(56, 189, 248),
                                 new Point(S(20), S(18)),
@@ -6091,7 +6104,7 @@ namespace AetherTunnelNative
                             dlg.Controls.Add(lName);
 
                             Label lMeta = CreateCleanLabel(
-                                "Koko: " + FormatBytes(fileSize) + (hasResume ? "   ·   Keskeytynyt siirto voidaan jatkaa (.part)" : "   ·   Tallennuskansio: " + downloadDirectory),
+                                "Size: " + FormatBytes(fileSize) + (hasResume ? "   ·   Interrupted transfer can resume (.part)" : "   ·   Save folder: " + downloadDirectory),
                                 new Font("Segoe UI", 8.8f),
                                 Color.FromArgb(148, 163, 184),
                                 new Point(S(20), S(80)),
@@ -6102,7 +6115,7 @@ namespace AetherTunnelNative
 
                             Button bAccept = new Button();
                             bAccept.UseMnemonic = false;
-                            bAccept.Text = "Hyväksy";
+                            bAccept.Text = "Accept";
                             bAccept.FlatStyle = FlatStyle.Flat;
                             bAccept.BackColor = Color.FromArgb(16, 185, 129);
                             bAccept.ForeColor = Color.FromArgb(9, 13, 22);
@@ -6114,7 +6127,7 @@ namespace AetherTunnelNative
 
                             Button bAcceptAll = new Button();
                             bAcceptAll.UseMnemonic = false;
-                            bAcceptAll.Text = "Hyväksy kaikki (jonossa)";
+                            bAcceptAll.Text = "Accept All (Queued)";
                             bAcceptAll.FlatStyle = FlatStyle.Flat;
                             bAcceptAll.BackColor = Color.FromArgb(56, 189, 248);
                             bAcceptAll.ForeColor = Color.FromArgb(9, 13, 22);
@@ -6132,7 +6145,7 @@ namespace AetherTunnelNative
 
                             Button bReject = new Button();
                             bReject.UseMnemonic = false;
-                            bReject.Text = "Hylkää";
+                            bReject.Text = "Decline";
                             bReject.FlatStyle = FlatStyle.Flat;
                             bReject.BackColor = Color.FromArgb(51, 65, 85);
                             bReject.ForeColor = Color.FromArgb(248, 113, 113);
@@ -6263,7 +6276,7 @@ namespace AetherTunnelNative
                 try
                 {
                     IPEndPoint targetEp = overrideEp != null ? overrideEp : activeUdpPeerEndpoint;
-                    if (targetEp == null || udpP2pClient == null) return "Virhe";
+                    if (targetEp == null || udpP2pClient == null) return "Error";
                     activeUdpPeerEndpoint = targetEp;
 
                     FileInfo fi = new FileInfo(filePath);
@@ -6321,15 +6334,15 @@ namespace AetherTunnelNative
 
                     if (!udpResumeReceived && !udpWaitAcceptReceived && !udpTransferRejected)
                     {
-                        Log("UDP P2P aloituskuittausta ei saatu vastaanottajalta (" + fileName + ") — merkitään keskeytyneeksi.");
-                        return "Virhe";
+                        Log("No UDP P2P start acknowledgment received from recipient (" + fileName + ") — marking as interrupted.");
+                        return "Error";
                     }
 
                     if (udpWaitAcceptReceived && !udpResumeReceived && !udpTransferRejected && isRunning)
                     {
-                        if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
-                        UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                        Log("Odotetaan vastaanottajan hyväksyntää tiedostolle: " + fileName);
+                        if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Awaiting acceptance");
+                        UpdateTransferUi("Awaiting recipient acceptance: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                        Log("Awaiting recipient acceptance for file: " + fileName);
                         int waitLoops = 0;
                         while (!udpResumeReceived && !udpTransferRejected && isRunning && waitLoops < 150)
                         {
@@ -6343,19 +6356,19 @@ namespace AetherTunnelNative
                         }
                         if (!udpResumeReceived && !udpTransferRejected)
                         {
-                            Log("Hyväksynnän odotus aikakatkaistiin: " + fileName);
-                            return "Virhe";
+                            Log("Acceptance wait timed out: " + fileName);
+                            return "Error";
                         }
                     }
 
                     if (udpTransferRejected)
                     {
-                        Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
-                        UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                        return "Hylätty";
+                        Log("Recipient declined the file: " + fileName);
+                        UpdateTransferUi("Recipient declined: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                        return "Declined";
                     }
 
-                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Transferring");
 
                     int startChunk = Math.Max(0, Math.Min(udpPeerResumeChunk, totalChunks));
                     udpPeerAckedChunk = startChunk - 1;
@@ -6397,7 +6410,7 @@ namespace AetherTunnelNative
                                 sw.Stop();
                                 double pausedAvg = (Math.Max(0L, totalSent - ((long)initialStartChunk * UDP_CHUNK_SIZE)) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
                                 int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                                UpdateTransferUi("Pysäytetty (UDP P2P): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                                UpdateTransferUi("Paused (UDP P2P): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
                                 while (transferPaused && isRunning)
                                 {
                                     lastAckReceivedTick = Environment.TickCount;
@@ -6424,7 +6437,7 @@ namespace AetherTunnelNative
                             if (peerSilentMs > 12000)
                             {
                                 abortedByDisconnect = true;
-                                Log("UDP P2P -yhteys katkesi kesken siirron (vastaanottaja ei vastannut 12s): " + fileName);
+                                Log("UDP P2P connection lost mid-transfer (no response from recipient for 12s): " + fileName);
                                 break;
                             }
                             if (peerSilentMs > 3500 && unchecked(Environment.TickCount - lastStartKeepaliveTick) > 2500)
@@ -6512,7 +6525,7 @@ namespace AetherTunnelNative
                             }
                             if (abortedByDisconnect)
                             {
-                                Log("UDP P2P -yhteys katkesi kesken lähetysikkunan odotuksen: " + fileName);
+                                Log("UDP P2P connection lost while waiting for send window: " + fileName);
                                 break;
                             }
 
@@ -6635,7 +6648,7 @@ namespace AetherTunnelNative
                                 if (retry == 0 || (retry % 5 == 0))
                                 {
                                     double tailAvgMbps = (Math.Max(0L, fileSize - ((long)initialStartChunk * UDP_CHUNK_SIZE)) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
-                                    UpdateTransferUi("Viimeistellään vastaanottajalla: " + fileName, fileSize, fileSize, smoothedUiTxMbps, tailAvgMbps, 1000);
+                                    UpdateTransferUi("Finalizing on recipient: " + fileName, fileSize, fileSize, smoothedUiTxMbps, tailAvgMbps, 1000);
                                 }
                                 SendUdpP2pPacket(endBytes, endBytes.Length, targetEp);
                                 udpAckEvent.WaitOne(80);
@@ -6680,9 +6693,9 @@ namespace AetherTunnelNative
                         double partialSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
                         double partialMbps = (Math.Max(1L, totalSent - ((long)initialStartChunk * UDP_CHUNK_SIZE)) / (1024.0 * 1024.0)) / partialSec;
                         int partialPermille = (int)((Math.Min(fileSize, totalSent) * 1000L) / Math.Max(1L, fileSize));
-                        UpdateTransferUi("Siirto keskeytyi (UDP P2P): " + fileName, Math.Min(fileSize, totalSent), fileSize, 0.0, partialMbps, partialPermille, true);
-                        Log("UDP P2P siirto keskeytyi ilman vahvistusta (" + fileName + ") — merkitään jatkettavaksi.");
-                        return "Virhe";
+                        UpdateTransferUi("Transfer interrupted (UDP P2P): " + fileName, Math.Min(fileSize, totalSent), fileSize, 0.0, partialMbps, partialPermille, true);
+                        Log("UDP P2P transfer interrupted without final confirmation (" + fileName + ") — marked for resume.");
+                        return "Error";
                     }
 
                     double totalSec = Math.Max(0.005, sw.Elapsed.TotalSeconds);
@@ -6692,12 +6705,12 @@ namespace AetherTunnelNative
                     Log(String.Format("UDP NAT-P2P TX COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s (Verified 100% Saved)",
                         fileName, FormatBytes(fileSize), totalSec, finalMbps));
                     if (isRunning) Thread.Sleep(150);
-                    return "Valmis";
+                    return "Completed";
                 }
                 catch (Exception ex)
                 {
                     Log("UDP P2P TX Error: " + ex.Message);
-                    return "Virhe";
+                    return "Error";
                 }
                 finally
                 {
@@ -6744,28 +6757,28 @@ namespace AetherTunnelNative
                 }
                 if (!cloudResumeReceived && !cloudWaitAcceptReceived && !cloudTransferRejected)
                 {
-                    Log("Wormhole Cloud -vastaanottaja ei vastannut aloituskutsuun: " + fileName);
-                    return "Virhe";
+                    Log("Wormhole Cloud recipient did not respond to start request: " + fileName);
+                    return "Error";
                 }
                 if (cloudWaitAcceptReceived && !cloudResumeReceived && !cloudTransferRejected && isRunning)
                 {
-                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
-                    UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Awaiting acceptance");
+                    UpdateTransferUi("Awaiting recipient acceptance: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
                     int waitLoops = 0;
                     while (!cloudResumeReceived && !cloudTransferRejected && isRunning && waitLoops < 150)
                     {
                         cloudResumeEvent.WaitOne(800);
                         waitLoops++;
                     }
-                    if (!cloudResumeReceived && !cloudTransferRejected) return "Virhe";
+                    if (!cloudResumeReceived && !cloudTransferRejected) return "Error";
                 }
                 if (cloudTransferRejected)
                 {
-                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
-                    UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                    return "Hylätty";
+                    Log("Recipient declined the file: " + fileName);
+                    UpdateTransferUi("Recipient declined: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    return "Declined";
                 }
-                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Transferring");
 
                 int startChunk = Math.Max(0, Math.Min(cloudResumeChunk, totalChunks));
                 if (startChunk > 0)
@@ -6791,7 +6804,7 @@ namespace AetherTunnelNative
                             sw.Stop();
                             double pausedAvg = (Math.Max(0L, totalSent - initialBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
                             int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                            UpdateTransferUi("Pysäytetty: " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            UpdateTransferUi("Paused: " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
                             while (transferPaused && isRunning)
                             {
                                 transferResumeEvent.WaitOne(200);
@@ -6826,13 +6839,13 @@ namespace AetherTunnelNative
 
                 if (cloudTransferRejected)
                 {
-                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
-                    return "Hylätty";
+                    Log("Recipient declined the file: " + fileName);
+                    return "Declined";
                 }
 
                 if (!isRunning || activeSignalingChannels.IsEmpty || totalSent < fileSize)
                 {
-                    return "Virhe";
+                    return "Error";
                 }
 
                 string endJson = String.Format("{{\\"kind\\":\\"exe:file-end\\",\\"fileId\\":\\"{0}\\"}}", fileId);
@@ -6845,12 +6858,12 @@ namespace AetherTunnelNative
                 UpdateTransferUi("Sent to " + peerLabel + ": " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format(".EXE -> {0} COMPLETE: {1} ({2}) in {3:F2}s — {4:F2} MB/s",
                     peerLabel.ToUpperInvariant(), fileName, FormatBytes(fileSize), totalSec, finalMbps));
-                return "Valmis";
+                return "Completed";
             }
             catch (Exception ex)
             {
                 Log("Wormhole Cloud Bridge TX Error: " + ex.Message);
-                return "Virhe";
+                return "Error";
             }
         }
 
@@ -6858,7 +6871,7 @@ namespace AetherTunnelNative
         {
             try
             {
-                if (activeBrowserWsStream == null || activeBrowserWsClient == null || !activeBrowserWsClient.Connected) return "Virhe";
+                if (activeBrowserWsStream == null || activeBrowserWsClient == null || !activeBrowserWsClient.Connected) return "Error";
                 FileInfo fi = new FileInfo(filePath);
                 long fileSize = fi.Length;
                 string fileName = fi.Name;
@@ -6889,24 +6902,24 @@ namespace AetherTunnelNative
                 }
                 if (wsWaitAcceptReceived && !wsResumeReceived && !wsTransferRejected && isRunning)
                 {
-                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
-                    UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Awaiting acceptance");
+                    UpdateTransferUi("Awaiting recipient acceptance: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
                     int waitLoops = 0;
                     while (!wsResumeReceived && !wsTransferRejected && isRunning && waitLoops < 150)
                     {
                         wsResumeEvent.WaitOne(800);
                         waitLoops++;
                     }
-                    if (!wsResumeReceived && !wsTransferRejected) return "Virhe";
+                    if (!wsResumeReceived && !wsTransferRejected) return "Error";
                 }
                 if (wsTransferRejected)
                 {
-                    Log("Selain hylkäsi tiedoston: " + fileName);
-                    UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                    return "Hylätty";
+                    Log("Browser declined the file: " + fileName);
+                    UpdateTransferUi("Recipient declined: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    return "Declined";
                 }
-                if (!wsResumeReceived) return "Virhe";
-                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+                if (!wsResumeReceived) return "Error";
+                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Transferring");
 
                 int startChunk = Math.Max(0, Math.Min(wsResumeChunk, totalChunks));
                 long initialBytes = Math.Min(fileSize, (long)startChunk * WS_CHUNK_SIZE);
@@ -6931,7 +6944,7 @@ namespace AetherTunnelNative
                             sw.Stop();
                             double pausedAvg = (Math.Max(0L, totalSent - initialBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
                             int pausedPermille = (int)((totalSent * 1000L) / Math.Max(1L, fileSize));
-                            UpdateTransferUi("Pysäytetty (Browser WS): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            UpdateTransferUi("Paused (Browser WS): " + fileName, totalSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
                             while (transferPaused && isRunning)
                             {
                                 transferResumeEvent.WaitOne(200);
@@ -6953,7 +6966,7 @@ namespace AetherTunnelNative
 
                 if (!isRunning || totalSent < fileSize || activeBrowserWsStream == null)
                 {
-                    return "Virhe";
+                    return "Error";
                 }
 
                 string endJson = String.Format("{{\\"kind\\":\\"exe:file-end\\",\\"fileId\\":\\"{0}\\"}}", fileId);
@@ -6966,12 +6979,12 @@ namespace AetherTunnelNative
                 UpdateTransferUi("Sent to Browser: " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format(".EXE -> BROWSER COMPLETE: {0} ({1}) in {2:F2}s — {3:F2} MB/s ({4:F2} Gbps)",
                     fileName, FormatBytes(fileSize), totalSec, finalMbps, (finalMbps * 8.0) / 1000.0));
-                return "Valmis";
+                return "Completed";
             }
             catch (Exception ex)
             {
                 Log("Browser WebSocket TX Error: " + ex.Message);
-                return "Virhe";
+                return "Error";
             }
         }
 
@@ -6983,7 +6996,7 @@ namespace AetherTunnelNative
                 txStream = (targetPeer != null && targetPeer.TcpStream != null && targetPeer.TcpClientConn != null && targetPeer.TcpClientConn.Connected)
                     ? targetPeer.TcpStream
                     : activePeerStream;
-                if (txStream == null) return "Virhe";
+                if (txStream == null) return "Error";
 
                 FileInfo fi = new FileInfo(filePath);
                 long fileSize = fi.Length;
@@ -7014,7 +7027,7 @@ namespace AetherTunnelNative
                 }
                 if (!kernelTcpResumeReceived && !kernelTcpWaitAccept && !kernelTcpRejected)
                 {
-                    Log("Kernel TCP -vastaanottaja ei vastannut aloituskehykseen — yhteys nollataan.");
+                    Log("Kernel TCP recipient did not respond to start frame — resetting connection.");
                     if (targetPeer != null && Object.ReferenceEquals(targetPeer.TcpStream, txStream))
                     {
                         try { if (targetPeer.TcpClientConn != null) targetPeer.TcpClientConn.Close(); } catch { }
@@ -7028,29 +7041,29 @@ namespace AetherTunnelNative
                         activePeerClient = null;
                         activePeerStream = null;
                     }
-                    return "Virhe";
+                    return "Error";
                 }
                 if (kernelTcpWaitAccept && !kernelTcpResumeReceived && !kernelTcpRejected && isRunning)
                 {
-                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Odotetaan hyväksyntää");
-                    UpdateTransferUi("Odotetaan vastaanottajan hyväksyntää: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                    Log("Odotetaan vastaanottajan hyväksyntää tiedostolle: " + fileName);
+                    if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Awaiting acceptance");
+                    UpdateTransferUi("Awaiting recipient acceptance: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    Log("Awaiting recipient acceptance for file: " + fileName);
                     int waitLoops = 0;
                     while (!kernelTcpResumeReceived && !kernelTcpRejected && isRunning && waitLoops < 150)
                     {
                         kernelTcpResumeEvent.WaitOne(800);
                         waitLoops++;
                     }
-                    if (!kernelTcpResumeReceived && !kernelTcpRejected) return "Virhe";
+                    if (!kernelTcpResumeReceived && !kernelTcpRejected) return "Error";
                 }
 
                 if (kernelTcpRejected)
                 {
-                    Log("Vastaanottaja hylkäsi tiedoston: " + fileName);
-                    UpdateTransferUi("Vastaanottaja hylkäsi: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
-                    return "Hylätty";
+                    Log("Recipient declined the file: " + fileName);
+                    UpdateTransferUi("Recipient declined: " + fileName, 0, fileSize, 0.0, 0.0, 0, true);
+                    return "Declined";
                 }
-                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Siirretään");
+                if (!String.IsNullOrEmpty(queueEntryId)) UpdateQueueEntryStatus(queueEntryId, "Transferring");
 
                 int startChunk = Math.Max(0, Math.Min(kernelTcpResumeChunk, totalChunks));
                 if (startChunk > 0)
@@ -7078,7 +7091,7 @@ namespace AetherTunnelNative
                             sw.Stop();
                             double pausedAvg = (Math.Max(0L, totalBytesSent - initialBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, sw.Elapsed.TotalSeconds);
                             int pausedPermille = (int)((totalBytesSent * 1000L) / Math.Max(1L, fileSize));
-                            UpdateTransferUi("Pysäytetty: " + fileName, totalBytesSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
+                            UpdateTransferUi("Paused: " + fileName, totalBytesSent, fileSize, 0.0, pausedAvg, pausedPermille, true);
                             while (transferPaused && isRunning)
                             {
                                 transferResumeEvent.WaitOne(200);
@@ -7165,7 +7178,7 @@ namespace AetherTunnelNative
 
                 if (!isRunning || totalBytesSent < fileSize)
                 {
-                    return "Virhe";
+                    return "Error";
                 }
 
                 WriteKernelFrameTo(txStream, 3, new byte[4], 4);
@@ -7177,7 +7190,7 @@ namespace AetherTunnelNative
                 UpdateTransferUi("Sent & Verified: " + fileName, fileSize, fileSize, finalMbps, finalMbps, 1000, true);
                 Log(String.Format("TX COMPLETE: {0} ({1}) in {2:F2}s — Average Speed: {3:F2} MB/s ({4:F2} Gbps)",
                     fileName, FormatBytes(fileSize), totalSec, finalMbps, (finalMbps * 8.0) / 1000.0));
-                return "Valmis";
+                return "Completed";
             }
             catch (Exception ex)
             {
@@ -7198,7 +7211,7 @@ namespace AetherTunnelNative
                         activePeerStream = null;
                     }
                 }
-                return "Virhe";
+                return "Error";
             }
         }
 
@@ -7249,7 +7262,7 @@ namespace AetherTunnelNative
                         if (rxSw != null) rxSw.Stop();
                         double pausedAvg = rxSw != null ? (Math.Max(0L, receivedPlainBytes - tcpSessionStartBytes) / (1024.0 * 1024.0)) / Math.Max(0.005, rxSw.Elapsed.TotalSeconds) : 0.0;
                         int pausedPermille = (int)((receivedPlainBytes * 1000L) / Math.Max(1L, expectedFileSize));
-                        UpdateTransferUi("Pysäytetty: " + currentFileName, receivedPlainBytes, expectedFileSize, 0.0, pausedAvg, pausedPermille, true);
+                        UpdateTransferUi("Paused: " + currentFileName, receivedPlainBytes, expectedFileSize, 0.0, pausedAvg, pausedPermille, true);
                         while (transferPaused && isRunning && client.Connected)
                         {
                             transferResumeEvent.WaitOne(200);
@@ -7331,7 +7344,7 @@ namespace AetherTunnelNative
                         int choice = autoAcceptAllIncoming ? 1 : ShowIncomingTransferDialog("Kernel TCP (.EXE)", currentFileName, expectedFileSize, hasPart);
                         if (choice == 0)
                         {
-                            Log("Saapuva TCP-tiedosto hylätty: " + currentFileName);
+                            Log("Incoming TCP file declined: " + currentFileName);
                             try
                             {
                                 byte[] rejHeader = new byte[9];
@@ -7373,7 +7386,7 @@ namespace AetherTunnelNative
                         }
                         if (currentOutFile == null)
                         {
-                            Log("TCP RX tiedoston avausvirhe: " + (openErr != null ? openErr.Message : "lukittu"));
+                            Log("TCP RX file open error: " + (openErr != null ? openErr.Message : "locked"));
                             lock (rxHandleCoordLock)
                             {
                                 if (Object.ReferenceEquals(activeTcpRxClient, client)) activeTcpRxPartPath = "";
@@ -7497,7 +7510,7 @@ namespace AetherTunnelNative
                         }
                         else
                         {
-                            UpdateTransferUi("Viimeistely epäonnistui (.part lukittu): " + currentFileName, expectedFileSize, expectedFileSize, finalMbps, finalMbps, 1000, true);
+                            UpdateTransferUi("Finalization failed (.part locked): " + currentFileName, expectedFileSize, expectedFileSize, finalMbps, finalMbps, 1000, true);
                         }
                     }
                 }
@@ -7561,7 +7574,7 @@ namespace AetherTunnelNative
             lblSpeedMetric.Text = String.Format("{0:F2} MB/s  ({1:F2} Gbps)", liveMbps, liveGbps);
             if (lblTransferStats != null)
             {
-                lblTransferStats.Text = String.Format("Siirretty: {0} / {1}  |  Keskinopeus: {2:F2} MB/s ({3:F2} Gbps)", FormatBytes(doneBytes), FormatBytes(totalBytes), avgMbps, avgGbps);
+                lblTransferStats.Text = String.Format("Transferred: {0} / {1}  |  Avg Speed: {2:F2} MB/s ({3:F2} Gbps)", FormatBytes(doneBytes), FormatBytes(totalBytes), avgMbps, avgGbps);
             }
             lblProgressDetail.Text = String.Format("{0} — {1}%", statusText, permille / 10);
             progressBar.Value = Math.Max(0, Math.Min(1000, permille));

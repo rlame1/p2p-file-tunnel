@@ -149,7 +149,7 @@ export default function App() {
   const [peerId] = useState<string>(
     () => `peer-${Math.random().toString(36).slice(2, 9)}`
   );
-  const [localDisplayName, setLocalDisplayName] = useState<string>(() => `Selain-${peerId.slice(-4)}`);
+  const [localDisplayName, setLocalDisplayName] = useState<string>(() => `Browser-${peerId.slice(-4)}`);
   const localDisplayNameRef = useRef<string>(localDisplayName);
   localDisplayNameRef.current = localDisplayName;
   const [connectionState, setConnectionState] =
@@ -458,7 +458,7 @@ export default function App() {
     const clean = roomCode.trim();
     if (!clean) {
       cryptoKeyRef.current = null;
-      setKeyFingerprint('Odottaa tunnelin nimeä...');
+      setKeyFingerprint('Waiting for tunnel name...');
       return;
     }
     let cancelled = false;
@@ -975,7 +975,7 @@ export default function App() {
 
         if (needsConfirm) {
           setIncomingFileAlert(
-            `Vahvistus vaaditaan: ${name} (${formatBytes(size)}) — Hyväksy tai hylkää saapuva siirto yläpalkista.`
+            `Confirmation required: ${name} (${formatBytes(size)}) — Accept or decline the incoming transfer above.`
           );
           sendReplyPacket({
             kind: 'file:wait-accept',
@@ -1008,7 +1008,7 @@ export default function App() {
                       ? {
                           ...item,
                           status: 'rejected',
-                          errorMessage: 'Siirto hylätty vastaanottajan toimesta',
+                          errorMessage: 'Transfer declined by recipient',
                         }
                       : item
                   )
@@ -1264,7 +1264,7 @@ export default function App() {
             type: 'bus:hello-reply',
             peerId,
             toPeerId: msg.peerId,
-            deviceLabel: `${localDisplayNameRef.current} (Paikallinen välilehti)`,
+            deviceLabel: `${localDisplayNameRef.current} (Local Tab)`,
           });
         } catch {}
       } else if (msg.type === 'bus:hello-reply' && msg.peerId !== peerId) {
@@ -1297,7 +1297,7 @@ export default function App() {
       bus.postMessage({
         type: 'bus:hello',
         peerId,
-        deviceLabel: `${localDisplayNameRef.current} (Paikallinen välilehti)`,
+        deviceLabel: `${localDisplayNameRef.current} (Local Tab)`,
       });
     } catch {}
 
@@ -1306,7 +1306,7 @@ export default function App() {
         bus.postMessage({
           type: 'bus:hello',
           peerId,
-          deviceLabel: `${localDisplayNameRef.current} (Paikallinen välilehti)`,
+          deviceLabel: `${localDisplayNameRef.current} (Local Tab)`,
         });
       } catch {}
     }, 1500);
@@ -1611,7 +1611,7 @@ export default function App() {
               peerId,
               cloudId: myCloudId,
               clientType: 'browser',
-              deviceLabel: `${localDisplayNameRef.current} (${navigator.platform || 'Selain'})`,
+              deviceLabel: `${localDisplayNameRef.current} (${navigator.platform || 'Browser'})`,
               natType: 'Port-Restricted Cone NAT',
             })
           );
@@ -1633,7 +1633,7 @@ export default function App() {
 
             if (msg.type === 'room:full') {
               setRoomFullMessage(
-                `Huone "${cleanCode}" on täynnä (max ${msg.maxPeers || MAX_ROOM_PEERS} käyttäjää).`
+                `Room "${cleanCode}" is full (max ${msg.maxPeers || MAX_ROOM_PEERS} users).`
               );
               setConnectionState('error');
               return;
@@ -1963,7 +1963,7 @@ export default function App() {
 
                 if (needsConfirm) {
                   setIncomingFileAlert(
-                    `Vahvistus vaaditaan: ${fname} (${formatBytes(fsize)}) — Hyväksy tai hylkää saapuva siirto yläpalkista.`
+                    `Confirmation required: ${fname} (${formatBytes(fsize)}) — Accept or decline the incoming transfer above.`
                   );
                   try {
                     ws.send(
@@ -1996,7 +1996,7 @@ export default function App() {
                               ? {
                                   ...t,
                                   status: 'rejected',
-                                  errorMessage: 'Siirto hylätty vastaanottajan toimesta',
+                                  errorMessage: 'Transfer declined by recipient',
                                 }
                               : t
                           )
@@ -2308,7 +2308,7 @@ export default function App() {
         setConnectionState('connected_p2p');
         const remoteLabel =
           (payload.displayName && String(payload.displayName)) ||
-          `Selain (${srcPeer.slice(-4)})`;
+          `Browser (${srcPeer.slice(-4)})`;
         setPeers((prev) => {
           const idx = prev.findIndex(
             (p) => p.id === canonicalId || p.id === srcPeer || p.cloudId === srcPeer
@@ -2513,7 +2513,7 @@ export default function App() {
 
         if (needsConfirm) {
           setIncomingFileAlert(
-            `Vahvistus vaaditaan: ${fname} (${formatBytes(fsize)}) — Hyväksy tai hylkää saapuva siirto yläpalkista.`
+            `Confirmation required: ${fname} (${formatBytes(fsize)}) — Accept or decline the incoming transfer above.`
           );
           publishToCloudBus(srcPeer, {
             kind: `${rxReplyPrefix}wait-accept`,
@@ -2544,7 +2544,7 @@ export default function App() {
                       ? {
                           ...t,
                           status: 'rejected',
-                          errorMessage: 'Siirto hylätty vastaanottajan toimesta',
+                          errorMessage: 'Transfer declined by recipient',
                         }
                       : t
                   )
@@ -3107,7 +3107,7 @@ export default function App() {
       const targetLabel =
         options?.targetLabel ||
         (targetPeerId === 'all'
-          ? 'Kaikki huoneessa'
+          ? 'Everyone in room'
           : peersRef.current.find((p) => p.id === targetPeerId)?.deviceLabel || targetPeerId);
 
       const activeChunkSize = WIRE_CHUNK_BYTES;
@@ -3233,7 +3233,7 @@ export default function App() {
               ? {
                   ...t,
                   status: 'rejected',
-                  errorMessage: 'Vastaanottaja hylkäsi tiedostonsiirron',
+                  errorMessage: 'Recipient declined the file transfer',
                 }
               : t
           )
@@ -3764,7 +3764,7 @@ export default function App() {
         }
 
         if (!anySent || !anyCompleted) {
-          throw new Error('Valittu vastaanottaja ei ole enää yhdistettynä');
+          throw new Error('Selected recipient is no longer connected');
         }
 
         const totalElapsedSec = Math.max(
@@ -3818,7 +3818,7 @@ export default function App() {
   );
 
   const getRecipientLabel = useCallback((targetId: string): string => {
-    if (!targetId || targetId === 'all') return 'Kaikki huoneessa';
+    if (!targetId || targetId === 'all') return 'Everyone in room';
     const found = peersRef.current.find((p) => p.id === targetId || p.cloudId === targetId);
     return found ? found.deviceLabel : targetId;
   }, []);
@@ -4013,7 +4013,7 @@ export default function App() {
     setNotes((prev) => [
       {
         id: noteId,
-        senderLabel: `Sinä (${localDisplayName})`,
+        senderLabel: `You (${localDisplayName})`,
         recipientLabel,
         text: noteInput.trim(),
         timestamp: Date.now(),
@@ -4154,9 +4154,9 @@ export default function App() {
                   status: finalStatus,
                   errorMessage:
                     finalStatus === 'rejected'
-                      ? 'Hylätty vastaanottajalla'
+                      ? 'Declined by recipient'
                       : finalStatus === 'error'
-                      ? 'Siirtovirhe'
+                      ? 'Transfer error'
                       : undefined,
                 }
               : q
@@ -4177,7 +4177,7 @@ export default function App() {
           }}
           className="text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 font-display"
         >
-          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">v1.0</span>
+          AetherTunnel <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded">V1.01</span>
         </a>
 
         <nav className="flex items-center gap-6 text-sm font-medium text-slate-400 overflow-x-auto">
@@ -4228,7 +4228,7 @@ export default function App() {
             onClick={handleCreateNewTunnel}
             className="px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Arvo tunnelin nimi
+            Randomize Tunnel Name
           </button>
         </div>
       </header>
@@ -4245,7 +4245,7 @@ export default function App() {
                   <span aria-hidden="true">·</span>
                   <span className={roomCode ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium'}>
                     {!roomCode
-                      ? 'Odottaa tunnelin nimeä (kirjoita nimi ja paina Yhdistä)'
+                      ? 'Waiting for tunnel name (enter a name and click Connect)'
                       : exeBridgeConnected
                       ? 'Windows .EXE Native Kernel Bridge Connected'
                       : localBusPeers.length > 0
@@ -4272,10 +4272,10 @@ export default function App() {
                       )
                     }
                     className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                    title="Downloads the High-DPI Standalone Windows P2P NAT-Punching & Kernel-Socket .EXE (v1.0 · STUN + UDP Hole Punching + Resumable Transfers)"
+                    title="Downloads the High-DPI Standalone Windows P2P NAT-Punching & Kernel-Socket .EXE (V1.01 · STUN + UDP Hole Punching + Resumable Transfers)"
                   >
                     <HardDriveDownload className="w-3.5 h-3.5" />
-                    Download Standalone P2P .EXE (v1.0)
+                    Download Standalone P2P .EXE (V1.01)
                   </button>
                 </div>
               </div>
@@ -4287,10 +4287,10 @@ export default function App() {
                   <CheckCircle2 className={`w-4 h-4 ${roomCode ? 'text-emerald-400' : 'text-amber-400'}`} />
                 </div>
                 <div className="mt-1.5 text-sm font-semibold text-slate-100 font-mono">
-                  {roomCode || 'Ei yhdistetty'}
+                  {roomCode || 'Not connected'}
                 </div>
                 <div className="mt-1 text-xs text-slate-400">
-                  Käyttäjiä huoneessa:{' '}
+                  Users in room:{' '}
                   <span className="font-mono text-slate-200 tabular-nums">
                     {roomCode ? Math.min(MAX_ROOM_PEERS, peers.filter((p) => !p.isLocalBridge).length + 1) : 0} / {MAX_ROOM_PEERS}
                   </span>
@@ -4362,14 +4362,14 @@ export default function App() {
 
                   <form onSubmit={handleJoinTunnel} className="space-y-2">
                     <label className="block text-xs font-medium text-slate-300">
-                      Tunnelin nimi (Kirjoita nimi ja paina Yhdistä)
+                      Tunnel Name (Enter a name and click Connect)
                     </label>
                     <div className="flex items-center gap-2">
                       <input
                         type="text"
                         value={joinCodeInput}
                         onChange={(e) => setJoinCodeInput(e.target.value)}
-                        placeholder="Kirjoita tunnelin nimi..."
+                        placeholder="Enter tunnel name..."
                         className="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg text-slate-100 font-mono placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                       />
                       <button
@@ -4377,16 +4377,16 @@ export default function App() {
                         disabled={!joinCodeInput.trim().replace(/[^a-zA-Z0-9-]/g, '')}
                         className="px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 disabled:opacity-45 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                       >
-                        Yhdistä
+                        Connect
                       </button>
                     </div>
                   </form>
 
                   <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-xs text-slate-400">Aktiivinen tunneli</div>
+                      <div className="text-xs text-slate-400">Active Tunnel</div>
                       <div className={`text-lg font-mono font-bold tracking-wide mt-0.5 truncate ${roomCode ? 'text-sky-400' : 'text-slate-500 text-sm'}`}>
-                        {roomCode || 'Ei yhdistetty — kirjoita tunnelin nimi yläpuolelle ja paina Yhdistä'}
+                        {roomCode || 'Not connected — enter a tunnel name above and click Connect'}
                       </div>
                     </div>
 
@@ -4433,7 +4433,7 @@ export default function App() {
                           onClick={handleDisconnectTunnel}
                           className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-red-300 bg-red-950/60 hover:bg-red-900/70 border border-red-800/50 rounded-md transition-colors cursor-pointer whitespace-nowrap"
                         >
-                          Katkaise
+                          Disconnect
                         </button>
                       </div>
                     )}
@@ -4443,7 +4443,7 @@ export default function App() {
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
                         <Users className="w-3.5 h-3.5 text-sky-400" />
-                        Oma käyttäjänimi huoneessa (max {MAX_ROOM_PEERS} käyttäjää)
+                        Your display name in room (max {MAX_ROOM_PEERS} users)
                       </label>
                     </div>
                     <input
@@ -4451,7 +4451,7 @@ export default function App() {
                       value={localDisplayName}
                       maxLength={28}
                       onChange={(e) => setLocalDisplayName(e.target.value)}
-                      placeholder="Esim. Matti-PC..."
+                      placeholder="e.g. Alex-PC..."
                       className="w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                     />
                     <label className="inline-flex items-center gap-2 pt-1 text-xs text-slate-300 cursor-pointer select-none">
@@ -4461,7 +4461,7 @@ export default function App() {
                         onChange={(e) => setAllowLocalExeBridge(e.target.checked)}
                         className="accent-sky-400 rounded cursor-pointer"
                       />
-                      <span>Yhdistä oman koneen .EXE-ohjelmaan (127.0.0.1)</span>
+                      <span>Connect to local machine .EXE app (127.0.0.1)</span>
                     </label>
                     {roomFullMessage && (
                       <div className="p-2.5 bg-red-950/60 border border-red-700/60 rounded-lg text-xs text-red-200 font-medium">
@@ -4557,15 +4557,15 @@ export default function App() {
 
                   <div className="pt-4 border-t border-slate-800 space-y-2.5">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400 font-medium">Huoneen käyttäjät ({peers.length + (roomCode ? 1 : 0)}/{MAX_ROOM_PEERS})</span>
+                      <span className="text-slate-400 font-medium">Room Users ({peers.length + (roomCode ? 1 : 0)}/{MAX_ROOM_PEERS})</span>
                       <span className="font-mono text-slate-300 tabular-nums">
-                        {peers.length} muuta
+                        {peers.length} {peers.length === 1 ? 'other' : 'others'}
                       </span>
                     </div>
 
                     {peers.length === 0 ? (
                       <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-lg text-xs text-slate-400">
-                        Ei muita käyttäjiä huoneessa vielä.
+                        No other users in room yet.
                       </div>
                     ) : (
                       <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
@@ -4599,7 +4599,7 @@ export default function App() {
                                     : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                                 }`}
                               >
-                                {isSelected ? 'Valittu' : 'Valitse'}
+                                {isSelected ? 'Selected' : 'Select'}
                               </button>
                             </div>
                           );
@@ -4624,7 +4624,7 @@ export default function App() {
                               <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                               <div className="min-w-0">
                                 <div className="text-xs font-semibold text-amber-200">
-                                  Saapuva tiedostonsiirto — vahvistus vaaditaan
+                                  Incoming File Transfer — Confirmation Required
                                 </div>
                                 <div className="text-xs text-slate-200 font-mono truncate mt-0.5">
                                   {req.name}{' '}
@@ -4633,8 +4633,8 @@ export default function App() {
                                   </span>
                                 </div>
                                 <div className="text-[11px] text-slate-400 mt-0.5">
-                                  Lähettäjä: {req.senderLabel}
-                                  {req.hasResume ? ' · Keskeytyneen siirron jatkaminen' : ''}
+                                  Sender: {req.senderLabel}
+                                  {req.hasResume ? ' · Resuming interrupted transfer' : ''}
                                 </div>
                               </div>
                             </div>
@@ -4645,21 +4645,21 @@ export default function App() {
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer"
                             >
                               <Check className="w-3.5 h-3.5" />
-                              Hyväksy
+                              Accept
                             </button>
                             <button
                               onClick={() => resolvePendingIncoming(req, 'accept_all')}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors cursor-pointer"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              Hyväksy kaikki
+                              Accept All
                             </button>
                             <button
                               onClick={() => resolvePendingIncoming(req, 'reject')}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-200 bg-red-950/70 hover:bg-red-900/80 border border-red-700/60 rounded-md transition-colors cursor-pointer"
                             >
                               <X className="w-3.5 h-3.5" />
-                              Hylkää
+                              Decline
                             </button>
                           </div>
                         </div>
@@ -4699,7 +4699,7 @@ export default function App() {
                           onChange={(e) => setAutoAcceptIncoming(e.target.checked)}
                           className="accent-emerald-400 rounded cursor-pointer"
                         />
-                        <span>Hyväksy saapuvat autom.</span>
+                        <span>Auto-accept incoming</span>
                       </label>
 
                       <button
@@ -4715,7 +4715,7 @@ export default function App() {
                   <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-2 text-xs font-medium text-slate-300 shrink-0">
                       <Users className="w-4 h-4 text-sky-400" />
-                      <span>Kenelle lähetetään:</span>
+                      <span>Send to:</span>
                     </div>
                     <select
                       value={selectedRecipientId}
@@ -4723,11 +4723,11 @@ export default function App() {
                       className="flex-1 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg text-sky-300 font-mono focus:outline-none focus:border-sky-400 cursor-pointer"
                     >
                       <option value="all">
-                        Kaikki huoneessa ({peers.length} muuta käyttäjää)
+                        Everyone in room ({peers.length} {peers.length === 1 ? 'other user' : 'other users'})
                       </option>
                       {peers.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.deviceLabel} ({p.clientType === 'exe' || p.clientType === 'local_exe' ? '.EXE' : 'Selain'})
+                          {p.deviceLabel} ({p.clientType === 'exe' || p.clientType === 'local_exe' ? '.EXE' : 'Browser'})
                         </option>
                       ))}
                     </select>
@@ -4736,7 +4736,7 @@ export default function App() {
                   <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-2 text-xs font-medium text-slate-300 shrink-0">
                       <Gauge className="w-4 h-4 text-sky-400" />
-                      <span>Max lähetysnopeus (MB/s):</span>
+                      <span>Max upload speed (MB/s):</span>
                     </div>
                     <div className="flex items-center gap-2.5 flex-1">
                       <input
@@ -4754,7 +4754,7 @@ export default function App() {
                         className="w-28 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg text-sky-300 font-mono focus:outline-none focus:border-sky-400"
                       />
                       <span className="text-[11px] text-slate-400">
-                        (0 = rajoittamaton · muuttuu heti kesken siirron)
+                        (0 = unlimited · applies immediately mid-transfer)
                       </span>
                     </div>
                   </div>
@@ -4807,11 +4807,16 @@ export default function App() {
                     />
                     <Upload className="w-8 h-8 text-sky-400 mx-auto mb-3" />
                     <div className="text-sm font-semibold text-slate-100">
-                      Vedä tiedostoja tai kansioita tähän lisätäksesi siirtojonoon
+                      Drag and drop files or folders here to add to transfer queue
                     </div>
                     <p className="text-xs text-slate-400 mt-1">
-                      Siirtää tiedostot järjestyksessä yksi kerrallaan · 10 GB+ tuki · AES-256-GCM
+                      Transfers files sequentially one by one · AES-256-GCM
                     </p>
+                    <div className="mt-2.5 mx-auto max-w-xl px-3 py-1.5 rounded-md bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300 font-mono leading-relaxed">
+                      <span className="text-sky-400 font-semibold">Max Single File:</span>{' '}
+                      Web App / Portable HTML: <span className="text-amber-300">~2 GB</span> (Browser RAM receive limit; sends larger to .EXE){' '}
+                      · Windows .EXE &lt;-&gt; .EXE: <span className="text-emerald-400">~2.6 TB (UDP) / Disk limit (TCP)</span>
+                    </div>
                     <div
                       className="mt-4 flex flex-wrap items-center justify-center gap-2.5"
                       onClick={(e) => e.stopPropagation()}
@@ -4822,7 +4827,7 @@ export default function App() {
                         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors cursor-pointer"
                       >
                         <Upload className="w-3.5 h-3.5" />
-                        + Lisää tiedosto(ja)
+                        + Add File(s)
                       </button>
                       <button
                         type="button"
@@ -4830,7 +4835,7 @@ export default function App() {
                         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md transition-colors cursor-pointer"
                       >
                         <FolderPlus className="w-3.5 h-3.5 text-sky-400" />
-                        + Lisää kansio
+                        + Add Folder
                       </button>
                     </div>
                   </div>
@@ -4840,7 +4845,7 @@ export default function App() {
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                         <span className="font-semibold text-slate-200 flex items-center gap-1.5">
                           <Clock className="w-3.5 h-3.5 text-sky-400" />
-                          Siirtojono ({uploadQueue.filter((q) => q.status === 'queued' || q.status === 'waiting_peer' || q.status === 'waiting_accept' || q.status === 'transferring' || q.status === 'paused').length} aktiivista / {uploadQueue.length} yhteensä)
+                          Transfer Queue ({uploadQueue.filter((q) => q.status === 'queued' || q.status === 'waiting_peer' || q.status === 'waiting_accept' || q.status === 'transferring' || q.status === 'paused').length} active / {uploadQueue.length} total)
                         </span>
                         <div className="flex items-center gap-2">
                           {uploadQueue.some((q) => q.status === 'queued' || q.status === 'waiting_peer' || q.status === 'transferring' || q.status === 'paused') && (
@@ -4856,12 +4861,12 @@ export default function App() {
                               {isTransferPaused ? (
                                 <>
                                   <Play className="w-3 h-3" />
-                                  Jatka
+                                  Resume
                                 </>
                               ) : (
                                 <>
                                   <Pause className="w-3 h-3" />
-                                  Pysäytä
+                                  Pause
                                 </>
                               )}
                             </button>
@@ -4883,7 +4888,7 @@ export default function App() {
                               className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
                             >
                               <Trash2 className="w-3 h-3" />
-                              Tyhjennä valmiit
+                              Clear Completed
                             </button>
                           )}
                         </div>
@@ -4920,20 +4925,20 @@ export default function App() {
                                 }`}
                               >
                                 {q.status === 'completed'
-                                  ? 'Valmis'
+                                  ? 'Completed'
                                   : q.status === 'rejected'
-                                  ? 'Hylätty'
+                                  ? 'Declined'
                                   : q.status === 'error'
-                                  ? 'Virhe'
+                                  ? 'Error'
                                   : q.status === 'waiting_accept'
-                                  ? 'Odottaa hyväksyntää'
+                                  ? 'Awaiting acceptance'
                                   : q.status === 'paused'
-                                  ? 'Pysäytetty'
+                                  ? 'Paused'
                                   : q.status === 'transferring'
-                                  ? 'Lähetetään...'
+                                  ? 'Sending...'
                                   : q.status === 'waiting_peer'
-                                  ? 'Odottaa peeriä'
-                                  : 'Jonossa'}
+                                  ? 'Waiting for peer'
+                                  : 'Queued'}
                               </span>
                               {q.status !== 'transferring' && q.status !== 'paused' && (
                                 <button
@@ -4943,7 +4948,7 @@ export default function App() {
                                     )
                                   }
                                   className="text-slate-500 hover:text-red-400 cursor-pointer"
-                                  title="Poista jonosta"
+                                  title="Remove from queue"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
@@ -4990,8 +4995,8 @@ export default function App() {
                                   </div>
                                   <div className="text-xs text-slate-400 mt-0.5">
                                     {item.direction === 'outgoing'
-                                      ? `Lähetetään → ${item.recipientLabel || 'Kaikki huoneessa'}`
-                                      : 'Vastaanotetaan'}{' '}
+                                      ? `Sending → ${item.recipientLabel || 'Everyone in room'}`
+                                      : 'Receiving'}{' '}
                                     ·{' '}
                                     <span className="font-mono tabular-nums text-slate-300">
                                       {formatBytes(item.bytesTransferred)} / {formatBytes(item.size)}
@@ -5015,11 +5020,11 @@ export default function App() {
                                     {item.status === 'completed'
                                       ? '100% · Verified'
                                       : item.status === 'rejected'
-                                      ? 'Hylätty'
+                                      ? 'Declined'
                                       : item.status === 'awaiting_acceptance'
-                                      ? 'Odottaa hyväksyntää...'
+                                      ? 'Awaiting acceptance...'
                                       : item.status === 'paused'
-                                      ? `Pysäytetty · ${pct}%`
+                                      ? `Paused · ${pct}%`
                                       : item.status === 'error'
                                       ? 'Interrupted / Paused'
                                       : `${pct}%`}
@@ -5040,12 +5045,12 @@ export default function App() {
                                         {item.status === 'paused' ? (
                                           <>
                                             <Play className="w-3 h-3" />
-                                            Jatka
+                                            Resume
                                           </>
                                         ) : (
                                           <>
                                             <Pause className="w-3 h-3" />
-                                            Pysäytä
+                                            Pause
                                           </>
                                         )}
                                       </button>
@@ -5108,7 +5113,7 @@ export default function App() {
                                     : `SHA-256: ${item.sha256.slice(0, 16)}...`}
                                 </span>
                                 <span>
-                                  Nopeus: <span className="text-sky-300">{formatSpeed(item.speedBps)}</span> · Keskinop: <span className="text-emerald-300">{formatSpeed(item.avgSpeedBps ?? item.speedBps)}</span> · Siirretty: {formatBytes(item.bytesTransferred)}/{formatBytes(item.size)}
+                                  Speed: <span className="text-sky-300">{formatSpeed(item.speedBps)}</span> · Avg: <span className="text-emerald-300">{formatSpeed(item.avgSpeedBps ?? item.speedBps)}</span> · Transferred: {formatBytes(item.bytesTransferred)}/{formatBytes(item.size)}
                                 </span>
                               </div>
                             </div>
@@ -5125,7 +5130,7 @@ export default function App() {
                       Encrypted Peer Scratchpad
                     </h2>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Salattu viestintä huoneen käyttäjille (Kohde: <span className="text-sky-300 font-mono">{getRecipientLabel(selectedRecipientId)}</span>).
+                      Encrypted messaging for room users (Target: <span className="text-sky-300 font-mono">{getRecipientLabel(selectedRecipientId)}</span>).
                     </p>
 
                     <form onSubmit={handleSendEncryptedNote} className="mt-3 flex gap-2">
@@ -5133,7 +5138,7 @@ export default function App() {
                         type="text"
                         value={noteInput}
                         onChange={(e) => setNoteInput(e.target.value)}
-                        placeholder={`Kirjoita salattu viesti kohteelle: ${getRecipientLabel(selectedRecipientId)}...`}
+                        placeholder={`Write an encrypted message for: ${getRecipientLabel(selectedRecipientId)}...`}
                         className="flex-1 px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
                       />
                       <button
@@ -5141,7 +5146,7 @@ export default function App() {
                         className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
                       >
                         <Send className="w-3.5 h-3.5" />
-                        Lähetä viesti
+                        Send Message
                       </button>
                     </form>
                   </div>

@@ -214,7 +214,7 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                           </span>
                         ) : item.status === 'paused' ? (
                           <span className="text-xs font-mono text-amber-400 tabular-nums">
-                            Pysäytetty · {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
+                            Paused · {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
                           </span>
                         ) : item.status === 'error' ? (
                           <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">

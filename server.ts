@@ -72,7 +72,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AetherTunnel v1.0 — Standalone Encrypted P2P File Transfer</title>
+  <title>AetherTunnel V1.01 — Standalone Encrypted P2P File Transfer</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet" />
   <style>
@@ -85,7 +85,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
   <div class="max-w-5xl mx-auto space-y-6">
     <header class="flex items-center justify-between pb-4 border-b border-slate-800">
       <div>
-        <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel v1.0 Standalone</span>
+        <span class="text-lg font-bold tracking-tight text-slate-100">AetherTunnel V1.01 Standalone</span>
         <span class="ml-3 text-xs text-emerald-400 font-mono">Resumable Binary WebRTC + Windows .EXE Wormhole + AES-256-GCM</span>
       </div>
       <div id="status-badge" class="text-xs font-mono text-amber-400">Initializing P2P Node...</div>
@@ -94,12 +94,12 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
     <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
       <div class="md:col-span-5 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
         <h2 class="text-base font-semibold">1. Wormhole Pairing Code</h2>
-        <p class="text-xs text-slate-400">Enter the same pairing code on both devices and click Yhdistä to establish a direct encrypted P2P tunnel.</p>
+        <p class="text-xs text-slate-400">Enter the same pairing code on both devices and click Connect to establish a direct encrypted P2P tunnel.</p>
         <div>
-          <label class="block text-xs text-slate-400 mb-1">Tunnelin nimi</label>
+          <label class="block text-xs text-slate-400 mb-1">Tunnel Name</label>
           <div class="flex gap-2">
-            <input id="room-input" type="text" value="${defaultRoom}" placeholder="Kirjoita tunnelin nimi..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
-            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Yhdistä</button>
+            <input id="room-input" type="text" value="${defaultRoom}" placeholder="Enter tunnel name..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
+            <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Connect</button>
           </div>
         </div>
 
@@ -107,11 +107,11 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span id="peer-presence-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-              <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">Ei toista peeriä huoneessa (No peer yet)</span>
+              <span id="peer-presence-title" class="text-xs font-semibold text-amber-300">No other peer in room yet (Waiting for peers)</span>
             </div>
-            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/8 KÄYTTÄJÄÄ</span>
+            <span id="peer-count-badge" class="px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">1/8 USERS</span>
           </div>
-          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Odotetaan muita käyttäjiä samalla tunnelinimellä (max 8)...</div>
+          <div id="peer-presence-sub" class="text-[11px] font-mono text-slate-400 mt-1">Waiting for other users on the same tunnel name (max 8)...</div>
         </div>
 
         <div>
@@ -135,25 +135,26 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       <div class="md:col-span-7 bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold">2. Encrypted File Transfer</h2>
-          <button id="pause-btn" type="button" class="px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer">Pysäytä</button>
+          <button id="pause-btn" type="button" class="px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer">Pause</button>
         </div>
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-950 border border-slate-800 rounded-lg">
-          <label for="target-peer-select" class="text-xs font-medium text-slate-300 whitespace-nowrap">Kenelle lähetetään:</label>
+          <label for="target-peer-select" class="text-xs font-medium text-slate-300 whitespace-nowrap">Send to:</label>
           <select id="target-peer-select" class="flex-1 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg font-mono text-sky-300">
-            <option value="*">Kaikki huoneessa (0 käyttäjää)</option>
+            <option value="*">Everyone in room (0 users)</option>
           </select>
         </div>
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-950 border border-slate-800 rounded-lg">
-          <label for="max-speed-input" class="text-xs font-medium text-slate-300 whitespace-nowrap">Max lähetysnopeus (MB/s):</label>
+          <label for="max-speed-input" class="text-xs font-medium text-slate-300 whitespace-nowrap">Max upload speed (MB/s):</label>
           <div class="flex items-center gap-2 flex-1">
             <input id="max-speed-input" type="text" inputmode="decimal" value="0" placeholder="0" class="w-28 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg font-mono text-sky-300" />
-            <span class="text-[11px] text-slate-400">(0 = rajoittamaton)</span>
+            <span class="text-[11px] text-slate-400">(0 = unlimited)</span>
           </div>
         </div>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
           <div class="text-xs text-slate-400 mt-1">Direct RTCPeerConnection + Windows .EXE Bridge · Resumable Transfers</div>
+          <div class="text-[11px] text-slate-400 mt-2 font-mono">Max single file: Browser / Portable ~2 GB (RAM) · Windows .EXE &lt;-&gt; .EXE ~2.6 TB (UDP) / Disk limit (TCP)</div>
         </label>
         <div id="transfer-list" class="space-y-2 max-h-64 overflow-y-auto text-xs">
           <div class="text-slate-500 text-center py-4">No transfers yet. Connect with a peer and select a file.</div>
@@ -190,10 +191,10 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       const btn = document.getElementById('pause-btn');
       if (btn) {
         if (transferPaused) {
-          btn.textContent = 'Jatka';
+          btn.textContent = 'Resume';
           btn.className = 'px-3 py-1.5 text-xs font-semibold bg-emerald-400 text-slate-950 rounded-lg hover:bg-emerald-300 cursor-pointer';
         } else {
-          btn.textContent = 'Pysäytä';
+          btn.textContent = 'Pause';
           btn.className = 'px-3 py-1.5 text-xs font-semibold bg-amber-950/70 text-amber-200 border border-amber-700/60 rounded-lg hover:bg-amber-900/80 cursor-pointer';
         }
       }
@@ -261,7 +262,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       sel.innerHTML = '';
       const allOpt = document.createElement('option');
       allOpt.value = '*';
-      allOpt.textContent = 'Kaikki huoneessa (' + activeList.length + ' käyttäjää)';
+      allOpt.textContent = 'Everyone in room (' + activeList.length + ' users)';
       sel.appendChild(allOpt);
       for (const p of activeList) {
         const opt = document.createElement('option');
@@ -290,23 +291,23 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         box.className = 'p-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping';
         title.className = 'text-xs font-semibold text-emerald-300';
-        title.textContent = peersMap.size + ' käyttäjää huoneessa! (Max ' + MAX_ROOM_PEERS + ')';
+        title.textContent = peersMap.size + ' user(s) in room! (Max ' + MAX_ROOM_PEERS + ')';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
-        badge.textContent = totalUsers + '/' + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
+        badge.textContent = totalUsers + '/' + MAX_ROOM_PEERS + ' USERS';
         sub.className = 'text-[11px] font-mono text-emerald-200/90 mt-1';
-        sub.textContent = 'Yhdistetty: ' + (peerLabel || (peersMap.size + ' peeriä')) + ' [' + roomCode + ']';
-        headerBadge.textContent = 'HUONE [' + roomCode + ']: ' + totalUsers + '/' + MAX_ROOM_PEERS + ' käyttäjää';
+        sub.textContent = 'Connected: ' + (peerLabel || (peersMap.size + ' peers')) + ' [' + roomCode + ']';
+        headerBadge.textContent = 'ROOM [' + roomCode + ']: ' + totalUsers + '/' + MAX_ROOM_PEERS + ' users';
         headerBadge.className = 'text-xs font-mono text-emerald-400 font-semibold';
       } else {
         box.className = 'p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 transition-colors';
         dot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse';
         title.className = 'text-xs font-semibold text-amber-300';
-        title.textContent = 'Ei toista käyttäjää huoneessa (Waiting for peers)';
+        title.textContent = 'No other peer in room yet (Waiting for peers)';
         badge.className = 'px-2 py-0.5 text-[10px] font-mono font-semibold rounded bg-amber-500/20 text-amber-300 border border-amber-500/30';
-        badge.textContent = (activeRoom ? '1/' : '0/') + MAX_ROOM_PEERS + ' KÄYTTÄJÄÄ';
+        badge.textContent = (activeRoom ? '1/' : '0/') + MAX_ROOM_PEERS + ' USERS';
         sub.className = 'text-[11px] font-mono text-slate-400 mt-1';
-        sub.textContent = 'Kuunnellaan huonetta [' + roomCode + '] — max ' + MAX_ROOM_PEERS + ' käyttäjää.';
-        headerBadge.textContent = activeRoom ? ('LISTENING ON [' + roomCode + '] · 1/' + MAX_ROOM_PEERS) : 'Odottaa tunnelin nimeä';
+        sub.textContent = 'Listening on room [' + roomCode + '] — max ' + MAX_ROOM_PEERS + ' users.';
+        headerBadge.textContent = activeRoom ? ('LISTENING ON [' + roomCode + '] · 1/' + MAX_ROOM_PEERS) : 'Waiting for tunnel name';
         headerBadge.className = 'text-xs font-mono text-amber-400';
       }
       syncTargetSelectorUi();
@@ -522,7 +523,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       }
 
       if (p.kind === 'browser:hello' || p.kind === 'browser:hello-ack' || p.kind === 'web:hello') {
-        const res = upsertRoomPeer(src, 'browser', p.displayName || ('Selain (' + src.slice(-6) + ')'));
+        const res = upsertRoomPeer(src, 'browser', p.displayName || ('Browser (' + src.slice(-6) + ')'));
         if (!res) return;
         updatePeerPresenceUi(true, res.peer.label, activeRoom);
         if (p.kind === 'browser:hello' && res.isNew) {
@@ -535,7 +536,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       }
 
       if (p.kind === 'webrtc:signal') {
-        const res = upsertRoomPeer(src, 'browser', 'Selain (' + src.slice(-6) + ')');
+        const res = upsertRoomPeer(src, 'browser', 'Browser (' + src.slice(-6) + ')');
         if (!res) return;
         const peerEntry = res.peer;
         (async () => {
@@ -681,7 +682,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       if (!code) {
         activeRoom = '';
         activeTopic = '';
-        document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+        document.getElementById('status-badge').textContent = 'Waiting for tunnel name — enter a name and click Connect';
         return;
       }
       const pass = document.getElementById('pass-input').value;
@@ -721,7 +722,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         }
       }
       if (peersMap.size > 0) {
-        updatePeerPresenceUi(true, peersMap.size + ' käyttäjää', activeRoom);
+        updatePeerPresenceUi(true, peersMap.size + ' users', activeRoom);
       } else if (pruned || peersMap.size === 0) {
         updatePeerPresenceUi(false, '', activeRoom);
       }
@@ -739,7 +740,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         : (peersMap.has(targetId) ? [peersMap.get(targetId)] : []);
 
       if (targetPeers.length === 0) {
-        renderStatus('Valittu vastaanottaja ei ole paikalla huoneessa "' + activeRoom + '".');
+        renderStatus('Selected recipient is not present in room "' + activeRoom + '".');
         return;
       }
 
@@ -786,7 +787,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
 
         for (let bStart = startChunk; bStart < totalChunks; bStart += batchSize) {
           if (transferPaused) {
-            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((bStart / totalChunks) * 100) + '%)');
+            renderStatus('Paused: ' + file.name + ' (' + Math.round((bStart / totalChunks) * 100) + '%)');
             await waitWhilePaused((ms) => { startedAt += ms; });
           }
           const bEnd = Math.min(totalChunks, bStart + batchSize);
@@ -850,7 +851,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
         for (let off = cIdx * cSize; off < file.size; off += cSize) {
           if (transferPaused) {
-            renderStatus('Pysäytetty: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '%)');
+            renderStatus('Paused: ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '%)');
             await waitWhilePaused((ms) => { startedAt += ms; });
           }
           const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
@@ -886,7 +887,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
     if (document.getElementById('room-input').value.trim()) {
       connectRoom();
     } else {
-      document.getElementById('status-badge').textContent = 'Odottaa tunnelin nimeä — kirjoita nimi ja paina Yhdistä';
+      document.getElementById('status-badge').textContent = 'Waiting for tunnel name — enter a name and click Connect';
     }
   </script>
 </body>
