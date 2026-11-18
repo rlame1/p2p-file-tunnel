@@ -143,6 +143,13 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
             <option value="*">Kaikki huoneessa (0 käyttäjää)</option>
           </select>
         </div>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-slate-950 border border-slate-800 rounded-lg">
+          <label for="max-speed-input" class="text-xs font-medium text-slate-300 whitespace-nowrap">Max lähetysnopeus (MB/s):</label>
+          <div class="flex items-center gap-2 flex-1">
+            <input id="max-speed-input" type="text" inputmode="decimal" value="0" placeholder="0" class="w-28 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg font-mono text-sky-300" />
+            <span class="text-[11px] text-slate-400">(0 = rajoittamaton)</span>
+          </div>
+        </div>
         <label class="block border-2 border-dashed border-slate-800 hover:border-sky-400 bg-slate-950/60 rounded-lg p-8 text-center cursor-pointer transition-colors">
           <input id="file-input" type="file" multiple class="hidden" />
           <div class="text-sm font-semibold text-slate-100">Click or Drop Files Here to Encrypt &amp; Stream</div>
@@ -199,6 +206,13 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         await new Promise(r => setTimeout(r, 100));
       }
       if (onPauseMs) onPauseMs(performance.now() - pStart);
+    }
+
+    function getMaxUploadLimitMBps() {
+      const el = document.getElementById('max-speed-input');
+      if (!el) return 0;
+      const parsed = parseFloat(String(el.value || '').trim().replace(',', '.'));
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
     }
 
     function buildMqttPacket(typeFlags, payload) {
@@ -733,6 +747,24 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       const bridgePeers = targetPeers.filter(p => !(p.dc && p.dc.readyState === 'open'));
 
       let startedAt = performance.now();
+      let paceEpochMs = performance.now();
+      async function paceOutgoingBytes(bytesSent) {
+        const limitMBps = getMaxUploadLimitMBps();
+        if (!limitMBps || limitMBps <= 0) {
+          paceEpochMs = performance.now();
+          return;
+        }
+        const bytesPerMs = Math.max(10.24, (limitMBps * 1024 * 1024) / 1000);
+        const durMs = bytesSent / bytesPerMs;
+        const now = performance.now();
+        if (paceEpochMs < now - 80) paceEpochMs = now - 80;
+        paceEpochMs += durMs;
+        while (getMaxUploadLimitMBps() > 0) {
+          const waitMs = paceEpochMs - performance.now();
+          if (waitMs <= 1) break;
+          await new Promise(r => setTimeout(r, Math.min(80, waitMs)));
+        }
+      }
 
       if (webrtcPeers.length > 0) {
         const chunkKb = parseInt(document.getElementById('chunk-select').value, 10) || 240;
@@ -785,6 +817,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
               }
               try { if (p.dc && p.dc.readyState === 'open') p.dc.send(frame.slice(0)); } catch {}
             }
+            await paceOutgoingBytes(chunkSize);
           }
 
           const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
@@ -831,6 +864,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
             data: btoa(bin)
           });
           cIdx++;
+          await paceOutgoingBytes(bytes.byteLength);
           const elapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
           const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
           renderStatus('Sending to ' + bp.label + ': ' + file.name + ' (' + Math.round((cIdx / totalChunks) * 100) + '% · ' + mbps + ' MB/s)');

@@ -26,6 +26,7 @@ import {
   Clock,
   Pause,
   Play,
+  Gauge,
 } from 'lucide-react';
 import {
   generateWormholeCode,
@@ -61,9 +62,9 @@ type ActiveTab = 'studio' | 'inspector' | 'diagnostics' | 'ledger';
 
 const WIRE_CHUNK_BYTES = 240 * 1024;
 const MAX_PARALLEL_LANES = 2; // Palautettu 2:een, kuten aiemmin todettiin
-const CHUNKS_PER_WAVE = 32;
-const HIGH_WATER_MARK = 16 * 1024 * 1024; // Palautettu 16 MB
-const LOW_WATER_MARK = 8 * 1024 * 1024;
+const CHUNKS_PER_WAVE = 48;
+const HIGH_WATER_MARK = 24 * 1024 * 1024; // Rennompi WebRTC-puskuri
+const LOW_WATER_MARK = 12 * 1024 * 1024;
 const MAX_ROOM_PEERS = 8;
 
 export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
@@ -199,6 +200,8 @@ export default function App() {
   isTransferPausedRef.current = isTransferPaused;
   const pausedTransferIdsRef = useRef<Set<string>>(new Set());
   const pauseResolversRef = useRef<Set<() => void>>(new Set());
+  const [maxUploadMBpsInput, setMaxUploadMBpsInput] = useState<string>('0');
+  const maxUploadMBpsRef = useRef<number>(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnsByPeerRef = useRef<Map<string, Map<number, RTCPeerConnection>>>(new Map());
@@ -605,11 +608,11 @@ export default function App() {
           filledCount * bufEntry.chunkSize
         );
         const winDt = (now - bufEntry.lastWindowAt) / 1000;
-        if (winDt >= 0.08 && bytesSoFar >= bufEntry.lastWindowBytes) {
+        if (winDt >= 0.35 && bytesSoFar >= bufEntry.lastWindowBytes) {
           const instBps = (bytesSoFar - bufEntry.lastWindowBytes) / winDt;
           bufEntry.smoothedLiveBps =
             bufEntry.smoothedLiveBps > 0
-              ? bufEntry.smoothedLiveBps * 0.6 + instBps * 0.4
+              ? bufEntry.smoothedLiveBps * 0.72 + instBps * 0.28
               : instBps;
           bufEntry.lastWindowAt = now;
           bufEntry.lastWindowBytes = bytesSoFar;
@@ -2608,9 +2611,9 @@ export default function App() {
             const now = performance.now();
             if (now - rxLastUiAt >= 80) {
               const winDt = (now - rxLastWinAt) / 1000;
-              if (winDt >= 0.08 && rxBytes >= rxLastWinBytes) {
+              if (winDt >= 0.35 && rxBytes >= rxLastWinBytes) {
                 const inst = (rxBytes - rxLastWinBytes) / winDt;
-                rxSmoothedBps = rxSmoothedBps > 0 ? rxSmoothedBps * 0.6 + inst * 0.4 : inst;
+                rxSmoothedBps = rxSmoothedBps > 0 ? rxSmoothedBps * 0.72 + inst * 0.28 : inst;
                 rxLastWinAt = now;
                 rxLastWinBytes = rxBytes;
               }
@@ -3248,10 +3251,10 @@ export default function App() {
         const now = performance.now();
         if (now - lastUiUpdateAt < 90) return;
         const winDt = (now - lastWindowAt) / 1000;
-        if (winDt >= 0.08 && bytesDone >= lastWindowBytes) {
+        if (winDt >= 0.35 && bytesDone >= lastWindowBytes) {
           const instBps = (bytesDone - lastWindowBytes) / winDt;
           smoothedLiveBps =
-            smoothedLiveBps > 0 ? smoothedLiveBps * 0.6 + instBps * 0.4 : instBps;
+            smoothedLiveBps > 0 ? smoothedLiveBps * 0.72 + instBps * 0.28 : instBps;
           lastWindowAt = now;
           lastWindowBytes = bytesDone;
         }
@@ -3273,6 +3276,25 @@ export default function App() {
               : t
           )
         );
+      };
+
+      let paceEpochMs = performance.now();
+      const paceOutgoingBytes = async (bytesSent: number) => {
+        const limitMBps = maxUploadMBpsRef.current;
+        if (!limitMBps || limitMBps <= 0) {
+          paceEpochMs = performance.now();
+          return;
+        }
+        const bytesPerMs = Math.max(10.24, (limitMBps * 1024 * 1024) / 1000);
+        const durationMs = bytesSent / bytesPerMs;
+        const now = performance.now();
+        if (paceEpochMs < now - 80) paceEpochMs = now - 80;
+        paceEpochMs += durationMs;
+        while (maxUploadMBpsRef.current > 0) {
+          const waitMs = paceEpochMs - performance.now();
+          if (waitMs <= 1) break;
+          await new Promise<void>((r) => window.setTimeout(r, Math.min(80, waitMs)));
+        }
       };
 
       const sendCloudBridgeFileToPeer = async (
@@ -3361,8 +3383,9 @@ export default function App() {
             Math.ceil((sentBytes / Math.max(1, file.size)) * totalChunks)
           );
           pushProgressUi(approxChunks, sentBytes);
+          await paceOutgoingBytes(bytes.byteLength);
 
-          if (chunkIdx % 8 === 0) {
+          if (chunkIdx % 24 === 0) {
             await new Promise<void>((resolve) => {
               const timer = window.setTimeout(() => {
                 cloudAckResolverRef.current = null;
@@ -3462,6 +3485,7 @@ export default function App() {
                 Math.ceil((sentBytes / Math.max(1, file.size)) * totalChunks)
               );
               pushProgressUi(approxChunks, sentBytes);
+              await paceOutgoingBytes(buf.byteLength);
             }
 
             if (exeWs.readyState === WebSocket.OPEN) {
@@ -3665,6 +3689,7 @@ export default function App() {
                   );
                   const wireBytesSent = Math.max(0, rawBytesQueued - bufferedInLanes);
                   pushProgressUi(chunksDone, wireBytesSent);
+                  await paceOutgoingBytes(WIRE_CHUNK_BYTES);
                 }
               } else if (
                 localBusRef.current &&
@@ -3694,6 +3719,7 @@ export default function App() {
                   const chunksDone = chunkIndex + 1;
                   const rawBytesQueued = Math.min(file.size, chunksDone * WIRE_CHUNK_BYTES);
                   pushProgressUi(chunksDone, rawBytesQueued);
+                  await paceOutgoingBytes(WIRE_CHUNK_BYTES);
                 }
               } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
@@ -3720,6 +3746,7 @@ export default function App() {
                   const chunksDone = chunkIndex + 1;
                   const rawBytesQueued = Math.min(file.size, chunksDone * WIRE_CHUNK_BYTES);
                   pushProgressUi(chunksDone, rawBytesQueued);
+                  await paceOutgoingBytes(WIRE_CHUNK_BYTES);
                 }
               }
             }
@@ -4106,30 +4133,37 @@ export default function App() {
       )
     );
 
-    void sendSingleFile(nextItem.file, {
-      displayName: nextItem.displayName,
-      queueItemId: nextItem.id,
-      targetPeerId: nextItem.targetPeerId || 'all',
-      targetLabel: nextItem.targetLabel,
-    }).then((result) => {
-      queueProcessingRef.current = false;
-      setUploadQueue((prev) =>
-        prev.map((q) =>
-          q.id === nextItem.id
-            ? {
-                ...q,
-                status: result,
-                errorMessage:
-                  result === 'rejected'
-                    ? 'Hylätty vastaanottajalla'
-                    : result === 'error'
-                    ? 'Siirtovirhe'
-                    : undefined,
-              }
-            : q
-        )
-      );
-    });
+    (async () => {
+      let finalStatus: 'completed' | 'rejected' | 'error' = 'error';
+      try {
+        finalStatus = await sendSingleFile(nextItem.file, {
+          displayName: nextItem.displayName,
+          queueItemId: nextItem.id,
+          targetPeerId: nextItem.targetPeerId || 'all',
+          targetLabel: nextItem.targetLabel,
+        });
+      } catch {
+        finalStatus = 'error';
+      } finally {
+        queueProcessingRef.current = false;
+        setUploadQueue((prev) =>
+          prev.map((q) =>
+            q.id === nextItem.id
+              ? {
+                  ...q,
+                  status: finalStatus,
+                  errorMessage:
+                    finalStatus === 'rejected'
+                      ? 'Hylätty vastaanottajalla'
+                      : finalStatus === 'error'
+                      ? 'Siirtovirhe'
+                      : undefined,
+                }
+              : q
+          )
+        );
+      }
+    })();
   }, [uploadQueue, isPeerConnected, isTransferPaused, sendSingleFile, peers]);
 
   return (
@@ -4697,6 +4731,32 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-300 shrink-0">
+                      <Gauge className="w-4 h-4 text-sky-400" />
+                      <span>Max lähetysnopeus (MB/s):</span>
+                    </div>
+                    <div className="flex items-center gap-2.5 flex-1">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={maxUploadMBpsInput}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setMaxUploadMBpsInput(raw);
+                          const parsed = parseFloat(raw.trim().replace(',', '.'));
+                          maxUploadMBpsRef.current =
+                            Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+                        }}
+                        placeholder="0"
+                        className="w-28 px-3 py-1.5 text-xs bg-slate-900 border border-slate-700 rounded-lg text-sky-300 font-mono focus:outline-none focus:border-sky-400"
+                      />
+                      <span className="text-[11px] text-slate-400">
+                        (0 = rajoittamaton · muuttuu heti kesken siirron)
+                      </span>
+                    </div>
                   </div>
 
                   <div
