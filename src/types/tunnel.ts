@@ -38,6 +38,7 @@ export interface TransferItem {
     | 'verifying'
     | 'completed'
     | 'rejected'
+    | 'cancelled'
     | 'error';
   sha256: string;
   verified: boolean;
@@ -50,6 +51,8 @@ export interface TransferItem {
   queueItemId?: string;
   recipientId?: string;
   recipientLabel?: string;
+  pausedBy?: 'local' | 'remote';
+  cancelledBy?: 'local' | 'remote';
 }
 
 export interface IceCandidateRecord {

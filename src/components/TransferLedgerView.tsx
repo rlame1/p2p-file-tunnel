@@ -8,6 +8,9 @@ import {
   ArrowDownLeft,
   Trash2,
   FileText,
+  Pause,
+  Play,
+  Square,
 } from 'lucide-react';
 import { TransferItem } from '../types/tunnel';
 import { formatBytes, formatSpeed } from '../utils/crypto';
@@ -16,12 +19,18 @@ interface TransferLedgerViewProps {
   transfers: TransferItem[];
   onClearCompleted: () => void;
   onSwitchToStudio: () => void;
+  onPauseTransfer?: (transferId: string, queueItemId?: string) => void;
+  onResumeTransfer?: (transferId: string, queueItemId?: string) => void;
+  onCancelTransfer?: (transferId: string, direction: 'outgoing' | 'incoming', queueItemId?: string) => void;
 }
 
 export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
   transfers,
   onClearCompleted,
   onSwitchToStudio,
+  onPauseTransfer,
+  onResumeTransfer,
+  onCancelTransfer,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [directionFilter, setDirectionFilter] = useState<'all' | 'outgoing' | 'incoming'>('all');
@@ -197,7 +206,7 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                       {item.sha256 ? `${item.sha256.slice(0, 16)}...${item.sha256.slice(-8)}` : 'Computing...'}
                     </td>
                     <td className="py-3.5 px-6 text-right">
-                      <div className="inline-flex items-center justify-end gap-3">
+                      <div className="inline-flex items-center justify-end gap-2">
                         {item.status === 'completed' && item.verified ? (
                           <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-medium">
                             <CheckCircle2 className="w-3.5 h-3.5" />
@@ -208,13 +217,18 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                             <AlertCircle className="w-3.5 h-3.5" />
                             Declined
                           </span>
+                        ) : item.status === 'cancelled' ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-rose-400 font-medium" title={item.errorMessage}>
+                            <Square className="w-3 h-3 fill-current" />
+                            {item.cancelledBy === 'remote' ? 'Stopped by peer' : 'Stopped'}
+                          </span>
                         ) : item.status === 'awaiting_acceptance' ? (
                           <span className="text-xs font-mono text-amber-300">
                             Awaiting approval...
                           </span>
                         ) : item.status === 'paused' ? (
                           <span className="text-xs font-mono text-amber-400 tabular-nums">
-                            Paused · {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
+                            {item.pausedBy === 'remote' ? 'Paused by peer' : 'Paused'} · {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
                           </span>
                         ) : item.status === 'error' ? (
                           <span className="inline-flex items-center gap-1 text-xs text-red-400 font-medium">
@@ -226,6 +240,47 @@ export const TransferLedgerView: React.FC<TransferLedgerViewProps> = ({
                             {Math.round((item.transferredChunks / Math.max(1, item.totalChunks)) * 100)}%
                           </span>
                         )}
+
+                        {item.status === 'transferring' && onPauseTransfer && (
+                          <button
+                            type="button"
+                            onClick={() => onPauseTransfer(item.id, item.queueItemId)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-200 bg-amber-950/70 hover:bg-amber-900/80 border border-amber-700/60 rounded transition-colors cursor-pointer"
+                            title="Pause transfer"
+                          >
+                            <Pause className="w-3 h-3" />
+                            Pause
+                          </button>
+                        )}
+
+                        {item.status === 'paused' && onResumeTransfer && (
+                          <button
+                            type="button"
+                            onClick={() => onResumeTransfer(item.id, item.queueItemId)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded transition-colors cursor-pointer"
+                            title="Resume transfer"
+                          >
+                            <Play className="w-3 h-3" />
+                            Resume
+                          </button>
+                        )}
+
+                        {(item.status === 'transferring' ||
+                          item.status === 'paused' ||
+                          item.status === 'awaiting_acceptance') &&
+                          onCancelTransfer && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onCancelTransfer(item.id, item.direction, item.queueItemId)
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-rose-200 bg-rose-950/70 hover:bg-rose-900/80 border border-rose-700/60 rounded transition-colors cursor-pointer"
+                              title="Stop transfer"
+                            >
+                              <Square className="w-3 h-3 fill-current" />
+                              Stop
+                            </button>
+                          )}
 
                         {item.downloadUrl && (
                           <a

@@ -26,6 +26,7 @@ import {
   Clock,
   Pause,
   Play,
+  Square,
   Gauge,
 } from 'lucide-react';
 import {
@@ -42,6 +43,7 @@ import {
   computeSha256Hex,
   formatBytes,
   formatSpeed,
+  arrayBufferToBase64,
 } from './utils/crypto';
 import {
   TransportStrategy,
@@ -78,6 +80,15 @@ export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
 ];
 
 interface IncomingFileBuffer {
@@ -100,6 +111,9 @@ interface IncomingFileBuffer {
   initialBytes: number;
   awaitingAcceptance: boolean;
   rejected: boolean;
+  paused: boolean;
+  pausedStartedAt: number;
+  cancelled: boolean;
 }
 
 interface PendingIncomingRequest {
@@ -127,6 +141,7 @@ interface QueuedUploadItem {
     | 'paused'
     | 'completed'
     | 'rejected'
+    | 'cancelled'
     | 'error';
   errorMessage?: string;
 }
@@ -151,6 +166,7 @@ export default function App() {
   const [passphrase, setPassphrase] = useState<string>('');
   const [keyFingerprint, setKeyFingerprint] = useState<string>('Deriving...');
   const cryptoKeyRef = useRef<CryptoKey | null>(null);
+  const keyDerivationPromiseRef = useRef<Promise<CryptoKey | null> | null>(null);
 
   const [peerId] = useState<string>(
     () => `peer-${Math.random().toString(36).slice(2, 9)}`
@@ -205,7 +221,34 @@ export default function App() {
   const isTransferPausedRef = useRef<boolean>(false);
   isTransferPausedRef.current = isTransferPaused;
   const pausedTransferIdsRef = useRef<Set<string>>(new Set());
+  const remotePausedTransferIdsRef = useRef<Set<string>>(new Set());
+  const pausedIncomingIdsRef = useRef<Set<string>>(new Set());
+  const cancelledTransferIdsRef = useRef<Set<string>>(new Set());
+  const cancelledQueueIdsRef = useRef<Set<string>>(new Set());
+  const activeFileIdsByQueueIdRef = useRef<Map<string, Set<string>>>(new Map());
   const pauseResolversRef = useRef<Set<() => void>>(new Set());
+  const cancelHandlersRef = useRef<Map<string, () => void>>(new Map());
+  const transferMetaByFileIdRef = useRef<
+    Map<
+      string,
+      {
+        targetPeerId: string;
+        name: string;
+        size: number;
+        queueItemId?: string;
+      }
+    >
+  >(new Map());
+  const incomingControlHandlersRef = useRef<
+    Map<
+      string,
+      {
+        pause: (by: 'local' | 'remote') => void;
+        resume: (by: 'local' | 'remote') => void;
+        cancel: (by: 'local' | 'remote') => void;
+      }
+    >
+  >(new Map());
   const [maxUploadMBpsInput, setMaxUploadMBpsInput] = useState<string>('0');
   const maxUploadMBpsRef = useRef<number>(0);
 
@@ -312,109 +355,36 @@ export default function App() {
     }
   }, []);
 
-  const toggleGlobalTransferPause = useCallback(() => {
-    const nextPaused = !isTransferPausedRef.current;
-    isTransferPausedRef.current = nextPaused;
-    setIsTransferPaused(nextPaused);
-    if (!nextPaused) {
-      pausedTransferIdsRef.current.clear();
-      setTransfers((prev) =>
-        prev.map((t) =>
-          t.direction === 'outgoing' && t.status === 'paused'
-            ? { ...t, status: 'transferring' }
-            : t
-        )
-      );
-      setUploadQueue((prev) =>
-        prev.map((q) =>
-          q.status === 'paused' ? { ...q, status: 'transferring' } : q
-        )
-      );
-      wakePauseWaiters();
-    } else {
-      setTransfers((prev) =>
-        prev.map((t) =>
-          t.direction === 'outgoing' && t.status === 'transferring'
-            ? { ...t, status: 'paused', speedBps: 0 }
-            : t
-        )
-      );
-      setUploadQueue((prev) =>
-        prev.map((q) =>
-          q.status === 'transferring' ? { ...q, status: 'paused' } : q
-        )
-      );
-    }
-  }, [wakePauseWaiters]);
-
-  const toggleItemTransferPause = useCallback(
-    (transferId: string, queueItemId?: string) => {
-      const currentlyPaused =
-        isTransferPausedRef.current ||
-        pausedTransferIdsRef.current.has(transferId);
-      if (currentlyPaused) {
-        pausedTransferIdsRef.current.delete(transferId);
-        if (isTransferPausedRef.current) {
-          isTransferPausedRef.current = false;
-          setIsTransferPaused(false);
-        }
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transferId && t.status === 'paused'
-              ? { ...t, status: 'transferring' }
-              : t
-          )
-        );
-        if (queueItemId) {
-          setUploadQueue((prev) =>
-            prev.map((q) =>
-              q.id === queueItemId && q.status === 'paused'
-                ? { ...q, status: 'transferring' }
-                : q
-            )
-          );
-        }
-        wakePauseWaiters();
-      } else {
-        pausedTransferIdsRef.current.add(transferId);
-        setTransfers((prev) =>
-          prev.map((t) =>
-            t.id === transferId && t.status === 'transferring'
-              ? { ...t, status: 'paused', speedBps: 0 }
-              : t
-          )
-        );
-        if (queueItemId) {
-          setUploadQueue((prev) =>
-            prev.map((q) =>
-              q.id === queueItemId && q.status === 'transferring'
-                ? { ...q, status: 'paused' }
-                : q
-            )
-          );
-        }
-      }
-    },
-    [wakePauseWaiters]
-  );
-
   const waitIfTransferPaused = useCallback(
     async (
       fileId: string,
       queueItemId?: string,
       onResumed?: (pausedMs: number) => void
-    ): Promise<void> => {
+    ): Promise<boolean> => {
+      if (
+        cancelledTransferIdsRef.current.has(fileId) ||
+        (queueItemId && cancelledQueueIdsRef.current.has(queueItemId))
+      ) {
+        return false;
+      }
       if (
         !isTransferPausedRef.current &&
-        !pausedTransferIdsRef.current.has(fileId)
+        !pausedTransferIdsRef.current.has(fileId) &&
+        !remotePausedTransferIdsRef.current.has(fileId)
       ) {
-        return;
+        return true;
       }
       const pauseStarted = performance.now();
+      const pausedByRemote = remotePausedTransferIdsRef.current.has(fileId);
       setTransfers((prev) =>
         prev.map((t) =>
           t.id === fileId && t.status === 'transferring'
-            ? { ...t, status: 'paused', speedBps: 0 }
+            ? {
+                ...t,
+                status: 'paused',
+                pausedBy: pausedByRemote ? 'remote' : 'local',
+                speedBps: 0,
+              }
             : t
         )
       );
@@ -429,8 +399,11 @@ export default function App() {
       }
 
       while (
-        isTransferPausedRef.current ||
-        pausedTransferIdsRef.current.has(fileId)
+        !cancelledTransferIdsRef.current.has(fileId) &&
+        !(queueItemId && cancelledQueueIdsRef.current.has(queueItemId)) &&
+        (isTransferPausedRef.current ||
+          pausedTransferIdsRef.current.has(fileId) ||
+          remotePausedTransferIdsRef.current.has(fileId))
       ) {
         await new Promise<void>((resolve) => {
           let settled = false;
@@ -446,10 +419,17 @@ export default function App() {
         });
       }
 
+      if (
+        cancelledTransferIdsRef.current.has(fileId) ||
+        (queueItemId && cancelledQueueIdsRef.current.has(queueItemId))
+      ) {
+        return false;
+      }
+
       setTransfers((prev) =>
         prev.map((t) =>
           t.id === fileId && t.status === 'paused'
-            ? { ...t, status: 'transferring' }
+            ? { ...t, status: 'transferring', pausedBy: undefined }
             : t
         )
       );
@@ -463,6 +443,7 @@ export default function App() {
         );
       }
       onResumed?.(performance.now() - pauseStarted);
+      return true;
     },
     []
   );
@@ -471,16 +452,19 @@ export default function App() {
     const clean = roomCode.trim();
     if (!clean) {
       cryptoKeyRef.current = null;
+      keyDerivationPromiseRef.current = null;
       setKeyFingerprint('Waiting for tunnel name...');
       return;
     }
     let cancelled = false;
-    deriveTunnelKey(clean, passphrase).then(({ key, fingerprint }) => {
+    const p = deriveTunnelKey(clean, passphrase).then(({ key, fingerprint }) => {
       if (!cancelled) {
         cryptoKeyRef.current = key;
         setKeyFingerprint(fingerprint);
       }
+      return key;
     });
+    keyDerivationPromiseRef.current = p;
     return () => {
       cancelled = true;
     };
@@ -727,9 +711,13 @@ export default function App() {
         localBusRef.current.postMessage({ type: 'bus:packet', packet: replyPkt });
       } catch {}
     }
-    if (sendCloudCandidateRef.current && cloudWebPeersRef.current.length > 0) {
-      for (const pDst of cloudWebPeersRef.current) {
-        sendCloudCandidateRef.current(pDst, { kind: 'browser:packet', packet: replyPkt });
+    if (sendCloudCandidateRef.current) {
+      if (cloudWebPeersRef.current.length > 0) {
+        for (const pDst of cloudWebPeersRef.current) {
+          sendCloudCandidateRef.current(pDst, { kind: 'browser:packet', packet: replyPkt });
+        }
+      } else {
+        sendCloudCandidateRef.current('*', { kind: 'browser:packet', packet: replyPkt });
       }
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -741,7 +729,14 @@ export default function App() {
 
   const finalizeIncomingBufferIfComplete = useCallback(
     (bufEntry: IncomingFileBuffer) => {
-      if (bufEntry.rejected || bufEntry.awaitingAcceptance) return false;
+      if (
+        bufEntry.rejected ||
+        bufEntry.cancelled ||
+        bufEntry.awaitingAcceptance ||
+        bufEntry.paused
+      ) {
+        return false;
+      }
       let filledCount = 0;
       for (let i = 0; i < bufEntry.totalChunks; i++) {
         if (bufEntry.receivedChunks[i] !== undefined) {
@@ -794,6 +789,7 @@ export default function App() {
                 verified: true,
                 downloadUrl: url,
                 completedAt: Date.now(),
+                pausedBy: undefined,
               }
             : item
         )
@@ -813,6 +809,7 @@ export default function App() {
       numIdToFileIdRef.current.delete(bufEntry.transferNumId);
       decryptionErrorReportedRef.current.delete(fileId);
       lastRxProgressEmitAtRef.current.delete(fileId);
+      pausedIncomingIdsRef.current.delete(fileId);
       setIncomingFileAlert(null);
       return true;
     },
@@ -825,7 +822,7 @@ export default function App() {
       chunkIndex: number,
       decryptedChunk: ArrayBuffer
     ) => {
-      if (bufEntry.rejected) return;
+      if (bufEntry.rejected || bufEntry.cancelled) return;
       if (chunkIndex >= 0 && chunkIndex < bufEntry.totalChunks) {
         if (bufEntry.receivedChunks[chunkIndex] === undefined) {
           bufEntry.receivedChunks[chunkIndex] = decryptedChunk;
@@ -833,7 +830,7 @@ export default function App() {
         }
       }
 
-      if (bufEntry.awaitingAcceptance) {
+      if (bufEntry.awaitingAcceptance || bufEntry.paused) {
         return;
       }
 
@@ -904,7 +901,10 @@ export default function App() {
       rawBuffer: ArrayBuffer,
       sourceTransport?: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)'
     ) => {
-      const key = cryptoKeyRef.current;
+      let key = cryptoKeyRef.current;
+      if (!key && keyDerivationPromiseRef.current) {
+        key = await keyDerivationPromiseRef.current;
+      }
       if (!key || rawBuffer.byteLength < 24) return;
 
       const frameBuffer = rawBuffer.slice(0);
@@ -925,8 +925,9 @@ export default function App() {
         }
         return;
       }
+      if (cancelledTransferIdsRef.current.has(fileId)) return;
       const bufEntry = incomingBuffersRef.current.get(fileId);
-      if (!bufEntry || bufEntry.receivedChunks[chunkIndex] !== undefined) {
+      if (!bufEntry || bufEntry.rejected || bufEntry.cancelled || bufEntry.receivedChunks[chunkIndex] !== undefined) {
         return;
       }
 
@@ -1028,8 +1029,7 @@ export default function App() {
       packet: any,
       sourceTransport: 'WebRTC Direct (UDP/DTLS)' | 'Encrypted WS Relay (TCP/443)'
     ) => {
-      const key = cryptoKeyRef.current;
-      if (!key) return;
+      if (!roomCodeRef.current.trim()) return;
 
       if (packet instanceof ArrayBuffer) {
         if (handleRawBinaryFrame(packet, sourceTransport)) return;
@@ -1134,6 +1134,184 @@ export default function App() {
         return;
       }
 
+      if (packet.kind === 'file:pause' && packet.fileId) {
+        const fidStr = String(packet.fileId);
+        const txMeta = transferMetaByFileIdRef.current.get(fidStr);
+        if (txMeta) {
+          remotePausedTransferIdsRef.current.add(fidStr);
+          pausedTransferIdsRef.current.add(fidStr);
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === fidStr && t.direction === 'outgoing' && (t.status === 'transferring' || t.status === 'awaiting_acceptance')
+                ? { ...t, status: 'paused', pausedBy: 'remote', speedBps: 0 }
+                : t
+            )
+          );
+          if (txMeta.queueItemId) {
+            setUploadQueue((prev) =>
+              prev.map((q) =>
+                q.id === txMeta.queueItemId && q.status === 'transferring'
+                  ? { ...q, status: 'paused' }
+                  : q
+              )
+            );
+          }
+        }
+        const rxHandler = incomingControlHandlersRef.current.get(fidStr);
+        if (rxHandler) {
+          rxHandler.pause('remote');
+        }
+        const bufEntry = incomingBuffersRef.current.get(fidStr);
+        if (bufEntry && !bufEntry.rejected && !bufEntry.cancelled) {
+          if (!bufEntry.paused) {
+            bufEntry.paused = true;
+            bufEntry.pausedStartedAt = performance.now();
+          }
+          pausedIncomingIdsRef.current.add(fidStr);
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fidStr && item.direction === 'incoming' && item.status === 'transferring'
+                ? { ...item, status: 'paused', pausedBy: 'remote', speedBps: 0 }
+                : item
+            )
+          );
+        }
+        return;
+      }
+
+      if (packet.kind === 'file:resume' && packet.fileId) {
+        const fidStr = String(packet.fileId);
+        const txMeta = transferMetaByFileIdRef.current.get(fidStr);
+        if (txMeta) {
+          remotePausedTransferIdsRef.current.delete(fidStr);
+          pausedTransferIdsRef.current.delete(fidStr);
+          if (isTransferPausedRef.current) {
+            isTransferPausedRef.current = false;
+            setIsTransferPaused(false);
+          }
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === fidStr && t.direction === 'outgoing' && t.status === 'paused'
+                ? { ...t, status: 'transferring', pausedBy: undefined }
+                : t
+            )
+          );
+          if (txMeta.queueItemId) {
+            setUploadQueue((prev) =>
+              prev.map((q) =>
+                q.id === txMeta.queueItemId && q.status === 'paused'
+                  ? { ...q, status: 'transferring' }
+                  : q
+              )
+            );
+          }
+          wakePauseWaiters();
+        }
+        const rxHandler = incomingControlHandlersRef.current.get(fidStr);
+        if (rxHandler) {
+          rxHandler.resume('remote');
+        }
+        const bufEntry = incomingBuffersRef.current.get(fidStr);
+        if (bufEntry && !bufEntry.rejected && !bufEntry.cancelled) {
+          if (bufEntry.paused) {
+            const now = performance.now();
+            if (bufEntry.pausedStartedAt > 0) {
+              bufEntry.startedAt += Math.max(0, now - bufEntry.pausedStartedAt);
+              bufEntry.pausedStartedAt = 0;
+            }
+            bufEntry.lastWindowAt = now;
+            bufEntry.lastWindowBytes = Math.min(bufEntry.size, bufEntry.receivedCount * bufEntry.chunkSize);
+            bufEntry.smoothedLiveBps = 0;
+            bufEntry.paused = false;
+          }
+          pausedIncomingIdsRef.current.delete(fidStr);
+          setTransfers((prev) =>
+            prev.map((item) =>
+              item.id === fidStr && item.direction === 'incoming' && item.status === 'paused'
+                ? { ...item, status: 'transferring', pausedBy: undefined }
+                : item
+            )
+          );
+          finalizeIncomingBufferIfComplete(bufEntry);
+        }
+        return;
+      }
+
+      if ((packet.kind === 'file:cancel' || packet.kind === 'exe:file-cancel' || packet.kind === 'browser:file-cancel') && packet.fileId) {
+        const fidStr = String(packet.fileId);
+        cancelledTransferIdsRef.current.add(fidStr);
+        pausedTransferIdsRef.current.delete(fidStr);
+        remotePausedTransferIdsRef.current.delete(fidStr);
+        pausedIncomingIdsRef.current.delete(fidStr);
+
+        const txMeta = transferMetaByFileIdRef.current.get(fidStr);
+        if (txMeta) {
+          const cancelCb = cancelHandlersRef.current.get(fidStr);
+          if (cancelCb) {
+            cancelHandlersRef.current.delete(fidStr);
+            cancelCb();
+          }
+          wakePauseWaiters();
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === fidStr && t.direction === 'outgoing'
+                ? {
+                    ...t,
+                    status: 'cancelled',
+                    speedBps: 0,
+                    cancelledBy: 'remote',
+                    errorMessage: 'Stopped by receiver',
+                  }
+                : t
+            )
+          );
+          if (txMeta.queueItemId) {
+            setUploadQueue((prev) =>
+              prev.map((q) =>
+                q.id === txMeta.queueItemId && q.status !== 'completed'
+                  ? { ...q, status: 'cancelled', errorMessage: 'Stopped by receiver' }
+                  : q
+              )
+            );
+          }
+        }
+
+        setPendingIncomingQueue((prev) => prev.filter((p) => p.id !== fidStr));
+        const rxHandler = incomingControlHandlersRef.current.get(fidStr);
+        if (rxHandler) {
+          rxHandler.cancel('remote');
+        }
+        const bufEntry = incomingBuffersRef.current.get(fidStr);
+        if (bufEntry) {
+          bufEntry.cancelled = true;
+          bufEntry.rejected = true;
+          bufEntry.awaitingAcceptance = false;
+          bufEntry.paused = false;
+          bufEntry.receivedChunks.length = 0;
+          incomingBuffersRef.current.delete(fidStr);
+          resumeBuffersByKeyRef.current.delete(`${bufEntry.name}::${bufEntry.size}`);
+          numIdToFileIdRef.current.delete(bufEntry.transferNumId);
+          orphanChunksRef.current.delete(bufEntry.transferNumId);
+          decryptionErrorReportedRef.current.delete(fidStr);
+          lastRxProgressEmitAtRef.current.delete(fidStr);
+          setIncomingFileAlert(null);
+        }
+        setTransfers((prev) =>
+          prev.map((item) =>
+            item.id === fidStr && item.direction === 'incoming'
+              ? {
+                  ...item,
+                  status: 'cancelled',
+                  speedBps: 0,
+                  cancelledBy: 'remote',
+                  errorMessage: 'Stopped by sender',
+                }
+              : item
+          )
+        );
+        return;
+      }
+
       if (packet.kind === 'file:meta') {
         const {
           fileId,
@@ -1146,6 +1324,10 @@ export default function App() {
           sha256,
         } = packet;
 
+        if (cancelledTransferIdsRef.current.has(fileId)) {
+          return;
+        }
+
         const numId =
           typeof transferNumId === 'number' ? transferNumId : 1001;
         const resumeKey = `${name}::${size}`;
@@ -1156,7 +1338,8 @@ export default function App() {
         if (
           existingSameFile &&
           existingSameFile.totalChunks === totalChunks &&
-          !existingSameFile.rejected
+          !existingSameFile.rejected &&
+          !existingSameFile.cancelled
         ) {
           numIdToFileIdRef.current.set(numId, fileId);
           if (sourceTransport === 'WebRTC Direct (UDP/DTLS)' && existingSameFile.transportUsed !== sourceTransport) {
@@ -1206,7 +1389,8 @@ export default function App() {
           existingCheckpoint.totalChunks === totalChunks &&
           existingCheckpoint.receivedCount > 0 &&
           existingCheckpoint.receivedCount < totalChunks &&
-          !existingCheckpoint.rejected
+          !existingCheckpoint.rejected &&
+          !existingCheckpoint.cancelled
         ) {
           if (existingCheckpoint.id !== fileId) {
             incomingBuffersRef.current.delete(existingCheckpoint.id);
@@ -1217,6 +1401,8 @@ export default function App() {
           existingCheckpoint.lastWindowAt = nowMs;
           existingCheckpoint.startedAt = nowMs;
           existingCheckpoint.smoothedLiveBps = 0;
+          existingCheckpoint.paused = false;
+          existingCheckpoint.pausedStartedAt = 0;
           activeBuf = existingCheckpoint;
 
           while (
@@ -1248,6 +1434,9 @@ export default function App() {
             initialBytes: 0,
             awaitingAcceptance: false,
             rejected: false,
+            paused: false,
+            pausedStartedAt: 0,
+            cancelled: false,
           };
           resumeBuffersByKeyRef.current.set(resumeKey, activeBuf);
         }
@@ -1303,7 +1492,13 @@ export default function App() {
                 const ohv = new DataView(orphanBuf);
                 const oChunkIndex = ohv.getUint32(8, false);
                 if (bufEntry.receivedChunks[oChunkIndex] === undefined) {
-                  void decryptChunkBinaryFrame(key, orphanBuf)
+                  void (cryptoKeyRef.current
+                    ? Promise.resolve(cryptoKeyRef.current)
+                    : keyDerivationPromiseRef.current || Promise.resolve(null)
+                  ).then((k) => {
+                    if (!k) throw new Error('Missing tunnel key');
+                    return decryptChunkBinaryFrame(k, orphanBuf);
+                  })
                     .then(({ plainBuffer }) => {
                       recordDecryptedChunk(bufEntry, oChunkIndex, plainBuffer);
                     })
@@ -1353,10 +1548,14 @@ export default function App() {
               hasResume: firstMissingChunk > 0,
             })
             .then((decision) => {
+              if (activeBuf.cancelled || cancelledTransferIdsRef.current.has(fileId)) {
+                return;
+              }
               if (decision === 'reject') {
                 activeBuf.rejected = true;
                 activeBuf.awaitingAcceptance = false;
                 activeBuf.receivedChunks.length = 0;
+                pausedIncomingIdsRef.current.delete(fileId);
                 incomingBuffersRef.current.delete(fileId);
                 resumeBuffersByKeyRef.current.delete(resumeKey);
                 numIdToFileIdRef.current.delete(numId);
@@ -1444,6 +1643,11 @@ export default function App() {
       }
 
       if (packet.kind === 'file:chunk') {
+        let key = cryptoKeyRef.current;
+        if (!key && keyDerivationPromiseRef.current) {
+          key = await keyDerivationPromiseRef.current;
+        }
+        if (!key) return;
         const { fileId, chunkIndex, ivBase64, ciphertextBase64 } = packet;
         const bufEntry = incomingBuffersRef.current.get(fileId);
         if (!bufEntry || bufEntry.rejected) return;
@@ -1472,6 +1676,11 @@ export default function App() {
       }
 
       if (packet.kind === 'note:encrypted') {
+        let key = cryptoKeyRef.current;
+        if (!key && keyDerivationPromiseRef.current) {
+          key = await keyDerivationPromiseRef.current;
+        }
+        if (!key) return;
         try {
           const decryptedBuf = await decryptChunk(
             key,
@@ -1504,6 +1713,7 @@ export default function App() {
       recordDecryptedChunk,
       finalizeIncomingBufferIfComplete,
       sendControlReplyEverywhere,
+      wakePauseWaiters,
     ]
   );
 
@@ -2194,7 +2404,18 @@ export default function App() {
               for (const bp of browserPeers) {
                 setConnectionState('connected_p2p');
                 if (peerId > bp.id) {
-                  void initWebRtcConnectionPool(bp.id, true);
+                  void initWebRtcConnectionPool(bp.id, true, undefined, true);
+                } else {
+                  const staleMap = peerConnsByPeerRef.current.get(bp.id);
+                  if (staleMap) {
+                    for (const stalePc of staleMap.values()) {
+                      try { stalePc.close(); } catch {}
+                    }
+                    peerConnsByPeerRef.current.delete(bp.id);
+                  }
+                  dataChannelsByPeerRef.current.delete(bp.id);
+                  pendingIceByPeerRef.current.delete(bp.id);
+                  syncOpenPoolCount();
                 }
               }
             } else if (msg.type === 'peer:joined') {
@@ -2210,7 +2431,18 @@ export default function App() {
               if (!joinedIsExe && joinedId) {
                 setConnectionState('connected_p2p');
                 if (peerId > joinedId) {
-                  void initWebRtcConnectionPool(joinedId, true);
+                  void initWebRtcConnectionPool(joinedId, true, undefined, true);
+                } else {
+                  const staleMap = peerConnsByPeerRef.current.get(joinedId);
+                  if (staleMap) {
+                    for (const stalePc of staleMap.values()) {
+                      try { stalePc.close(); } catch {}
+                    }
+                    peerConnsByPeerRef.current.delete(joinedId);
+                  }
+                  dataChannelsByPeerRef.current.delete(joinedId);
+                  pendingIceByPeerRef.current.delete(joinedId);
+                  syncOpenPoolCount();
                 }
               }
             } else if (msg.type === 'peer:left') {
@@ -2238,16 +2470,53 @@ export default function App() {
           wsPeerIdsRef.current.clear();
           sweepStalePeers();
           if (!unmounted) {
-            reconnectTimer = window.setTimeout(connectTunnelWs, 2000);
+            reconnectTimer = window.setTimeout(connectTunnelWs, 1200);
           }
         };
       } catch {}
     };
 
+    const handleVisibilityOrOnline = () => {
+      if (unmounted) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        if (reconnectTimer !== null) {
+          window.clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        connectTunnelWs();
+      } else if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(
+            JSON.stringify({
+              type: 'room:join',
+              roomCode: cleanCode,
+              peerId,
+              cloudId: myCloudId,
+              clientType: 'browser',
+              deviceLabel: `${localDisplayNameRef.current} (${navigator.platform || 'Browser'})`,
+              natType: 'Port-Restricted Cone NAT',
+            })
+          );
+        } catch {}
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityOrOnline);
+    }
+    window.addEventListener('online', handleVisibilityOrOnline);
+    window.addEventListener('focus', handleVisibilityOrOnline);
+
     connectTunnelWs();
 
     return () => {
       unmounted = true;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
+      }
+      window.removeEventListener('online', handleVisibilityOrOnline);
+      window.removeEventListener('focus', handleVisibilityOrOnline);
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (ws && ws.readyState === WebSocket.OPEN) {
         try {
@@ -2312,9 +2581,13 @@ export default function App() {
     let rxExeAwaitingConfirm = false;
     let rxExeRejected = false;
     let rxExeEndedWhileWaiting = false;
+    let rxExePaused = false;
+    let rxExePausedAt = 0;
+    let rxExeCancelled = false;
+    let rxExeEndedWhilePaused = false;
 
     const finalizeExeTransfer = () => {
-      if (!rxExeFileId || rxExeRejected || rxExeAwaitingConfirm) return;
+      if (!rxExeFileId || rxExeRejected || rxExeCancelled || rxExeAwaitingConfirm || rxExePaused) return;
       const fid = rxExeFileId;
       const fsize = rxExeFileSize;
       const fchunks = rxExeTotalChunks;
@@ -2327,6 +2600,8 @@ export default function App() {
       const downloadUrl = URL.createObjectURL(blob);
       rxExeChunks = [];
       rxExeFileId = '';
+      incomingControlHandlersRef.current.delete(fid);
+      pausedIncomingIdsRef.current.delete(fid);
       setIncomingFileAlert(null);
       setTransfers((prev) =>
         prev.map((t) =>
@@ -2341,6 +2616,7 @@ export default function App() {
                 verified: true,
                 downloadUrl,
                 completedAt: Date.now(),
+                pausedBy: undefined,
               }
             : t
         )
@@ -2388,11 +2664,11 @@ export default function App() {
 
         ws.onmessage = (ev: MessageEvent) => {
           if (ev.data instanceof ArrayBuffer) {
-            if (!rxExeFileId || rxExeRejected) return;
+            if (!rxExeFileId || rxExeRejected || rxExeCancelled) return;
             const bytes = new Uint8Array(ev.data);
             rxExeChunks.push(bytes);
             rxExeBytes += bytes.byteLength;
-            if (rxExeAwaitingConfirm) return;
+            if (rxExeAwaitingConfirm || rxExePaused) return;
             const now = performance.now();
             if (now - rxExeLastUiAt >= 80) {
               const winDt = (now - rxExeLastWinAt) / 1000;
@@ -2429,6 +2705,15 @@ export default function App() {
           if (typeof ev.data === 'string') {
             try {
               const msg = JSON.parse(ev.data);
+              if (
+                msg.kind === 'file:pause' ||
+                msg.kind === 'file:resume' ||
+                msg.kind === 'file:cancel' ||
+                msg.kind === 'exe:file-cancel'
+              ) {
+                void handleTunnelPacket(msg, 'WebRTC Direct (UDP/DTLS)');
+                return;
+              }
               if (msg.kind === 'exe:resume-ack' || msg.kind === 'file:resume-ack') {
                 const resumeKey = `${msg.name || ''}::${Number(msg.size) || 0}`;
                 const resumeChunk = Math.max(0, Number(msg.resumeFromChunk) || 0);
@@ -2458,7 +2743,9 @@ export default function App() {
                   rejectHandlersRef.current.get(keyStr);
                 if (handler) handler();
               } else if (msg.kind === 'exe:file-start') {
-                rxExeFileId = String(msg.fileId || `exe-${Date.now()}`);
+                const incomingExeFid = String(msg.fileId || `exe-${Date.now()}`);
+                if (cancelledTransferIdsRef.current.has(incomingExeFid)) return;
+                rxExeFileId = incomingExeFid;
                 rxExeFileName = String(msg.name || 'transfer.bin');
                 rxExeFileSize = Number(msg.size) || 0;
                 rxExeTotalChunks = Math.max(1, Number(msg.totalChunks) || 1);
@@ -2471,6 +2758,10 @@ export default function App() {
                 rxExeSmoothedBps = 0;
                 rxExeRejected = false;
                 rxExeEndedWhileWaiting = false;
+                rxExePaused = false;
+                rxExePausedAt = 0;
+                rxExeCancelled = false;
+                rxExeEndedWhilePaused = false;
 
                 const fid = rxExeFileId;
                 const fname = rxExeFileName;
@@ -2481,6 +2772,89 @@ export default function App() {
                   !autoAcceptIncomingRef.current &&
                   !acceptedPromptKeysRef.current.has(reqKey);
                 rxExeAwaitingConfirm = needsConfirm;
+
+                incomingControlHandlersRef.current.set(fid, {
+                  pause: (by) => {
+                    if (rxExeFileId !== fid || rxExeRejected || rxExeCancelled) return;
+                    if (!rxExePaused) {
+                      rxExePaused = true;
+                      rxExePausedAt = performance.now();
+                    }
+                    pausedIncomingIdsRef.current.add(fid);
+                    setTransfers((prev) =>
+                      prev.map((t) =>
+                        t.id === fid && t.status === 'transferring'
+                          ? { ...t, status: 'paused', pausedBy: by, speedBps: 0 }
+                          : t
+                      )
+                    );
+                    if (by === 'local' && ws.readyState === WebSocket.OPEN) {
+                      try {
+                        ws.send(JSON.stringify({ kind: 'file:pause', fileId: fid, name: fname, size: fsize, by: 'receiver' }));
+                      } catch {}
+                    }
+                  },
+                  resume: (by) => {
+                    if (rxExeFileId !== fid || rxExeRejected || rxExeCancelled) return;
+                    if (rxExePaused) {
+                      const now = performance.now();
+                      if (rxExePausedAt > 0) {
+                        rxExeStartedAt += Math.max(0, now - rxExePausedAt);
+                        rxExePausedAt = 0;
+                      }
+                      rxExeLastWinAt = now;
+                      rxExeLastWinBytes = rxExeBytes;
+                      rxExeSmoothedBps = 0;
+                      rxExePaused = false;
+                    }
+                    pausedIncomingIdsRef.current.delete(fid);
+                    setTransfers((prev) =>
+                      prev.map((t) =>
+                        t.id === fid && t.status === 'paused'
+                          ? { ...t, status: 'transferring', pausedBy: undefined }
+                          : t
+                      )
+                    );
+                    if (by === 'local' && ws.readyState === WebSocket.OPEN) {
+                      try {
+                        ws.send(JSON.stringify({ kind: 'file:resume', fileId: fid, name: fname, size: fsize, by: 'receiver' }));
+                      } catch {}
+                    }
+                    if (rxExeEndedWhilePaused) {
+                      finalizeExeTransfer();
+                    }
+                  },
+                  cancel: (by) => {
+                    if (rxExeFileId !== fid) return;
+                    rxExeCancelled = true;
+                    rxExeRejected = true;
+                    rxExeAwaitingConfirm = false;
+                    rxExePaused = false;
+                    rxExeChunks = [];
+                    rxExeFileId = '';
+                    incomingControlHandlersRef.current.delete(fid);
+                    pausedIncomingIdsRef.current.delete(fid);
+                    setIncomingFileAlert(null);
+                    setTransfers((prev) =>
+                      prev.map((t) =>
+                        t.id === fid
+                          ? {
+                              ...t,
+                              status: 'cancelled',
+                              speedBps: 0,
+                              cancelledBy: by,
+                              errorMessage: by === 'local' ? 'Stopped by receiver' : 'Stopped by sender',
+                            }
+                          : t
+                      )
+                    );
+                    if (by === 'local' && ws.readyState === WebSocket.OPEN) {
+                      try {
+                        ws.send(JSON.stringify({ kind: 'file:cancel', fileId: fid, name: fname, size: fsize, by: 'receiver' }));
+                      } catch {}
+                    }
+                  },
+                });
 
                 setTransfers((prev) => [
                   {
@@ -2526,11 +2900,13 @@ export default function App() {
                       size: fsize,
                     })
                     .then((decision) => {
+                      if (rxExeCancelled || cancelledTransferIdsRef.current.has(fid)) return;
                       if (decision === 'reject') {
                         rxExeRejected = true;
                         rxExeAwaitingConfirm = false;
                         rxExeChunks = [];
                         rxExeFileId = '';
+                        incomingControlHandlersRef.current.delete(fid);
                         setIncomingFileAlert(null);
                         setTransfers((prev) =>
                           prev.map((t) =>
@@ -2585,13 +2961,17 @@ export default function App() {
                     });
                 }
               } else if (msg.kind === 'exe:file-end' && rxExeFileId) {
-                if (rxExeRejected) {
+                if (rxExeRejected || rxExeCancelled) {
                   rxExeChunks = [];
                   rxExeFileId = '';
                   return;
                 }
                 if (rxExeAwaitingConfirm) {
                   rxExeEndedWhileWaiting = true;
+                  return;
+                }
+                if (rxExePaused) {
+                  rxExeEndedWhilePaused = true;
                   return;
                 }
                 finalizeExeTransfer();
@@ -2671,7 +3051,8 @@ export default function App() {
     let rxFileName = '';
     let rxFileSize = 0;
     let rxTotalChunks = 1;
-    let rxChunks: Uint8Array[] = [];
+    let rxChunks: Array<Uint8Array | undefined> = [];
+    let rxReceivedCount = 0;
     let rxBytes = 0;
     let rxStartedAt = 0;
     let rxLastUiAt = 0;
@@ -2681,6 +3062,10 @@ export default function App() {
     let rxAwaitingConfirm = false;
     let rxRejected = false;
     let rxEndedWhileWaiting = false;
+    let rxPaused = false;
+    let rxPausedAt = 0;
+    let rxCancelled = false;
+    let rxEndedWhilePaused = false;
     let rxSrcPeer = '';
     let rxReplyPrefix: 'browser:' | 'exe:' = 'exe:';
 
@@ -2713,7 +3098,7 @@ export default function App() {
       const pkt = buildMqttPacket(0x30, [...tBytes, ...mBytes]);
 
       for (const s of sockets) {
-        if (s && s.readyState === WebSocket.OPEN) {
+        if (s && s.readyState === WebSocket.OPEN && (s as any).__mqttReady) {
           try {
             s.send(pkt as any);
           } catch {}
@@ -2729,24 +3114,32 @@ export default function App() {
     sendCloudCandidateRef.current = publishToCloudBus;
 
     const finalizeCloudRx = () => {
-      if (!rxFileId || rxRejected || rxAwaitingConfirm) return;
+      if (!rxFileId || rxRejected || rxCancelled || rxAwaitingConfirm || rxPaused) return;
       const fid = rxFileId;
       const fsize = rxFileSize;
       const fchunks = rxTotalChunks;
       const elapsedSec = Math.max(0.008, (performance.now() - rxStartedAt) / 1000);
       const avgSpeed = fsize / elapsedSec;
       const finalSpeed = rxSmoothedBps > 0 ? rxSmoothedBps : avgSpeed;
-      const blob = new Blob(rxChunks as BlobPart[], {
+      const orderedParts: Uint8Array[] = [];
+      for (let i = 0; i < rxChunks.length; i++) {
+        if (rxChunks[i]) orderedParts.push(rxChunks[i]!);
+      }
+      const blob = new Blob(orderedParts as BlobPart[], {
         type: 'application/octet-stream',
       });
       const downloadUrl = URL.createObjectURL(blob);
       rxChunks = [];
+      rxReceivedCount = 0;
       rxFileId = '';
+      incomingControlHandlersRef.current.delete(fid);
+      pausedIncomingIdsRef.current.delete(fid);
       setIncomingFileAlert(null);
 
       if (rxSrcPeer) {
         publishToCloudBus(rxSrcPeer, {
           kind: `${rxReplyPrefix}chunk-ack`,
+          fileId: fid,
           chunkIndex: 999999,
         });
       }
@@ -2764,6 +3157,7 @@ export default function App() {
                 verified: true,
                 downloadUrl,
                 completedAt: Date.now(),
+                pausedBy: undefined,
               }
             : t
         )
@@ -2781,7 +3175,7 @@ export default function App() {
       const now = Date.now();
       let prunedWeb = false;
       for (const [pid, lastSeen] of cloudPeerLastSeenRef.current.entries()) {
-        if (now - lastSeen > 7000) {
+        if (now - lastSeen > 25000) {
           cloudPeerLastSeenRef.current.delete(pid);
           prunedWeb = true;
         }
@@ -2792,7 +3186,7 @@ export default function App() {
 
       let prunedExe = false;
       for (const [eid, info] of cloudExePeersRef.current.entries()) {
-        if (now - info.lastSeen > 9000) {
+        if (now - info.lastSeen > 25000) {
           cloudExePeersRef.current.delete(eid);
           prunedExe = true;
         }
@@ -2943,7 +3337,12 @@ export default function App() {
       } else if (
         payload.kind === 'file:rx-progress' ||
         payload.kind === 'file:rx-complete' ||
-        payload.kind === 'file:rx-error'
+        payload.kind === 'file:rx-error' ||
+        payload.kind === 'file:pause' ||
+        payload.kind === 'file:resume' ||
+        payload.kind === 'file:cancel' ||
+        payload.kind === 'exe:file-cancel' ||
+        payload.kind === 'browser:file-cancel'
       ) {
         void handleTunnelPacket(payload, 'Encrypted WS Relay (TCP/443)');
       } else if (
@@ -3010,9 +3409,33 @@ export default function App() {
             label: prevExe?.label || `Windows .EXE (${srcPeer.slice(-4)})`,
           });
         }
+        const incomingFid = String(payload.fileId || `cloud-${Date.now()}`);
+        if (cancelledTransferIdsRef.current.has(incomingFid)) return;
+        const incomingPrefix: 'browser:' | 'exe:' = String(payload.kind).startsWith('browser:')
+          ? 'browser:'
+          : 'exe:';
+        if (rxFileId === incomingFid && !rxRejected) {
+          if (rxAwaitingConfirm) {
+            publishToCloudBus(srcPeer, {
+              kind: `${incomingPrefix}wait-accept`,
+              fileId: incomingFid,
+              name: rxFileName,
+              size: rxFileSize,
+            });
+          } else {
+            publishToCloudBus(srcPeer, {
+              kind: `${incomingPrefix}resume-ack`,
+              fileId: incomingFid,
+              name: rxFileName,
+              size: rxFileSize,
+              resumeFromChunk: rxReceivedCount,
+            });
+          }
+          return;
+        }
         rxSrcPeer = srcPeer;
-        rxReplyPrefix = String(payload.kind).startsWith('browser:') ? 'browser:' : 'exe:';
-        rxFileId = String(payload.fileId || `cloud-${Date.now()}`);
+        rxReplyPrefix = incomingPrefix;
+        rxFileId = incomingFid;
         rxFileName = String(payload.name || 'transfer.bin');
         rxFileSize = Number(payload.size) || 0;
         const cSize = Number(payload.chunkSize) || 49152;
@@ -3020,7 +3443,8 @@ export default function App() {
           1,
           Number(payload.totalChunks) || Math.ceil(rxFileSize / cSize)
         );
-        rxChunks = [];
+        rxChunks = new Array(rxTotalChunks);
+        rxReceivedCount = 0;
         rxBytes = 0;
         rxStartedAt = performance.now();
         rxLastUiAt = 0;
@@ -3029,6 +3453,10 @@ export default function App() {
         rxSmoothedBps = 0;
         rxRejected = false;
         rxEndedWhileWaiting = false;
+        rxPaused = false;
+        rxPausedAt = 0;
+        rxCancelled = false;
+        rxEndedWhilePaused = false;
 
         const fid = rxFileId;
         const fname = rxFileName;
@@ -3039,6 +3467,104 @@ export default function App() {
           !autoAcceptIncomingRef.current &&
           !acceptedPromptKeysRef.current.has(reqKey);
         rxAwaitingConfirm = needsConfirm;
+        const cloudPeerSrc = srcPeer;
+
+        incomingControlHandlersRef.current.set(fid, {
+          pause: (by) => {
+            if (rxFileId !== fid || rxRejected || rxCancelled) return;
+            if (!rxPaused) {
+              rxPaused = true;
+              rxPausedAt = performance.now();
+            }
+            pausedIncomingIdsRef.current.add(fid);
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fid && t.status === 'transferring'
+                  ? { ...t, status: 'paused', pausedBy: by, speedBps: 0 }
+                  : t
+              )
+            );
+            if (by === 'local' && cloudPeerSrc) {
+              publishToCloudBus(cloudPeerSrc, {
+                kind: 'file:pause',
+                fileId: fid,
+                name: fname,
+                size: fsize,
+                by: 'receiver',
+              });
+            }
+          },
+          resume: (by) => {
+            if (rxFileId !== fid || rxRejected || rxCancelled) return;
+            if (rxPaused) {
+              const now = performance.now();
+              if (rxPausedAt > 0) {
+                rxStartedAt += Math.max(0, now - rxPausedAt);
+                rxPausedAt = 0;
+              }
+              rxLastWinAt = now;
+              rxLastWinBytes = rxBytes;
+              rxSmoothedBps = 0;
+              rxPaused = false;
+            }
+            pausedIncomingIdsRef.current.delete(fid);
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fid && t.status === 'paused'
+                  ? { ...t, status: 'transferring', pausedBy: undefined }
+                  : t
+              )
+            );
+            if (by === 'local' && cloudPeerSrc) {
+              publishToCloudBus(cloudPeerSrc, {
+                kind: 'file:resume',
+                fileId: fid,
+                name: fname,
+                size: fsize,
+                by: 'receiver',
+                resumeFromChunk: rxReceivedCount,
+              });
+            }
+            if (rxEndedWhilePaused) {
+              finalizeCloudRx();
+            }
+          },
+          cancel: (by) => {
+            if (rxFileId !== fid) return;
+            rxCancelled = true;
+            rxRejected = true;
+            rxAwaitingConfirm = false;
+            rxPaused = false;
+            rxChunks = [];
+            rxReceivedCount = 0;
+            rxFileId = '';
+            incomingControlHandlersRef.current.delete(fid);
+            pausedIncomingIdsRef.current.delete(fid);
+            setIncomingFileAlert(null);
+            setTransfers((prev) =>
+              prev.map((t) =>
+                t.id === fid
+                  ? {
+                      ...t,
+                      status: 'cancelled',
+                      speedBps: 0,
+                      cancelledBy: by,
+                      errorMessage: by === 'local' ? 'Stopped by receiver' : 'Stopped by sender',
+                    }
+                  : t
+              )
+            );
+            if (by === 'local' && cloudPeerSrc) {
+              publishToCloudBus(cloudPeerSrc, {
+                kind: 'file:cancel',
+                fileId: fid,
+                name: fname,
+                size: fsize,
+                by: 'receiver',
+              });
+            }
+          },
+        });
 
         setTransfers((prev) => [
           {
@@ -3077,16 +3603,19 @@ export default function App() {
               id: fid,
               senderLabel: srcPeer.startsWith('aethertunnel-exe-')
                 ? 'Remote .EXE Peer'
-                : 'Remote Browser Peer',
+                : String(payload.senderLabel || 'Remote Browser Peer'),
               name: fname,
               size: fsize,
             })
             .then((decision) => {
+              if (rxCancelled || cancelledTransferIdsRef.current.has(fid)) return;
               if (decision === 'reject') {
                 rxRejected = true;
                 rxAwaitingConfirm = false;
                 rxChunks = [];
+                rxReceivedCount = 0;
                 rxFileId = '';
+                incomingControlHandlersRef.current.delete(fid);
                 setIncomingFileAlert(null);
                 setTransfers((prev) =>
                   prev.map((t) =>
@@ -3145,19 +3674,20 @@ export default function App() {
           payload.kind === 'browser:file-chunk') &&
         rxFileId
       ) {
-        if (rxRejected) return;
+        if (rxRejected || rxCancelled) return;
         const b64 = typeof payload.data === 'string' ? payload.data : '';
-        const chunkIndex = Number(payload.chunkIndex) || 0;
-        if (b64) {
+        const chunkIndex = Math.max(0, Number(payload.chunkIndex) || 0);
+        if (b64 && rxChunks[chunkIndex] === undefined) {
           const binStr = window.atob(b64);
           const bytes = new Uint8Array(binStr.length);
           for (let i = 0; i < binStr.length; i++) {
             bytes[i] = binStr.charCodeAt(i);
           }
-          rxChunks.push(bytes);
+          rxChunks[chunkIndex] = bytes;
+          rxReceivedCount += 1;
           rxBytes += bytes.byteLength;
 
-          if (!rxAwaitingConfirm) {
+          if (!rxAwaitingConfirm && !rxPaused) {
             const now = performance.now();
             if (now - rxLastUiAt >= 80) {
               const winDt = (now - rxLastWinAt) / 1000;
@@ -3170,7 +3700,7 @@ export default function App() {
               rxLastUiAt = now;
               const fid = rxFileId;
               const bytesNow = rxBytes;
-              const chunksNow = rxChunks.length;
+              const chunksNow = rxReceivedCount;
               const elapsedSec = Math.max(0.008, (now - rxStartedAt) / 1000);
               const avgSpeedBps = bytesNow / elapsedSec;
               const speedBps = rxSmoothedBps > 0 ? rxSmoothedBps : avgSpeedBps;
@@ -3195,6 +3725,7 @@ export default function App() {
             kind: payload.kind.startsWith('browser:')
               ? 'browser:chunk-ack'
               : 'exe:chunk-ack',
+            fileId: rxFileId,
             chunkIndex,
           });
         }
@@ -3203,8 +3734,9 @@ export default function App() {
           payload.kind === 'browser:file-end') &&
         rxFileId
       ) {
-        if (rxRejected) {
+        if (rxRejected || rxCancelled) {
           rxChunks = [];
+          rxReceivedCount = 0;
           rxFileId = '';
           return;
         }
@@ -3212,15 +3744,26 @@ export default function App() {
           rxEndedWhileWaiting = true;
           return;
         }
+        if (rxPaused) {
+          rxEndedWhilePaused = true;
+          return;
+        }
         finalizeCloudRx();
       }
     };
+
+    const brokers = [
+      'wss://broker.emqx.io:8084/mqtt',
+      'wss://broker.hivemq.com:8884/mqtt',
+    ];
+    const reconnectMqttTimers: Array<number | null> = brokers.map(() => null);
 
     const connectMqttBroker = (brokerUrl: string, idx: number) => {
       if (unmounted) return;
       try {
         const socket = new WebSocket(brokerUrl, 'mqtt');
         socket.binaryType = 'arraybuffer';
+        (socket as any).__mqttReady = false;
         sockets[idx] = socket;
 
         socket.onopen = () => {
@@ -3229,7 +3772,8 @@ export default function App() {
             return;
           }
           cloudExeWsRef.current = socket;
-          const clientId = `${myCloudId}-${idx}`;
+          const shortPid = peerId.replace(/[^a-z0-9]/gi, '').slice(-8) || 'node';
+          const clientId = `atw_${shortPid}_${idx}_${Math.floor(Math.random() * 999)}`;
           const connectBody = [
             ...encodeMqttStr('MQTT'),
             4,
@@ -3239,13 +3783,6 @@ export default function App() {
             ...encodeMqttStr(clientId),
           ];
           socket.send(buildMqttPacket(0x10, connectBody) as any);
-
-          const subBody = [0, 1, ...encodeMqttStr(mqttTopic), 0];
-          socket.send(buildMqttPacket(0x82, subBody) as any);
-
-          window.setTimeout(() => {
-            broadcastBrowserHello();
-          }, 120);
         };
 
         socket.onmessage = async (ev: MessageEvent) => {
@@ -3272,7 +3809,21 @@ export default function App() {
             }
             if (offset + remLen > u8.length) break;
 
-            if (pktType === 3 && remLen >= 2) {
+            if (pktType === 2) {
+              const connackRc = remLen >= 2 ? u8[offset + 1] : 0;
+              if (connackRc === 0) {
+                (socket as any).__mqttReady = true;
+                const subBody = [0, 1, ...encodeMqttStr(mqttTopic), 0];
+                try {
+                  socket.send(buildMqttPacket(0x82, subBody) as any);
+                } catch {}
+                window.setTimeout(() => {
+                  if (!unmounted && (socket as any).__mqttReady) {
+                    broadcastBrowserHello();
+                  }
+                }, 80);
+              }
+            } else if (pktType === 3 && remLen >= 2) {
               const topicLen = (u8[offset] << 8) | u8[offset + 1];
               const qos = (header >> 1) & 3;
               const payloadStart = offset + 2 + topicLen + (qos > 0 ? 2 : 0);
@@ -3292,8 +3843,9 @@ export default function App() {
         };
 
         socket.onclose = () => {
+          (socket as any).__mqttReady = false;
           if (!unmounted) {
-            window.setTimeout(() => connectMqttBroker(brokerUrl, idx), 2500);
+            reconnectMqttTimers[idx] = window.setTimeout(() => connectMqttBroker(brokerUrl, idx), 1500);
           }
         };
 
@@ -3305,15 +3857,33 @@ export default function App() {
       } catch {}
     };
 
-    const brokers = [
-      'wss://broker.emqx.io:8084/mqtt',
-      'wss://broker.hivemq.com:8884/mqtt',
-    ];
     brokers.forEach((url, i) => connectMqttBroker(url, i));
+
+    const handleMqttResume = () => {
+      if (unmounted) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      brokers.forEach((url, i) => {
+        const s = sockets[i];
+        if (!s || s.readyState === WebSocket.CLOSED || s.readyState === WebSocket.CLOSING) {
+          if (reconnectMqttTimers[i] !== null) {
+            window.clearTimeout(reconnectMqttTimers[i]!);
+            reconnectMqttTimers[i] = null;
+          }
+          connectMqttBroker(url, i);
+        }
+      });
+      broadcastBrowserHello();
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleMqttResume);
+    }
+    window.addEventListener('online', handleMqttResume);
+    window.addEventListener('focus', handleMqttResume);
 
     hbTimer = window.setInterval(() => {
       for (const s of sockets) {
-        if (s && s.readyState === WebSocket.OPEN) {
+        if (s && s.readyState === WebSocket.OPEN && (s as any).__mqttReady) {
           try {
             s.send(new Uint8Array([0xc0, 0x00]));
           } catch {}
@@ -3324,6 +3894,14 @@ export default function App() {
 
     return () => {
       unmounted = true;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleMqttResume);
+      }
+      window.removeEventListener('online', handleMqttResume);
+      window.removeEventListener('focus', handleMqttResume);
+      for (const t of reconnectMqttTimers) {
+        if (t !== null) window.clearTimeout(t);
+      }
       if (hbTimer !== null) window.clearInterval(hbTimer);
       try {
         publishToCloudBus('*', {
@@ -3447,14 +4025,20 @@ export default function App() {
   );
 
   const sendSliceToLaneGroupSafely = useCallback(
-    async (lanes: RTCDataChannel[], sliceBuf: ArrayBuffer): Promise<void> => {
-      if (trySendSingleSliceToLaneGroup(lanes, sliceBuf)) return;
+    async (
+      lanes: RTCDataChannel[],
+      sliceBuf: ArrayBuffer,
+      shouldAbort?: () => boolean
+    ): Promise<boolean> => {
+      if (shouldAbort?.()) return false;
+      if (trySendSingleSliceToLaneGroup(lanes, sliceBuf)) return true;
       for (let attempt = 0; attempt < 20000; attempt++) {
+        if (shouldAbort?.()) return false;
         const openLanes = lanes.filter(isDataChannelHealthy);
         if (openLanes.length === 0) {
           throw new Error('No open WebRTC DataChannel lanes available for peer');
         }
-        if (trySendSingleSliceToLaneGroup(openLanes, sliceBuf)) return;
+        if (trySendSingleSliceToLaneGroup(openLanes, sliceBuf)) return true;
         await new Promise<void>((resolve) => {
           let settled = false;
           const cleanup = () => {
@@ -3472,6 +4056,7 @@ export default function App() {
           window.setTimeout(cleanup, 4);
         });
       }
+      if (shouldAbort?.()) return false;
       throw new Error('WebRTC DataChannel send timed out waiting for queue drain');
     },
     [isDataChannelHealthy, trySendSingleSliceToLaneGroup]
@@ -3514,13 +4099,18 @@ export default function App() {
   );
 
   const sendBinaryPacketSafely = useCallback(
-    async (packet: ArrayBuffer, targetPeerId: string = 'all'): Promise<void> => {
+    async (
+      packet: ArrayBuffer,
+      targetPeerId: string = 'all',
+      shouldAbort?: () => boolean
+    ): Promise<boolean> => {
+      if (shouldAbort?.()) return false;
       const groups = getTargetPeerLaneGroups(targetPeerId);
       if (groups.length === 0) {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           try {
             wsRef.current.send(packet);
-            return;
+            return true;
           } catch {}
         }
         throw new Error('No open WebRTC DataChannel lanes or WebSocket relay available');
@@ -3533,9 +4123,11 @@ export default function App() {
             ? [packet]
             : splitFrameForSctpLanes(packet, sliceLimit);
         for (const sl of slices) {
-          await sendSliceToLaneGroupSafely(lanes, sl);
+          const ok = await sendSliceToLaneGroupSafely(lanes, sl, shouldAbort);
+          if (!ok) return false;
         }
       }
+      return true;
     },
     [
       getTargetPeerLaneGroups,
@@ -3565,19 +4157,19 @@ export default function App() {
         }
       }
 
-      if (sendCloudCandidateRef.current && cloudWebPeersRef.current.length > 0) {
+      if (sendCloudCandidateRef.current) {
         const matchedPeer =
           targetPeerId !== 'all'
             ? peersRef.current.find((p) => p.id === targetPeerId || p.cloudId === targetPeerId)
             : null;
         const targets =
           targetPeerId === 'all'
-            ? cloudWebPeersRef.current
-            : matchedPeer?.cloudId && cloudWebPeersRef.current.includes(matchedPeer.cloudId)
+            ? (cloudWebPeersRef.current.length > 0 ? cloudWebPeersRef.current : ['*'])
+            : matchedPeer?.cloudId
             ? [matchedPeer.cloudId]
-            : cloudWebPeersRef.current.includes(targetPeerId)
+            : targetPeerId.startsWith('aethertunnel-web-')
             ? [targetPeerId]
-            : [];
+            : ['*'];
         for (const peerDst of targets) {
           sendCloudCandidateRef.current(peerDst, {
             kind: 'browser:packet',
@@ -3624,33 +4216,456 @@ export default function App() {
     [getTargetPeerLaneGroups]
   );
 
+  const sendControlForTransfer = useCallback(
+    (fileId: string, packet: Record<string, unknown>) => {
+      const meta = transferMetaByFileIdRef.current.get(fileId);
+      const targetPeerId = meta?.targetPeerId || 'all';
+      transmitEncryptedPacket(packet, targetPeerId);
+      if (
+        exeWsRef.current &&
+        exeWsRef.current.readyState === WebSocket.OPEN &&
+        (targetPeerId === 'native-exe-bridge' || targetPeerId === 'all')
+      ) {
+        try {
+          exeWsRef.current.send(JSON.stringify(packet));
+        } catch {}
+      }
+      if (sendCloudCandidateRef.current) {
+        if (targetPeerId.startsWith('aethertunnel-exe-')) {
+          try {
+            sendCloudCandidateRef.current(targetPeerId, packet);
+          } catch {}
+        } else if (targetPeerId === 'all') {
+          for (const exePeerId of cloudExePeersRef.current.keys()) {
+            try {
+              sendCloudCandidateRef.current(exePeerId, packet);
+            } catch {}
+          }
+        }
+      }
+    },
+    [transmitEncryptedPacket]
+  );
+
+  const pauseTransfer = useCallback(
+    (transferId: string, queueItemId?: string) => {
+      const rxHandler = incomingControlHandlersRef.current.get(transferId);
+      if (rxHandler) {
+        rxHandler.pause('local');
+        return;
+      }
+
+      const rxBuf = incomingBuffersRef.current.get(transferId);
+      if (rxBuf) {
+        if (!rxBuf.rejected && !rxBuf.cancelled && !rxBuf.awaitingAcceptance) {
+          if (!rxBuf.paused) {
+            rxBuf.paused = true;
+            rxBuf.pausedStartedAt = performance.now();
+          }
+          pausedIncomingIdsRef.current.add(transferId);
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === transferId && t.direction === 'incoming' && t.status === 'transferring'
+                ? { ...t, status: 'paused', pausedBy: 'local', speedBps: 0 }
+                : t
+            )
+          );
+          sendControlReplyEverywhere({
+            kind: 'file:pause',
+            fileId: transferId,
+            name: rxBuf.name,
+            size: rxBuf.size,
+            by: 'receiver',
+          });
+        }
+        return;
+      }
+
+      pausedTransferIdsRef.current.add(transferId);
+      const meta = transferMetaByFileIdRef.current.get(transferId);
+      const resolvedQueueId = queueItemId || meta?.queueItemId;
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId &&
+          t.direction === 'outgoing' &&
+          (t.status === 'transferring' || t.status === 'awaiting_acceptance')
+            ? { ...t, status: 'paused', pausedBy: 'local', speedBps: 0 }
+            : t
+        )
+      );
+      if (resolvedQueueId) {
+        setUploadQueue((prev) =>
+          prev.map((q) =>
+            q.id === resolvedQueueId && q.status === 'transferring'
+              ? { ...q, status: 'paused' }
+              : q
+          )
+        );
+      }
+      sendControlForTransfer(transferId, {
+        kind: 'file:pause',
+        fileId: transferId,
+        name: meta?.name || '',
+        size: meta?.size || 0,
+        by: 'sender',
+      });
+    },
+    [sendControlForTransfer, sendControlReplyEverywhere]
+  );
+
+  const resumeTransfer = useCallback(
+    (transferId: string, queueItemId?: string) => {
+      const rxHandler = incomingControlHandlersRef.current.get(transferId);
+      if (rxHandler) {
+        rxHandler.resume('local');
+        return;
+      }
+
+      const rxBuf = incomingBuffersRef.current.get(transferId);
+      if (rxBuf) {
+        if (!rxBuf.rejected && !rxBuf.cancelled) {
+          if (rxBuf.paused) {
+            const now = performance.now();
+            if (rxBuf.pausedStartedAt > 0) {
+              rxBuf.startedAt += Math.max(0, now - rxBuf.pausedStartedAt);
+              rxBuf.pausedStartedAt = 0;
+            }
+            rxBuf.lastWindowAt = now;
+            rxBuf.lastWindowBytes = Math.min(rxBuf.size, rxBuf.receivedCount * rxBuf.chunkSize);
+            rxBuf.smoothedLiveBps = 0;
+            rxBuf.paused = false;
+          }
+          pausedIncomingIdsRef.current.delete(transferId);
+          let missIdx = 0;
+          while (missIdx < rxBuf.totalChunks && rxBuf.receivedChunks[missIdx] !== undefined) {
+            missIdx++;
+          }
+          setTransfers((prev) =>
+            prev.map((t) =>
+              t.id === transferId && t.direction === 'incoming' && t.status === 'paused'
+                ? { ...t, status: 'transferring', pausedBy: undefined }
+                : t
+            )
+          );
+          sendControlReplyEverywhere({
+            kind: 'file:resume',
+            fileId: transferId,
+            name: rxBuf.name,
+            size: rxBuf.size,
+            by: 'receiver',
+            resumeFromChunk: missIdx,
+          });
+          finalizeIncomingBufferIfComplete(rxBuf);
+        }
+        return;
+      }
+
+      pausedTransferIdsRef.current.delete(transferId);
+      remotePausedTransferIdsRef.current.delete(transferId);
+      if (isTransferPausedRef.current) {
+        isTransferPausedRef.current = false;
+        setIsTransferPaused(false);
+      }
+      const meta = transferMetaByFileIdRef.current.get(transferId);
+      const resolvedQueueId = queueItemId || meta?.queueItemId;
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId && t.direction === 'outgoing' && t.status === 'paused'
+            ? { ...t, status: 'transferring', pausedBy: undefined }
+            : t
+        )
+      );
+      if (resolvedQueueId) {
+        setUploadQueue((prev) =>
+          prev.map((q) =>
+            q.id === resolvedQueueId && q.status === 'paused'
+              ? { ...q, status: 'transferring' }
+              : q
+          )
+        );
+      }
+      sendControlForTransfer(transferId, {
+        kind: 'file:resume',
+        fileId: transferId,
+        name: meta?.name || '',
+        size: meta?.size || 0,
+        by: 'sender',
+      });
+      wakePauseWaiters();
+    },
+    [finalizeIncomingBufferIfComplete, sendControlForTransfer, sendControlReplyEverywhere, wakePauseWaiters]
+  );
+
+  const cancelTransfer = useCallback(
+    (transferId: string, direction: 'outgoing' | 'incoming', queueItemId?: string) => {
+      cancelledTransferIdsRef.current.add(transferId);
+      pausedTransferIdsRef.current.delete(transferId);
+      remotePausedTransferIdsRef.current.delete(transferId);
+      pausedIncomingIdsRef.current.delete(transferId);
+
+      if (direction === 'incoming') {
+        setPendingIncomingQueue((prev) => {
+          const matched = prev.find((p) => p.id === transferId);
+          if (matched) {
+            matched.resolve('reject');
+          }
+          return prev.filter((p) => p.id !== transferId);
+        });
+
+        const rxHandler = incomingControlHandlersRef.current.get(transferId);
+        if (rxHandler) {
+          rxHandler.cancel('local');
+        } else {
+          sendControlReplyEverywhere({
+            kind: 'file:cancel',
+            fileId: transferId,
+            by: 'receiver',
+          });
+        }
+
+        const rxBuf = incomingBuffersRef.current.get(transferId);
+        if (rxBuf) {
+          rxBuf.cancelled = true;
+          rxBuf.rejected = true;
+          rxBuf.awaitingAcceptance = false;
+          rxBuf.paused = false;
+          rxBuf.receivedChunks.length = 0;
+          incomingBuffersRef.current.delete(transferId);
+          resumeBuffersByKeyRef.current.delete(`${rxBuf.name}::${rxBuf.size}`);
+          numIdToFileIdRef.current.delete(rxBuf.transferNumId);
+          orphanChunksRef.current.delete(rxBuf.transferNumId);
+          decryptionErrorReportedRef.current.delete(transferId);
+          lastRxProgressEmitAtRef.current.delete(transferId);
+          setIncomingFileAlert(null);
+        }
+
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId && t.direction === 'incoming'
+              ? {
+                  ...t,
+                  status: 'cancelled',
+                  speedBps: 0,
+                  pausedBy: undefined,
+                  cancelledBy: 'local',
+                  errorMessage: 'Stopped by receiver',
+                }
+              : t
+          )
+        );
+        return;
+      }
+
+      const meta = transferMetaByFileIdRef.current.get(transferId);
+      const resolvedQueueId = queueItemId || meta?.queueItemId;
+      sendControlForTransfer(transferId, {
+        kind: 'file:cancel',
+        fileId: transferId,
+        name: meta?.name || '',
+        size: meta?.size || 0,
+        by: 'sender',
+      });
+      if (
+        exeWsRef.current &&
+        exeWsRef.current.readyState === WebSocket.OPEN &&
+        (!meta?.targetPeerId || meta.targetPeerId === 'native-exe-bridge' || meta.targetPeerId === 'all')
+      ) {
+        try {
+          exeWsRef.current.send(JSON.stringify({ kind: 'exe:file-cancel', fileId: transferId }));
+        } catch {}
+      }
+
+      const cancelCb = cancelHandlersRef.current.get(transferId);
+      if (cancelCb) {
+        cancelHandlersRef.current.delete(transferId);
+        cancelCb();
+      }
+      wakePauseWaiters();
+
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId && t.direction === 'outgoing'
+            ? {
+                ...t,
+                status: 'cancelled',
+                speedBps: 0,
+                pausedBy: undefined,
+                cancelledBy: 'local',
+                errorMessage: 'Stopped by sender',
+              }
+            : t
+        )
+      );
+
+      if (resolvedQueueId) {
+        const activeFids = activeFileIdsByQueueIdRef.current.get(resolvedQueueId);
+        const allCancelled =
+          !activeFids ||
+          Array.from(activeFids).every((fid) => cancelledTransferIdsRef.current.has(fid));
+        if (allCancelled) {
+          cancelledQueueIdsRef.current.add(resolvedQueueId);
+          setUploadQueue((prev) =>
+            prev.map((q) =>
+              q.id === resolvedQueueId && q.status !== 'completed'
+                ? { ...q, status: 'cancelled', errorMessage: 'Stopped by sender' }
+                : q
+            )
+          );
+        }
+      }
+    },
+    [sendControlForTransfer, sendControlReplyEverywhere, wakePauseWaiters]
+  );
+
+  const cancelQueueItem = useCallback(
+    (queueItemId: string) => {
+      cancelledQueueIdsRef.current.add(queueItemId);
+      const activeFids = activeFileIdsByQueueIdRef.current.get(queueItemId);
+      if (activeFids && activeFids.size > 0) {
+        for (const fid of Array.from(activeFids)) {
+          cancelTransfer(fid, 'outgoing', queueItemId);
+        }
+      }
+      setUploadQueue((prev) =>
+        prev.map((q) =>
+          q.id === queueItemId && q.status !== 'completed'
+            ? { ...q, status: 'cancelled', errorMessage: 'Stopped by sender' }
+            : q
+        )
+      );
+    },
+    [cancelTransfer]
+  );
+
+  const toggleGlobalTransferPause = useCallback(() => {
+    const next = !isTransferPausedRef.current;
+    isTransferPausedRef.current = next;
+    setIsTransferPaused(next);
+
+    if (next) {
+      for (const [fid, meta] of transferMetaByFileIdRef.current.entries()) {
+        if (!cancelledTransferIdsRef.current.has(fid)) {
+          pausedTransferIdsRef.current.add(fid);
+          sendControlForTransfer(fid, {
+            kind: 'file:pause',
+            fileId: fid,
+            name: meta.name,
+            size: meta.size,
+            by: 'sender',
+          });
+        }
+      }
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.direction === 'outgoing' && t.status === 'transferring'
+            ? { ...t, status: 'paused', pausedBy: 'local', speedBps: 0 }
+            : t
+        )
+      );
+      setUploadQueue((prev) =>
+        prev.map((q) =>
+          q.status === 'transferring' ? { ...q, status: 'paused' } : q
+        )
+      );
+    } else {
+      for (const [fid, meta] of transferMetaByFileIdRef.current.entries()) {
+        pausedTransferIdsRef.current.delete(fid);
+        remotePausedTransferIdsRef.current.delete(fid);
+        if (!cancelledTransferIdsRef.current.has(fid)) {
+          sendControlForTransfer(fid, {
+            kind: 'file:resume',
+            fileId: fid,
+            name: meta.name,
+            size: meta.size,
+            by: 'sender',
+          });
+        }
+      }
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.direction === 'outgoing' && t.status === 'paused'
+            ? { ...t, status: 'transferring', pausedBy: undefined }
+            : t
+        )
+      );
+      setUploadQueue((prev) =>
+        prev.map((q) =>
+          q.status === 'paused' ? { ...q, status: 'transferring' } : q
+        )
+      );
+      wakePauseWaiters();
+    }
+  }, [sendControlForTransfer, wakePauseWaiters]);
+
+  const toggleItemTransferPause = useCallback(
+    (transferId: string, queueItemId?: string) => {
+      const isItemPaused =
+        pausedTransferIdsRef.current.has(transferId) ||
+        remotePausedTransferIdsRef.current.has(transferId) ||
+        pausedIncomingIdsRef.current.has(transferId) ||
+        isTransferPausedRef.current;
+      if (isItemPaused) {
+        resumeTransfer(transferId, queueItemId);
+      } else {
+        pauseTransfer(transferId, queueItemId);
+      }
+    },
+    [pauseTransfer, resumeTransfer]
+  );
+
   const waitForConfirmationHandshake = useCallback(
     (
       fileId: string,
       fileResumeKey: string,
       initialTimeoutMs: number,
-      queueItemId?: string
-    ): Promise<{ accepted: boolean; resumeChunk: number }> => {
+      queueItemId?: string,
+      resendMeta?: () => void
+    ): Promise<{ accepted: boolean; timedOut?: boolean; cancelled?: boolean; resumeChunk: number }> => {
       return new Promise((resolve) => {
         let settled = false;
+        let waitingForUserClick = false;
+        let retryInterval: number | null = null;
+        const prevCancel = cancelHandlersRef.current.get(fileId);
         let timer = window.setTimeout(() => {
           cleanup();
           resolve({
-            accepted: true,
-            resumeChunk: resumeFromChunkMapRef.current.get(fileResumeKey) || 0,
+            accepted: false,
+            timedOut: true,
+            resumeChunk: 0,
           });
         }, initialTimeoutMs);
+
+        if (resendMeta) {
+          retryInterval = window.setInterval(() => {
+            if (!settled && !waitingForUserClick) {
+              try {
+                resendMeta();
+              } catch {}
+            }
+          }, 900);
+        }
 
         const cleanup = () => {
           if (settled) return;
           settled = true;
           window.clearTimeout(timer);
+          if (retryInterval !== null) {
+            window.clearInterval(retryInterval);
+            retryInterval = null;
+          }
           resumeAckResolversRef.current.delete(fileId);
           resumeAckResolversRef.current.delete(fileResumeKey);
           waitAcceptHandlersRef.current.delete(fileId);
           waitAcceptHandlersRef.current.delete(fileResumeKey);
           rejectHandlersRef.current.delete(fileId);
           rejectHandlersRef.current.delete(fileResumeKey);
+          if (cancelHandlersRef.current.get(fileId) === onCancel) {
+            if (prevCancel) {
+              cancelHandlersRef.current.set(fileId, prevCancel);
+            } else {
+              cancelHandlersRef.current.delete(fileId);
+            }
+          }
         };
 
         const onAck = (chunkIdx: number) => {
@@ -3661,6 +4676,11 @@ export default function App() {
 
         const onWaitAccept = () => {
           if (settled) return;
+          waitingForUserClick = true;
+          if (retryInterval !== null) {
+            window.clearInterval(retryInterval);
+            retryInterval = null;
+          }
           window.clearTimeout(timer);
           timer = window.setTimeout(() => {
             cleanup();
@@ -3686,12 +4706,20 @@ export default function App() {
           resolve({ accepted: false, resumeChunk: 0 });
         };
 
+        const onCancel = () => {
+          if (settled) return;
+          cleanup();
+          resolve({ accepted: false, cancelled: true, resumeChunk: 0 });
+          prevCancel?.();
+        };
+
         resumeAckResolversRef.current.set(fileId, onAck);
         resumeAckResolversRef.current.set(fileResumeKey, onAck);
         waitAcceptHandlersRef.current.set(fileId, onWaitAccept);
         waitAcceptHandlersRef.current.set(fileResumeKey, onWaitAccept);
         rejectHandlersRef.current.set(fileId, onReject);
         rejectHandlersRef.current.set(fileResumeKey, onReject);
+        cancelHandlersRef.current.set(fileId, onCancel);
       });
     },
     []
@@ -3707,7 +4735,7 @@ export default function App() {
         targetLabel?: string;
         skipExeBridge?: boolean;
       }
-    ): Promise<'completed' | 'rejected' | 'error'> => {
+    ): Promise<'completed' | 'rejected' | 'cancelled' | 'error'> => {
       const key = cryptoKeyRef.current;
       if (!key) return 'error';
 
@@ -3730,10 +4758,64 @@ export default function App() {
       const transferNumId = Math.floor(Math.random() * 0x7fffffff) + 1;
       const totalChunks = Math.max(1, Math.ceil(file.size / activeChunkSize));
 
+      const isCancelledNow = () =>
+        cancelledTransferIdsRef.current.has(fileId) ||
+        Boolean(queueItemId && cancelledQueueIdsRef.current.has(queueItemId));
+
+      if (isCancelledNow()) {
+        return 'cancelled';
+      }
+
+      transferMetaByFileIdRef.current.set(fileId, {
+        targetPeerId,
+        name: transferName,
+        size: file.size,
+        queueItemId,
+      });
+      if (queueItemId) {
+        let qSet = activeFileIdsByQueueIdRef.current.get(queueItemId);
+        if (!qSet) {
+          qSet = new Set();
+          activeFileIdsByQueueIdRef.current.set(queueItemId, qSet);
+        }
+        qSet.add(fileId);
+      }
+
+      const wakeAllAborts = () => {
+        const cloudWake = cloudAckResolversRef.current.get(fileId);
+        if (cloudWake) {
+          cloudAckResolversRef.current.delete(fileId);
+          cloudWake();
+        }
+        const rxWake = rxCompleteHandlersRef.current.get(fileId);
+        if (rxWake) {
+          rxCompleteHandlersRef.current.delete(fileId);
+          rxWake();
+        }
+      };
+      cancelHandlersRef.current.set(fileId, wakeAllAborts);
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.CONNECTING) {
+        const waitStart = performance.now();
+        while (
+          wsRef.current &&
+          wsRef.current.readyState === WebSocket.CONNECTING &&
+          performance.now() - waitStart < 2500
+        ) {
+          await new Promise<void>((r) => window.setTimeout(r, 80));
+        }
+      }
+
+      const canonicalTargetKey =
+        targetPeerId !== 'all' ? resolveCanonicalPeerKey(targetPeerId) : '';
+
       const specificPeer =
         targetPeerId !== 'all'
           ? peersRef.current.find(
-              (p) => p.id === targetPeerId || p.cloudId === targetPeerId
+              (p) =>
+                p.id === targetPeerId ||
+                p.cloudId === targetPeerId ||
+                p.id === canonicalTargetKey
             )
           : null;
 
@@ -3757,15 +4839,30 @@ export default function App() {
         openTargetLanes.length > 0 &&
         !(targetPeerId === 'native-exe-bridge' || targetPeerId.startsWith('aethertunnel-exe-'));
 
+      const wsOpenAndReady = Boolean(wsRef.current && wsRef.current.readyState === WebSocket.OPEN);
+      const peerReachableOnWsTunnel =
+        wsOpenAndReady &&
+        (targetPeerId === 'all'
+          ? wsPeerIdsRef.current.size > 0
+          : wsPeerIdsRef.current.has(canonicalTargetKey) || wsPeerIdsRef.current.has(targetPeerId));
+
+      const hasLocalBusForTarget =
+        Boolean(localBusRef.current && localBusPeersRef.current.length > 0) &&
+        (targetPeerId === 'all' ||
+          localBusPeersRef.current.includes(targetPeerId) ||
+          localBusPeersRef.current.includes(canonicalTargetKey));
+
       const targetCloudWebOnlyIds: string[] = (() => {
         if (!sendCloudCandidateRef.current) return [];
         if (targetPeerId === 'native-exe-bridge' || targetPeerId.startsWith('aethertunnel-exe-')) {
           return [];
         }
         if (targetPeerId !== 'all') {
-          if (hasWebRtcTarget) return [];
-          const cloudCid = specificPeer?.cloudId || (targetPeerId.startsWith('aethertunnel-web-') ? targetPeerId : '');
-          if (cloudCid && cloudWebPeersRef.current.includes(cloudCid) && (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)) {
+          if (hasWebRtcTarget || hasLocalBusForTarget || peerReachableOnWsTunnel) return [];
+          const cloudCid =
+            specificPeer?.cloudId ||
+            (targetPeerId.startsWith('aethertunnel-web-') ? targetPeerId : '');
+          if (cloudCid) {
             return [cloudCid];
           }
           return [];
@@ -3773,8 +4870,9 @@ export default function App() {
         return cloudWebPeersRef.current.filter((cid) => {
           const cKey = resolveCanonicalPeerKey(cid);
           const hasDc = getOpenDataChannelLanes(cKey).length > 0;
-          const hasWs = wsRef.current && wsRef.current.readyState === WebSocket.OPEN;
-          return !hasDc && !hasWs;
+          const hasWs = wsOpenAndReady && wsPeerIdsRef.current.has(cKey);
+          const hasLocal = localBusPeersRef.current.includes(cKey);
+          return !hasDc && !hasWs && !hasLocal;
         });
       })();
 
@@ -3782,16 +4880,12 @@ export default function App() {
         targetPeerId !== 'native-exe-bridge' &&
         !targetPeerId.startsWith('aethertunnel-exe-') &&
         (hasWebRtcTarget ||
-          (localBusRef.current &&
-            localBusPeersRef.current.length > 0 &&
-            (targetPeerId === 'all' || localBusPeersRef.current.includes(targetPeerId))) ||
-          (wsRef.current &&
-            wsRef.current.readyState === WebSocket.OPEN &&
+          hasLocalBusForTarget ||
+          (peerReachableOnWsTunnel &&
             (targetPeerId === 'all' ||
               Boolean(
-                specificPeer &&
-                  specificPeer.clientType !== 'exe' &&
-                  !specificPeer.isLocalBridge
+                !specificPeer ||
+                  (specificPeer.clientType !== 'exe' && !specificPeer.isLocalBridge)
               ))));
 
       const activeTransport:
@@ -3813,7 +4907,7 @@ export default function App() {
         bytesTransferred: Math.min(file.size, initialResumeChunk * activeChunkSize),
         speedBps: 0,
         avgSpeedBps: 0,
-        status: 'transferring',
+        status: 'awaiting_acceptance',
         sha256: 'computing-async...',
         verified: false,
         direction: 'outgoing',
@@ -3838,14 +4932,14 @@ export default function App() {
         ),
       ]);
 
-      const markRejected = () => {
+      const markRejected = (reasonMsg?: string) => {
         setTransfers((prev) =>
           prev.map((t) =>
             t.id === fileId
               ? {
                   ...t,
-                  status: 'rejected',
-                  errorMessage: 'Recipient declined the file transfer',
+                  status: reasonMsg ? 'error' : 'rejected',
+                  errorMessage: reasonMsg || 'Recipient declined the file transfer',
                 }
               : t
           )
@@ -3903,6 +4997,7 @@ export default function App() {
         if (paceEpochMs < now - 80) paceEpochMs = now - 80;
         paceEpochMs += durationMs;
         while (maxUploadMBpsRef.current > 0) {
+          if (isCancelledNow()) return;
           const waitMs = paceEpochMs - performance.now();
           if (waitMs <= 1) break;
           await new Promise<void>((r) => window.setTimeout(r, Math.min(80, waitMs)));
@@ -3912,30 +5007,44 @@ export default function App() {
       const sendCloudBridgeFileToPeer = async (
         dstPeer: string,
         kindPrefix: 'exe:' | 'browser:'
-      ): Promise<'completed' | 'rejected' | 'error'> => {
+      ): Promise<'completed' | 'rejected' | 'cancelled' | 'error'> => {
         if (!sendCloudCandidateRef.current) return 'error';
+        if (isCancelledNow()) return 'cancelled';
         const cloudChunkSize = 49152;
         const cloudTotalChunks = Math.max(1, Math.ceil(file.size / cloudChunkSize));
+
+        const sendFileStart = () => {
+          sendCloudCandidateRef.current?.(dstPeer, {
+            kind: `${kindPrefix}file-start`,
+            fileId,
+            name: transferName,
+            size: file.size,
+            chunkSize: cloudChunkSize,
+            totalChunks: cloudTotalChunks,
+            senderLabel: localDisplayNameRef.current,
+          });
+        };
 
         const waitPromise = waitForConfirmationHandshake(
           fileId,
           fileResumeKey,
-          700,
-          queueItemId
+          12000,
+          queueItemId,
+          sendFileStart
         );
 
-        sendCloudCandidateRef.current(dstPeer, {
-          kind: `${kindPrefix}file-start`,
-          fileId,
-          name: transferName,
-          size: file.size,
-          chunkSize: cloudChunkSize,
-          totalChunks: cloudTotalChunks,
-          senderLabel: localDisplayNameRef.current,
-        });
+        sendFileStart();
 
         const confirmRes = await waitPromise;
+        if (confirmRes.cancelled || isCancelledNow()) {
+          return 'cancelled';
+        }
         if (!confirmRes.accepted) {
+          if (confirmRes.timedOut) {
+            throw new Error(
+              'Recipient did not respond to transfer request — verify both devices are connected to the same tunnel'
+            );
+          }
           return 'rejected';
         }
 
@@ -3963,22 +5072,19 @@ export default function App() {
           offset < file.size;
           offset += cloudChunkSize
         ) {
-          await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+          const keepGoing = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
             activeStartedAt += pausedMs;
             lastWindowAt = performance.now();
             lastWindowBytes = offset;
             smoothedLiveBps = 0;
           });
+          if (!keepGoing || isCancelledNow()) return 'cancelled';
           if (!sendCloudCandidateRef.current) break;
           const buf = await file
             .slice(offset, Math.min(file.size, offset + cloudChunkSize))
             .arrayBuffer();
-          const bytes = new Uint8Array(buf);
-          let binary = '';
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          const b64 = window.btoa(binary);
+          if (isCancelledNow()) return 'cancelled';
+          const b64 = arrayBufferToBase64(buf);
 
           sendCloudCandidateRef.current(dstPeer, {
             kind: `${kindPrefix}file-chunk`,
@@ -3989,13 +5095,14 @@ export default function App() {
 
           chunkIdx += 1;
 
-          const sentBytes = Math.min(file.size, offset + bytes.byteLength);
+          const sentBytes = Math.min(file.size, offset + buf.byteLength);
           const approxChunks = Math.min(
             totalChunks,
             Math.ceil((sentBytes / Math.max(1, file.size)) * totalChunks)
           );
           pushProgressUi(approxChunks, sentBytes);
-          await paceOutgoingBytes(bytes.byteLength);
+          await paceOutgoingBytes(buf.byteLength);
+          if (isCancelledNow()) return 'cancelled';
 
           if (chunkIdx % 24 === 0) {
             await new Promise<void>((resolve) => {
@@ -4017,17 +5124,40 @@ export default function App() {
               cloudAckResolversRef.current.set(fileId, wake);
               cloudAckResolversRef.current.set(dstPeer, wake);
             });
+            if (isCancelledNow()) return 'cancelled';
           }
         }
 
-        sendCloudCandidateRef.current?.(dstPeer, {
-          kind: `${kindPrefix}file-end`,
-          fileId,
+        if (isCancelledNow()) return 'cancelled';
+        await new Promise<void>((resolve) => {
+          const cleanup = () => {
+            cloudAckResolversRef.current.delete(fileId);
+            if (cloudAckResolversRef.current.get(dstPeer) === wake) {
+              cloudAckResolversRef.current.delete(dstPeer);
+            }
+          };
+          const timer = window.setTimeout(() => {
+            cleanup();
+            resolve();
+          }, 4000);
+          const wake = () => {
+            window.clearTimeout(timer);
+            cleanup();
+            resolve();
+          };
+          cloudAckResolversRef.current.set(fileId, wake);
+          cloudAckResolversRef.current.set(dstPeer, wake);
+          sendCloudCandidateRef.current?.(dstPeer, {
+            kind: `${kindPrefix}file-end`,
+            fileId,
+          });
         });
+        if (isCancelledNow()) return 'cancelled';
         return 'completed';
       };
 
       try {
+        if (isCancelledNow()) return 'cancelled';
         let anySent = false;
         let anyCompleted = false;
 
@@ -4053,6 +5183,9 @@ export default function App() {
           );
 
           const confirmRes = await waitPromise;
+          if (confirmRes.cancelled || isCancelledNow()) {
+            return 'cancelled';
+          }
           if (!confirmRes.accepted) {
             if (targetPeerId !== 'all') {
               markRejected();
@@ -4082,22 +5215,28 @@ export default function App() {
             initialOffsetBytes = exeStartByte;
 
             for (let offset = exeStartByte; offset < file.size; offset += exeChunkSize) {
-              await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+              const keepGoing = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                 activeStartedAt += pausedMs;
                 lastWindowAt = performance.now();
                 lastWindowBytes = offset;
                 smoothedLiveBps = 0;
               });
+              if (!keepGoing || isCancelledNow()) {
+                return 'cancelled';
+              }
               while (
                 exeWs.readyState === WebSocket.OPEN &&
                 exeWs.bufferedAmount > 16 * 1024 * 1024
               ) {
+                if (isCancelledNow()) return 'cancelled';
                 await new Promise<void>((r) => window.setTimeout(r, 4));
               }
+              if (isCancelledNow()) return 'cancelled';
               if (exeWs.readyState !== WebSocket.OPEN) break;
               const buf = await file
                 .slice(offset, Math.min(file.size, offset + exeChunkSize))
                 .arrayBuffer();
+              if (isCancelledNow()) return 'cancelled';
               exeWs.send(buf);
 
               const sentBytes = Math.min(file.size, offset + buf.byteLength);
@@ -4107,8 +5246,10 @@ export default function App() {
               );
               pushProgressUi(approxChunks, sentBytes);
               await paceOutgoingBytes(buf.byteLength);
+              if (isCancelledNow()) return 'cancelled';
             }
 
+            if (isCancelledNow()) return 'cancelled';
             if (exeWs.readyState === WebSocket.OPEN) {
               exeWs.send(JSON.stringify({ kind: 'exe:file-end', fileId }));
             }
@@ -4117,8 +5258,10 @@ export default function App() {
         }
 
         for (const dstExePeer of targetCloudExeIds) {
+          if (isCancelledNow()) return 'cancelled';
           anySent = true;
           const res = await sendCloudBridgeFileToPeer(dstExePeer, 'exe:');
+          if (res === 'cancelled' || isCancelledNow()) return 'cancelled';
           if (res === 'rejected' && targetPeerId !== 'all') {
             markRejected();
             return 'rejected';
@@ -4127,8 +5270,10 @@ export default function App() {
         }
 
         for (const dstCloudWeb of targetCloudWebOnlyIds) {
+          if (isCancelledNow()) return 'cancelled';
           anySent = true;
           const res = await sendCloudBridgeFileToPeer(dstCloudWeb, 'browser:');
+          if (res === 'cancelled' || isCancelledNow()) return 'cancelled';
           if (res === 'rejected' && targetPeerId !== 'all') {
             markRejected();
             return 'rejected';
@@ -4164,11 +5309,16 @@ export default function App() {
             senderLabel: localDisplayNameRef.current,
           };
 
+          const sendMeta = () => {
+            transmitEncryptedPacket(metaPayload, targetPeerId);
+          };
+
           const confirmPromise = waitForConfirmationHandshake(
             fileId,
             fileResumeKey,
-            1500,
-            queueItemId
+            12000,
+            queueItemId,
+            sendMeta
           );
 
           let rxCompletedConfirmed = false;
@@ -4181,16 +5331,22 @@ export default function App() {
             rxRemoteError = reason;
           });
 
-          transmitEncryptedPacket(metaPayload, targetPeerId);
-          await new Promise((r) => window.setTimeout(r, 120));
-          transmitEncryptedPacket(metaPayload, targetPeerId);
-          await new Promise((r) => window.setTimeout(r, 120));
-          transmitEncryptedPacket(metaPayload, targetPeerId);
+          sendMeta();
 
           const confirmRes = await confirmPromise;
+          if (confirmRes.cancelled || isCancelledNow()) {
+            rxCompleteHandlersRef.current.delete(fileId);
+            rxErrorHandlersRef.current.delete(fileId);
+            return 'cancelled';
+          }
           if (!confirmRes.accepted) {
             rxCompleteHandlersRef.current.delete(fileId);
             rxErrorHandlersRef.current.delete(fileId);
+            if (confirmRes.timedOut) {
+              throw new Error(
+                'Recipient did not respond to transfer request — verify both devices are connected to the same tunnel'
+              );
+            }
             if (!anyCompleted) {
               markRejected();
               return 'rejected';
@@ -4223,6 +5379,7 @@ export default function App() {
               .arrayBuffer()
               .then((sample) => computeSha256Hex(sample))
               .then((digest) => {
+                if (isCancelledNow()) return;
                 setTransfers((prev) =>
                   prev.map((t) => (t.id === fileId ? { ...t, sha256: digest } : t))
                 );
@@ -4273,29 +5430,41 @@ export default function App() {
               waveStart < totalChunks;
               waveStart += chunksPerWave
             ) {
+              if (isCancelledNow()) {
+                return 'cancelled';
+              }
               if (rxRemoteError) {
                 throw new Error(rxRemoteError);
               }
-              await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+              const keepGoingWave = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                 activeStartedAt += pausedMs;
                 lastWindowAt = performance.now();
                 lastWindowBytes = Math.min(file.size, waveStart * activeChunkSize);
                 smoothedLiveBps = 0;
               });
+              if (!keepGoingWave || isCancelledNow()) {
+                return 'cancelled';
+              }
               const nextWavePromise = produceEncryptedWave(waveStart + chunksPerWave);
 
               const currentWave = await currentWavePromise;
               currentWavePromise = nextWavePromise;
+              if (isCancelledNow()) {
+                return 'cancelled';
+              }
               if (!currentWave) break;
 
               const currentLanes = getOpenDataChannelLanes(targetPeerId);
 
               if (currentLanes.length > 0) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   if (rxRemoteError) {
                     throw new Error(rxRemoteError);
                   }
-                  await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+                  const keepGoingChunk = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
                     lastWindowBytes = Math.min(
@@ -4304,6 +5473,9 @@ export default function App() {
                     );
                     smoothedLiveBps = 0;
                   });
+                  if (!keepGoingChunk || isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   const frame = currentWave.encryptedFrames[i];
                   if (
                     localBusRef.current &&
@@ -4319,7 +5491,10 @@ export default function App() {
                     } catch {}
                   }
                   if (!trySendBinaryPacketSync(frame, targetPeerId)) {
-                    await sendBinaryPacketSafely(frame, targetPeerId);
+                    const sentOk = await sendBinaryPacketSafely(frame, targetPeerId, isCancelledNow);
+                    if (!sentOk || isCancelledNow()) {
+                      return 'cancelled';
+                    }
                   }
 
                   const chunksDone = currentWave.waveStartChunk + i + 1;
@@ -4331,6 +5506,9 @@ export default function App() {
                   const wireBytesSent = Math.max(0, rawBytesQueued - bufferedInLanes);
                   pushProgressUi(chunksDone, wireBytesSent);
                   await paceOutgoingBytes(WIRE_CHUNK_BYTES);
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                 }
               } else if (
                 localBusRef.current &&
@@ -4338,10 +5516,13 @@ export default function App() {
                 (targetPeerId === 'all' || localBusPeersRef.current.includes(targetPeerId))
               ) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   if (rxRemoteError) {
                     throw new Error(rxRemoteError);
                   }
-                  await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+                  const keepGoingBus = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
                     lastWindowBytes = Math.min(
@@ -4350,6 +5531,9 @@ export default function App() {
                     );
                     smoothedLiveBps = 0;
                   });
+                  if (!keepGoingBus || isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   const frame = currentWave.encryptedFrames[i];
                   const chunkIndex = currentWave.waveStartChunk + i;
                   try {
@@ -4364,13 +5548,19 @@ export default function App() {
                   const rawBytesQueued = Math.min(file.size, chunksDone * WIRE_CHUNK_BYTES);
                   pushProgressUi(chunksDone, rawBytesQueued);
                   await paceOutgoingBytes(WIRE_CHUNK_BYTES);
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                 }
               } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                 for (let i = 0; i < currentWave.encryptedFrames.length; i++) {
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   if (rxRemoteError) {
                     throw new Error(rxRemoteError);
                   }
-                  await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
+                  const keepGoingWs = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
                     activeStartedAt += pausedMs;
                     lastWindowAt = performance.now();
                     lastWindowBytes = Math.min(
@@ -4379,6 +5569,9 @@ export default function App() {
                     );
                     smoothedLiveBps = 0;
                   });
+                  if (!keepGoingWs || isCancelledNow()) {
+                    return 'cancelled';
+                  }
                   const frame = currentWave.encryptedFrames[i];
                   const chunkIndex = currentWave.waveStartChunk + i;
                   while (
@@ -4386,8 +5579,10 @@ export default function App() {
                     wsRef.current.readyState === WebSocket.OPEN &&
                     wsRef.current.bufferedAmount > HIGH_WATER_MARK * 2
                   ) {
+                    if (isCancelledNow()) return 'cancelled';
                     await new Promise<void>((r) => window.setTimeout(r, 4));
                   }
+                  if (isCancelledNow()) return 'cancelled';
                   if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                     const desiredWsTarget = targetPeerId === 'all' ? '*' : targetPeerId;
                     if (lastWsBinaryTargetRef.current !== desiredWsTarget) {
@@ -4406,6 +5601,9 @@ export default function App() {
                   const rawBytesQueued = Math.min(file.size, chunksDone * WIRE_CHUNK_BYTES);
                   pushProgressUi(chunksDone, rawBytesQueued);
                   await paceOutgoingBytes(WIRE_CHUNK_BYTES);
+                  if (isCancelledNow()) {
+                    return 'cancelled';
+                  }
                 }
               }
             }
@@ -4413,6 +5611,9 @@ export default function App() {
             let lastDrainBuffered = Infinity;
             let lastDrainProgressAt = performance.now();
             while (!rxCompletedConfirmed && !rxRemoteError) {
+              if (isCancelledNow()) {
+                return 'cancelled';
+              }
               const totalBuffered = getOpenDataChannelLanes(targetPeerId).reduce(
                 (sum, dc) => sum + dc.bufferedAmount,
                 0
@@ -4430,10 +5631,16 @@ export default function App() {
               }
               await new Promise<void>((r) => window.setTimeout(r, 25));
             }
+            if (isCancelledNow()) {
+              return 'cancelled';
+            }
             pushProgressUi(totalChunks, file.size);
 
             const confirmDeadlineStart = performance.now();
             while (!rxCompletedConfirmed && !rxRemoteError) {
+              if (isCancelledNow()) {
+                return 'cancelled';
+              }
               const lastProg = rxProgressMapRef.current.get(fileId);
               const lastActivityAt = lastProg?.at || confirmDeadlineStart;
               const idleLimitMs = lastProg ? 6000 : 4000;
@@ -4448,6 +5655,9 @@ export default function App() {
             const progSnapshot = rxProgressMapRef.current.get(fileId);
             rxProgressMapRef.current.delete(fileId);
 
+            if (isCancelledNow()) {
+              return 'cancelled';
+            }
             if (rxRemoteError) {
               throw new Error(rxRemoteError);
             }
@@ -4460,6 +5670,9 @@ export default function App() {
           }
         }
 
+        if (isCancelledNow()) {
+          return 'cancelled';
+        }
         if (!anySent || !anyCompleted) {
           throw new Error('Selected recipient is no longer connected');
         }
@@ -4483,12 +5696,16 @@ export default function App() {
                   status: 'completed',
                   verified: true,
                   completedAt: Date.now(),
+                  pausedBy: undefined,
                 }
               : t
           )
         );
         return 'completed';
       } catch (err: any) {
+        if (isCancelledNow()) {
+          return 'cancelled';
+        }
         setTransfers((prev) =>
           prev.map((t) =>
             t.id === fileId
@@ -4501,6 +5718,22 @@ export default function App() {
           )
         );
         return 'error';
+      } finally {
+        transferMetaByFileIdRef.current.delete(fileId);
+        cancelHandlersRef.current.delete(fileId);
+        rxCompleteHandlersRef.current.delete(fileId);
+        rxErrorHandlersRef.current.delete(fileId);
+        rxProgressMapRef.current.delete(fileId);
+        cloudAckResolversRef.current.delete(fileId);
+        if (queueItemId) {
+          const setForQ = activeFileIdsByQueueIdRef.current.get(queueItemId);
+          if (setForQ) {
+            setForQ.delete(fileId);
+            if (setForQ.size === 0) {
+              activeFileIdsByQueueIdRef.current.delete(queueItemId);
+            }
+          }
+        }
       }
     },
     [
@@ -4839,7 +6072,7 @@ export default function App() {
     );
 
     (async () => {
-      let finalStatus: 'completed' | 'rejected' | 'error' = 'error';
+      let finalStatus: 'completed' | 'rejected' | 'cancelled' | 'error' = 'error';
       try {
         const rawTarget = nextItem.targetPeerId || 'all';
         if (rawTarget === 'all') {
@@ -4889,6 +6122,8 @@ export default function App() {
             );
             if (results.some((r) => r === 'completed')) {
               finalStatus = 'completed';
+            } else if (results.every((r) => r === 'cancelled') || cancelledQueueIdsRef.current.has(nextItem.id)) {
+              finalStatus = 'cancelled';
             } else if (results.every((r) => r === 'rejected')) {
               finalStatus = 'rejected';
             } else {
@@ -4911,19 +6146,24 @@ export default function App() {
           });
         }
       } catch {
-        finalStatus = 'error';
+        finalStatus = cancelledQueueIdsRef.current.has(nextItem.id) ? 'cancelled' : 'error';
       } finally {
         queueProcessingRef.current = false;
+        const resolvedFinalStatus = cancelledQueueIdsRef.current.has(nextItem.id)
+          ? 'cancelled'
+          : finalStatus;
         setUploadQueue((prev) =>
           prev.map((q) =>
             q.id === nextItem.id
               ? {
                   ...q,
-                  status: finalStatus,
+                  status: resolvedFinalStatus,
                   errorMessage:
-                    finalStatus === 'rejected'
+                    resolvedFinalStatus === 'cancelled'
+                      ? q.errorMessage || 'Stopped'
+                      : resolvedFinalStatus === 'rejected'
                       ? 'Declined by recipient'
-                      : finalStatus === 'error'
+                      : resolvedFinalStatus === 'error'
                       ? 'Transfer error'
                       : undefined,
                 }
@@ -5002,6 +6242,52 @@ export default function App() {
       </header>
 
       <main className="flex-1 w-full max-w-[1360px] mx-auto px-6 py-8">
+        {pendingIncomingQueue.length > 0 && activeTab !== 'studio' && (
+          <div className="mb-6 space-y-2.5">
+            {pendingIncomingQueue.map((req) => (
+              <div
+                key={`global-${req.id}`}
+                className="p-4 bg-amber-950/80 border border-amber-500/50 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg"
+              >
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-amber-200">
+                      Incoming File Transfer — Confirmation Required
+                    </div>
+                    <div className="text-xs text-slate-100 font-mono truncate mt-0.5">
+                      {req.name}{' '}
+                      <span className="text-amber-300">({formatBytes(req.size)})</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => resolvePendingIncoming(req, 'accept')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-md transition-colors cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => resolvePendingIncoming(req, 'accept_all')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded-md transition-colors cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Accept All
+                  </button>
+                  <button
+                    onClick={() => resolvePendingIncoming(req, 'reject')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-200 bg-red-950/70 hover:bg-red-900/80 border border-red-700/60 rounded-md transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    Decline
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         {activeTab === 'studio' && (
           <div className="space-y-8">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-800">
@@ -5654,7 +6940,7 @@ export default function App() {
                               )}
                             </button>
                           )}
-                          {uploadQueue.some((q) => q.status === 'completed' || q.status === 'rejected' || q.status === 'error') && (
+                          {uploadQueue.some((q) => q.status === 'completed' || q.status === 'rejected' || q.status === 'cancelled' || q.status === 'error') && (
                             <button
                               onClick={() =>
                                 setUploadQueue((prev) =>
@@ -5700,6 +6986,8 @@ export default function App() {
                                     ? 'text-emerald-400'
                                     : q.status === 'rejected' || q.status === 'error'
                                     ? 'text-red-400'
+                                    : q.status === 'cancelled'
+                                    ? 'text-slate-400'
                                     : q.status === 'waiting_accept' || q.status === 'paused'
                                     ? 'text-amber-400'
                                     : q.status === 'transferring'
@@ -5711,6 +6999,8 @@ export default function App() {
                                   ? 'Completed'
                                   : q.status === 'rejected'
                                   ? 'Declined'
+                                  : q.status === 'cancelled'
+                                  ? 'Stopped'
                                   : q.status === 'error'
                                   ? 'Error'
                                   : q.status === 'waiting_accept'
@@ -5723,7 +7013,18 @@ export default function App() {
                                   ? 'Waiting for peer'
                                   : 'Queued'}
                               </span>
-                              {q.status !== 'transferring' && q.status !== 'paused' && (
+                              {(q.status === 'transferring' || q.status === 'paused' || q.status === 'waiting_accept') && (
+                                <button
+                                  type="button"
+                                  onClick={() => cancelQueueItem(q.id)}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold text-red-200 bg-red-950/70 hover:bg-red-900/80 border border-red-700/60 rounded transition-colors cursor-pointer"
+                                  title="Stop transfer permanently"
+                                >
+                                  <Square className="w-2.5 h-2.5 fill-current" />
+                                  Stop
+                                </button>
+                              )}
+                              {q.status !== 'transferring' && q.status !== 'paused' && q.status !== 'waiting_accept' && (
                                 <button
                                   onClick={() =>
                                     setUploadQueue((prev) =>
@@ -5795,6 +7096,8 @@ export default function App() {
                                         ? 'text-emerald-400'
                                         : item.status === 'rejected' || item.status === 'error'
                                         ? 'text-red-400'
+                                        : item.status === 'cancelled'
+                                        ? 'text-slate-400'
                                         : item.status === 'awaiting_acceptance' || item.status === 'paused'
                                         ? 'text-amber-400'
                                         : 'text-sky-400'
@@ -5804,40 +7107,60 @@ export default function App() {
                                       ? '100% · Verified'
                                       : item.status === 'rejected'
                                       ? 'Declined'
+                                      : item.status === 'cancelled'
+                                      ? item.cancelledBy === 'remote'
+                                        ? `Stopped by peer · ${pct}%`
+                                        : `Stopped · ${pct}%`
                                       : item.status === 'awaiting_acceptance'
                                       ? 'Awaiting acceptance...'
                                       : item.status === 'paused'
-                                      ? `Paused · ${pct}%`
+                                      ? item.pausedBy === 'remote'
+                                        ? `Paused by peer · ${pct}%`
+                                        : `Paused · ${pct}%`
                                       : item.status === 'error'
                                       ? 'Interrupted / Paused'
                                       : `${pct}%`}
                                   </span>
-                                  {item.direction === 'outgoing' &&
-                                    (item.status === 'transferring' || item.status === 'paused') && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          toggleItemTransferPause(item.id, item.queueItemId)
-                                        }
-                                        className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer ${
-                                          item.status === 'paused'
-                                            ? 'text-slate-950 bg-emerald-400 hover:bg-emerald-300'
-                                            : 'text-amber-200 bg-amber-950/70 hover:bg-amber-900/80 border border-amber-700/60'
-                                        }`}
-                                      >
-                                        {item.status === 'paused' ? (
-                                          <>
-                                            <Play className="w-3 h-3" />
-                                            Resume
-                                          </>
-                                        ) : (
-                                          <>
-                                            <Pause className="w-3 h-3" />
-                                            Pause
-                                          </>
-                                        )}
-                                      </button>
-                                    )}
+                                  {(item.status === 'transferring' || item.status === 'paused') && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        toggleItemTransferPause(item.id, item.queueItemId)
+                                      }
+                                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded transition-colors cursor-pointer ${
+                                        item.status === 'paused'
+                                          ? 'text-slate-950 bg-emerald-400 hover:bg-emerald-300'
+                                          : 'text-amber-200 bg-amber-950/70 hover:bg-amber-900/80 border border-amber-700/60'
+                                      }`}
+                                    >
+                                      {item.status === 'paused' ? (
+                                        <>
+                                          <Play className="w-3 h-3" />
+                                          Resume
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Pause className="w-3 h-3" />
+                                          Pause
+                                        </>
+                                      )}
+                                    </button>
+                                  )}
+                                  {(item.status === 'transferring' ||
+                                    item.status === 'paused' ||
+                                    item.status === 'awaiting_acceptance') && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        cancelTransfer(item.id, item.direction, item.queueItemId)
+                                      }
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-red-200 bg-red-950/70 hover:bg-red-900/80 border border-red-700/60 rounded transition-colors cursor-pointer"
+                                      title="Stop transfer permanently"
+                                    >
+                                      <Square className="w-3 h-3 fill-current" />
+                                      Stop
+                                    </button>
+                                  )}
                                   {item.direction === 'outgoing' &&
                                     item.status === 'error' &&
                                     selectedFilesByKeyRef.current.has(
@@ -5881,6 +7204,8 @@ export default function App() {
                                       ? 'bg-emerald-400'
                                       : item.status === 'rejected' || item.status === 'error'
                                       ? 'bg-red-500'
+                                      : item.status === 'cancelled'
+                                      ? 'bg-slate-600'
                                       : item.status === 'awaiting_acceptance' || item.status === 'paused'
                                       ? 'bg-amber-400'
                                       : 'bg-sky-400'
@@ -5992,10 +7317,13 @@ export default function App() {
             transfers={transfers}
             onClearCompleted={() =>
               setTransfers((prev) =>
-                prev.filter((t) => t.status !== 'completed')
+                prev.filter((t) => t.status !== 'completed' && t.status !== 'cancelled')
               )
             }
             onSwitchToStudio={() => setActiveTab('studio')}
+            onPauseTransfer={pauseTransfer}
+            onResumeTransfer={resumeTransfer}
+            onCancelTransfer={cancelTransfer}
           />
         )}
 
