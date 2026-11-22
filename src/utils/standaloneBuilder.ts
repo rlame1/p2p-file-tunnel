@@ -2,7 +2,7 @@
 // that run directly from GitHub Pages, GitHub Releases, or local disk without any backend server.
 
 export function generateStandalonePortableHtml(defaultRoomCode: string): string {
-  const safeRoomAttr = String(defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase();
+  const safeRoomAttr = String(defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 64);
   return `<!doctype html>
 <html lang="en" class="dark">
 <head>
@@ -133,8 +133,30 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
     const activeOutgoing = new Map();
     const cancelledIds = new Set();
 
-    function escapeHtml(s) {
-      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    function sanitizeSafeFileName(name) {
+      const cleaned = String(name || 'transfer.bin')
+        .replace(/[\u0000-\u001f\\/:*?"<>|]/g, '_')
+        .replace(/\.\.+/g, '_')
+        .trim()
+        .replace(/^\.+/, '');
+      return cleaned || 'transfer.bin';
+    }
+
+    function uint8ToBase64(bytes) {
+      let bin = '';
+      const step = 0x8000;
+      for (let i = 0; i < bytes.byteLength; i += step) {
+        const sub = bytes.subarray(i, Math.min(bytes.byteLength, i + step));
+        bin += String.fromCharCode.apply(null, Array.from(sub));
+      }
+      return btoa(bin);
+    }
+
+    function base64ToUint8(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
     }
 
     function syncPauseBtnUi() {
@@ -246,7 +268,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         if (!fromRemote) {
           sendReplyEverywhere({ kind: 'file:cancel', fileId: fid, name: fname, size: fsize, by: 'receiver' });
         }
-        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + escapeHtml(fname));
+        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + fname);
         syncPauseBtnUi();
         return;
       }
@@ -258,7 +280,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         if (!fromRemote) {
           sendReplyEverywhere({ kind: 'file:cancel', fileId: fid, name: cname, size: csize, by: 'receiver' });
         }
-        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + escapeHtml(cname));
+        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + cname);
         syncPauseBtnUi();
         return;
       }
@@ -475,28 +497,63 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
     function renderStatus(text) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200">' + text + '</div>';
+      if (!list) return;
+      const box = document.createElement('div');
+      box.className = 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200';
+      box.textContent = String(text || '');
+      list.replaceChildren(box);
     }
 
     function renderError(text) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200">' + text + '</div>';
+      if (!list) return;
+      const box = document.createElement('div');
+      box.className = 'p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200';
+      box.textContent = String(text || '');
+      list.replaceChildren(box);
     }
 
     function renderDownload(name, url, size, mbps) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between"><span>Verified: ' + name + ' (' + (size/(1024*1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)</span><a href="' + url + '" download="' + name + '" class="px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded">Save File</a></div>';
+      if (!list) return;
+      const safeName = sanitizeSafeFileName(name);
+      const safeUrl = String(url || '').startsWith('blob:') ? String(url) : '#';
+      const row = document.createElement('div');
+      row.className = 'p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between gap-3';
+      const span = document.createElement('span');
+      span.className = 'truncate';
+      span.textContent = 'Verified: ' + safeName + ' (' + (size / (1024 * 1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)';
+      const link = document.createElement('a');
+      link.href = safeUrl;
+      link.download = safeName;
+      link.rel = 'noopener';
+      link.className = 'px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded shrink-0';
+      link.textContent = 'Save File';
+      row.appendChild(span);
+      row.appendChild(link);
+      list.replaceChildren(row);
     }
 
-    function renderTransferControls(fid, isPaused) {
-      const pauseLabel = isPaused ? 'Resume' : 'Pause';
-      const pauseCls = isPaused
+    function createTransferControls(fid, isPaused) {
+      const wrap = document.createElement('div');
+      wrap.className = 'flex items-center gap-1.5 shrink-0';
+      const pauseBtn = document.createElement('button');
+      pauseBtn.type = 'button';
+      pauseBtn.dataset.action = 'pause-resume';
+      pauseBtn.dataset.fid = String(fid || '');
+      pauseBtn.className = isPaused
         ? 'px-2.5 py-1 text-[11px] font-semibold bg-emerald-400 text-slate-950 rounded hover:bg-emerald-300 cursor-pointer'
         : 'px-2.5 py-1 text-[11px] font-semibold bg-amber-950/80 text-amber-200 border border-amber-700/60 rounded hover:bg-amber-900 cursor-pointer';
-      return '<div class="flex items-center gap-1.5 shrink-0">' +
-        '<button type="button" data-action="pause-resume" data-fid="' + escapeHtml(fid) + '" class="' + pauseCls + '">' + pauseLabel + '</button>' +
-        '<button type="button" data-action="stop" data-fid="' + escapeHtml(fid) + '" class="px-2.5 py-1 text-[11px] font-semibold bg-rose-950/80 text-rose-200 border border-rose-700/60 rounded hover:bg-rose-900 cursor-pointer">Stop</button>' +
-      '</div>';
+      pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      const stopBtn = document.createElement('button');
+      stopBtn.type = 'button';
+      stopBtn.dataset.action = 'stop';
+      stopBtn.dataset.fid = String(fid || '');
+      stopBtn.className = 'px-2.5 py-1 text-[11px] font-semibold bg-rose-950/80 text-rose-200 border border-rose-700/60 rounded hover:bg-rose-900 cursor-pointer';
+      stopBtn.textContent = 'Stop';
+      wrap.appendChild(pauseBtn);
+      wrap.appendChild(stopBtn);
+      return wrap;
     }
 
     function renderIncomingRow(rxObj, isBridge) {
@@ -508,15 +565,23 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       const elapsed = Math.max(0.02, (now - rxObj.startedAt) / 1000);
       const recvBytes = isBridge ? rxObj.bytes : (rxObj.receivedCount * (rxObj.chunkSize || 240 * 1024));
       const mbps = (recvBytes / (1024 * 1024) / elapsed).toFixed(2);
+      const safeName = sanitizeSafeFileName(rxObj.name);
       let label;
       if (rxObj.paused) {
-        label = (rxObj.remotePaused ? 'Paused by sender: ' : 'Paused: ') + escapeHtml(rxObj.name) + ' (' + pct + '%)';
+        label = (rxObj.remotePaused ? 'Paused by sender: ' : 'Paused: ') + safeName + ' (' + pct + '%)';
       } else {
-        label = (isBridge ? 'Receiving (Bridge): ' : 'Receiving: ') + escapeHtml(rxObj.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+        label = (isBridge ? 'Receiving (Bridge): ' : 'Receiving: ') + safeName + ' (' + pct + '% · ' + mbps + ' MB/s)';
       }
       const list = document.getElementById('transfer-list');
       if (!list) return;
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3"><span class="truncate">' + label + '</span>' + renderTransferControls(rxObj.fileId, !!rxObj.paused) + '</div>';
+      const row = document.createElement('div');
+      row.className = 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3';
+      const span = document.createElement('span');
+      span.className = 'truncate';
+      span.textContent = label;
+      row.appendChild(span);
+      row.appendChild(createTransferControls(rxObj.fileId, !!rxObj.paused));
+      list.replaceChildren(row);
     }
 
     function finalizeIncomingIfReady() {
@@ -538,9 +603,26 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
 
     function finalizeCloudRx(src, endKind) {
       if (!rxCloudFile || rxCloudFile.cancelled || rxCloudFile.paused) return;
+      if (rxCloudFile.pendingDecrypts > 0) {
+        rxCloudFile.endPending = { src, endKind };
+        return;
+      }
+      let filled = 0;
+      const parts = [];
+      for (let i = 0; i < rxCloudFile.totalChunks; i++) {
+        if (rxCloudFile.chunks[i]) {
+          filled++;
+          parts.push(rxCloudFile.chunks[i]);
+        }
+      }
+      if (rxCloudFile.size > 0 && filled < rxCloudFile.totalChunks) {
+        renderError('Transfer incomplete (' + filled + '/' + rxCloudFile.totalChunks + ' chunks) — please retry.');
+        rxCloudFile = null;
+        syncPauseBtnUi();
+        return;
+      }
       const elapsed = Math.max(0.02, (performance.now() - rxCloudFile.startedAt) / 1000);
       const mbps = (rxCloudFile.size / (1024 * 1024) / elapsed).toFixed(2);
-      const parts = rxCloudFile.chunks.filter(Boolean);
       const blob = new Blob(parts, { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       renderDownload(rxCloudFile.name, url, rxCloudFile.size, mbps);
@@ -555,6 +637,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       if (!incomingFile || incomingFile.cancelled || !currentKey) return;
       const view = new DataView(buf);
       const chunkIndex = view.getUint32(8, false);
+      if (chunkIndex >= incomingFile.totalChunks) return;
       const iv = new Uint8Array(buf, 12, 12);
       const ciphertext = new Uint8Array(buf, 24);
       let dec;
@@ -608,15 +691,26 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         const chunkIndex = view.getUint32(8, false);
         const totalBytes = view.getUint32(12, false);
         const byteOffset = view.getUint32(16, false);
+        const partIndex = view.getUint16(20, false);
         const totalParts = view.getUint16(22, false);
+        if (totalBytes < 24 || totalBytes > 8 * 1024 * 1024 || totalParts < 1 || totalParts > 2048 || partIndex >= totalParts) {
+          return true;
+        }
+        const slice = new Uint8Array(buf, 24);
+        if (byteOffset + slice.byteLength > totalBytes) return true;
         const key = transferNumId + ':' + chunkIndex;
         let entry = partialFrames.get(key);
         if (!entry) {
-          entry = { buf: new Uint8Array(totalBytes), count: 0, totalParts };
+          if (partialFrames.size >= 128) return true;
+          entry = { buf: new Uint8Array(totalBytes), count: 0, totalParts, seen: new Set() };
           partialFrames.set(key, entry);
         }
-        entry.buf.set(new Uint8Array(buf, 24), byteOffset);
-        entry.count++;
+        if (entry.buf.byteLength !== totalBytes || entry.totalParts !== totalParts) return true;
+        if (!entry.seen.has(partIndex)) {
+          entry.seen.add(partIndex);
+          entry.buf.set(slice, byteOffset);
+          entry.count++;
+        }
         if (entry.count >= entry.totalParts) {
           partialFrames.delete(key);
           handleCompleteAethFrame(entry.buf.buffer);
@@ -699,26 +793,31 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         return;
       }
       if (msg.kind === 'file:meta') {
-        if (msg.fileId && cancelledIds.has(String(msg.fileId))) return;
-        if (incomingFile && incomingFile.fileId === msg.fileId && incomingFile.totalChunks === msg.totalChunks) {
+        const fileId = String(msg.fileId || ('f-' + Date.now()));
+        if (cancelledIds.has(fileId)) return;
+        const safeName = sanitizeSafeFileName(msg.name);
+        const safeSize = Math.max(0, Number(msg.size) || 0);
+        const safeTotalChunks = Math.max(1, Math.min(200000, Math.floor(Number(msg.totalChunks) || 1)));
+        const safeChunkSize = Math.max(1024, Math.min(8 * 1024 * 1024, Math.floor(Number(msg.chunkSize) || 240 * 1024)));
+        if (incomingFile && incomingFile.fileId === fileId && incomingFile.totalChunks === safeTotalChunks) {
           let miss = 0;
           while (miss < incomingFile.totalChunks && incomingFile.chunks[miss] !== undefined) miss++;
-          const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk: miss };
+          const ack = { kind: 'file:resume-ack', fileId, name: incomingFile.name, size: incomingFile.size, resumeFromChunk: miss };
           sendReplyEverywhere(ack);
           return;
         }
-        const rKey = msg.name + '::' + msg.size;
+        const rKey = safeName + '::' + safeSize;
         const prev = resumeCheckpoints.get(rKey);
-        let chunks = new Array(msg.totalChunks);
+        let chunks = new Array(safeTotalChunks);
         let resumeFromChunk = 0;
-        if (prev && prev.chunks && prev.chunks.length === msg.totalChunks) {
+        if (prev && prev.chunks && prev.chunks.length === safeTotalChunks) {
           chunks = prev.chunks;
           while (resumeFromChunk < chunks.length && chunks[resumeFromChunk] !== undefined) resumeFromChunk++;
         }
         rxDecryptErrShownFor = '';
-        incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0, paused: transferPaused, pausedAt: transferPaused ? performance.now() : 0, remotePaused: false, cancelled: false };
+        incomingFile = { ...msg, fileId, name: safeName, size: safeSize, totalChunks: safeTotalChunks, chunkSize: safeChunkSize, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0, paused: transferPaused, pausedAt: transferPaused ? performance.now() : 0, remotePaused: false, cancelled: false };
         resumeCheckpoints.set(rKey, incomingFile);
-        const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk };
+        const ack = { kind: 'file:resume-ack', fileId, name: safeName, size: safeSize, resumeFromChunk };
         const peerObj = srcPeer ? peersMap.get(srcPeer) : null;
         if (peerObj && peerObj.dc && peerObj.dc.readyState === 'open') {
           try { peerObj.dc.send(JSON.stringify(ack)); } catch {}
@@ -974,20 +1073,26 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       }
 
       if (p.kind === 'exe:file-start' || p.kind === 'browser:file-start') {
-        if (p.fileId && cancelledIds.has(String(p.fileId))) return;
+        const incomingFid = String(p.fileId || ('cloud-' + Date.now()));
+        if (cancelledIds.has(incomingFid)) return;
         const prefix = p.kind.startsWith('browser:') ? 'browser:' : 'exe:';
-        if (rxCloudFile && rxCloudFile.fileId === p.fileId) {
-          sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: p.fileId, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: rxCloudFile.receivedCount || 0 });
+        if (rxCloudFile && rxCloudFile.fileId === incomingFid) {
+          sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: incomingFid, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: rxCloudFile.receivedCount || 0 });
           return;
         }
+        const safeName = sanitizeSafeFileName(p.name);
+        const safeSize = Math.max(0, Number(p.size) || 0);
+        const safeTotalChunks = Math.max(1, Math.min(200000, Math.floor(Number(p.totalChunks) || 1)));
         rxCloudFile = {
-          fileId: p.fileId,
-          name: p.name || 'transfer.bin',
-          size: Number(p.size) || 0,
-          totalChunks: Math.max(1, Number(p.totalChunks) || 1),
-          chunks: new Array(Math.max(1, Number(p.totalChunks) || 1)),
+          fileId: incomingFid,
+          name: safeName,
+          size: safeSize,
+          totalChunks: safeTotalChunks,
+          chunks: new Array(safeTotalChunks),
           receivedCount: 0,
           bytes: 0,
+          pendingDecrypts: 0,
+          endPending: null,
           startedAt: performance.now(),
           lastUi: 0,
           paused: transferPaused,
@@ -996,29 +1101,73 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           cancelled: false,
           endedWhilePaused: null
         };
-        sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: p.fileId, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: 0 });
+        sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: incomingFid, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: 0 });
         renderIncomingRow(rxCloudFile, true);
         syncPauseBtnUi();
         return;
       }
 
-      if ((p.kind === 'exe:file-chunk' || p.kind === 'browser:file-chunk') && rxCloudFile && !rxCloudFile.cancelled && p.data) {
-        const cIdx = Math.max(0, Number(p.chunkIndex) || 0);
-        if (rxCloudFile.chunks[cIdx] === undefined) {
-          const bin = atob(p.data);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          rxCloudFile.chunks[cIdx] = bytes;
-          rxCloudFile.receivedCount = (rxCloudFile.receivedCount || 0) + 1;
-          rxCloudFile.bytes += bytes.byteLength;
-          const now = performance.now();
-          if (now - rxCloudFile.lastUi > 120) {
-            rxCloudFile.lastUi = now;
-            renderIncomingRow(rxCloudFile, true);
+      if ((p.kind === 'exe:file-chunk' || p.kind === 'browser:file-chunk') && rxCloudFile && !rxCloudFile.cancelled && typeof p.data === 'string' && p.data.length > 0) {
+        const cIdx = Number(p.chunkIndex);
+        if (!Number.isInteger(cIdx) || cIdx < 0 || cIdx >= rxCloudFile.totalChunks) return;
+        const targetRx = rxCloudFile;
+        if (targetRx.chunks[cIdx] === undefined) {
+          if (p.kind === 'browser:file-chunk' && p.encrypted && typeof p.iv === 'string') {
+            if (!currentKey) {
+              renderError('Missing tunnel E2EE key — verify Tunnel Name & Passphrase');
+              return;
+            }
+            targetRx.pendingDecrypts++;
+            (async () => {
+              try {
+                const ivBytes = base64ToUint8(p.iv);
+                if (ivBytes.byteLength !== 12) throw new Error('Invalid IV length');
+                const cipherBytes = base64ToUint8(p.data);
+                const decBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes, tagLength: 128 }, currentKey, cipherBytes);
+                if (rxCloudFile !== targetRx || targetRx.cancelled) return;
+                const bytes = new Uint8Array(decBuf);
+                if (targetRx.chunks[cIdx] === undefined) {
+                  targetRx.chunks[cIdx] = bytes;
+                  targetRx.receivedCount = (targetRx.receivedCount || 0) + 1;
+                  targetRx.bytes += bytes.byteLength;
+                  const now = performance.now();
+                  if (now - targetRx.lastUi > 120) {
+                    targetRx.lastUi = now;
+                    renderIncomingRow(targetRx, true);
+                  }
+                }
+              } catch {
+                if (rxCloudFile === targetRx && !targetRx.cancelled) {
+                  targetRx.cancelled = true;
+                  rxCloudFile = null;
+                  syncPauseBtnUi();
+                  renderError('AES-256-GCM decryption failed — verify Tunnel Name & E2EE Passphrase match sender');
+                }
+                return;
+              } finally {
+                if (targetRx.pendingDecrypts > 0) targetRx.pendingDecrypts--;
+              }
+              if (rxCloudFile === targetRx && !targetRx.cancelled && !targetRx.paused && targetRx.pendingDecrypts === 0 && targetRx.endPending) {
+                const ep = targetRx.endPending;
+                targetRx.endPending = null;
+                finalizeCloudRx(ep.src, ep.endKind);
+              }
+            })();
+          } else {
+            let bytes;
+            try { bytes = base64ToUint8(p.data); } catch { return; }
+            targetRx.chunks[cIdx] = bytes;
+            targetRx.receivedCount = (targetRx.receivedCount || 0) + 1;
+            targetRx.bytes += bytes.byteLength;
+            const now = performance.now();
+            if (now - targetRx.lastUi > 120) {
+              targetRx.lastUi = now;
+              renderIncomingRow(targetRx, true);
+            }
           }
         }
         if ((cIdx + 1) % 8 === 0) {
-          sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', fileId: rxCloudFile.fileId, chunkIndex: cIdx });
+          sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', fileId: targetRx.fileId, chunkIndex: cIdx });
         }
         return;
       }
@@ -1027,6 +1176,10 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         if (rxCloudFile.paused) {
           rxCloudFile.endedWhilePaused = { src, endKind: p.kind };
           renderIncomingRow(rxCloudFile, true);
+          return;
+        }
+        if (rxCloudFile.pendingDecrypts > 0) {
+          rxCloudFile.endPending = { src, endKind: p.kind };
           return;
         }
         finalizeCloudRx(src, p.kind);
@@ -1173,9 +1326,8 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       }
     });
     document.getElementById('file-input').addEventListener('change', async (e) => {
-      const files = e.target.files;
-      if (!files.length) return;
-      const file = files[0];
+      const selectedFiles = Array.from(e.target.files || []);
+      if (!selectedFiles.length) return;
       e.target.value = '';
       const targetId = (document.getElementById('target-peer-select') && document.getElementById('target-peer-select').value) || '*';
       const targetPeers = targetId === '*'
@@ -1183,7 +1335,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         : (peersMap.has(targetId) ? [peersMap.get(targetId)] : []);
 
       if (targetPeers.length === 0) {
-        renderStatus('Selected recipient is not present in room "' + escapeHtml(activeRoom) + '".');
+        renderStatus('Selected recipient is not present in room "' + activeRoom + '".');
         return;
       }
 
@@ -1192,14 +1344,22 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
       function renderAllPeerStatuses() {
         const list = document.getElementById('transfer-list');
         if (!list) return;
-        list.innerHTML = Array.from(peerRows.values()).join('');
+        list.replaceChildren(...Array.from(peerRows.values()));
       }
-      function setPeerRow(pid, isError, htmlText, activeEntry) {
+      function setPeerRow(pid, isError, plainText, activeEntry) {
         const cls = isError
           ? 'p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200 flex items-center justify-between gap-3'
           : 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3';
-        const ctrls = activeEntry ? renderTransferControls(activeEntry.fileId, !!activeEntry.paused) : '';
-        peerRows.set(pid, '<div class="' + cls + '"><span class="truncate">' + htmlText + '</span>' + ctrls + '</div>');
+        const row = document.createElement('div');
+        row.className = cls;
+        const span = document.createElement('span');
+        span.className = 'truncate';
+        span.textContent = String(plainText || '');
+        row.appendChild(span);
+        if (activeEntry) {
+          row.appendChild(createTransferControls(activeEntry.fileId, !!activeEntry.paused));
+        }
+        peerRows.set(pid, row);
         renderAllPeerStatuses();
       }
 
@@ -1231,7 +1391,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
         return out;
       }
 
-      async function sendToIndependentPeer(peer) {
+      async function sendToIndependentPeer(peer, file) {
         let startedAt = performance.now();
         let paceEpochMs = performance.now();
         const peerLabel = peer.label || peer.id.slice(-8);
@@ -1273,17 +1433,17 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
             cancelled: false,
             cancelledBy: '',
             pct: 0,
-            lastStatus: 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (0%)',
+            lastStatus: 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (0%)',
             renderRow: null
           };
           outEntry.renderRow = () => {
             if (outEntry.cancelled) {
-              setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name), null);
+              setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + peerLabel + ']: ' + file.name, null);
               return;
             }
             if (outEntry.paused) {
               const pPrefix = outEntry.remotePaused ? 'Paused by peer [' : 'Paused [';
-              setPeerRow(peer.id, false, pPrefix + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + outEntry.pct + '%)', outEntry);
+              setPeerRow(peer.id, false, pPrefix + peerLabel + ']: ' + file.name + ' (' + outEntry.pct + '%)', outEntry);
               return;
             }
             setPeerRow(peer.id, false, outEntry.lastStatus, outEntry);
@@ -1343,7 +1503,6 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
                 const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
                 const iv = new Uint8Array(12);
                 crypto.getRandomValues(iv);
-                new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
                 const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
                 const frame = new Uint8Array(24 + enc.byteLength);
                 const hv = new DataView(frame.buffer);
@@ -1383,7 +1542,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
               const mbps = (sentBytes / (1024 * 1024) / elapsed).toFixed(2);
               const pct = Math.round((sentBytes / Math.max(1, file.size)) * 100);
               outEntry.pct = pct;
-              outEntry.lastStatus = 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+              outEntry.lastStatus = 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
               outEntry.renderRow();
             }
 
@@ -1400,7 +1559,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
                 const elapsed = Math.max(0.02, (nowD - startedAt) / 1000);
                 const mbps = (sentBytes / (1024 * 1024) / elapsed).toFixed(2);
                 outEntry.pct = pct;
-                outEntry.lastStatus = 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+                outEntry.lastStatus = 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
                 outEntry.renderRow();
               } else if (nowD - lastBufAt > 15000) {
                 break;
@@ -1418,12 +1577,12 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
               return;
             }
             if (rxErr) {
-              setPeerRow(peer.id, true, '[' + escapeHtml(peerLabel) + '] Error: ' + escapeHtml(rxErr), null);
+              setPeerRow(peer.id, true, '[' + peerLabel + '] Error: ' + rxErr, null);
               return;
             }
             const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
             const finalMbps = (file.size / (1024 * 1024) / totalElapsed).toFixed(2);
-            setPeerRow(peer.id, false, 'Completed [' + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + finalMbps + ' MB/s avg)', null);
+            setPeerRow(peer.id, false, 'Completed [' + peerLabel + ']: ' + file.name + ' (' + finalMbps + ' MB/s avg)', null);
             return;
           } finally {
             rxCompleteResolvers.delete(fileId);
@@ -1450,17 +1609,17 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           cancelled: false,
           cancelledBy: '',
           pct: 0,
-          lastStatus: 'Bridge -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (0%)',
+          lastStatus: 'Bridge -> ' + peerLabel + ': ' + file.name + ' (0%)',
           renderRow: null
         };
         outEntry.renderRow = () => {
           if (outEntry.cancelled) {
-            setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name), null);
+            setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + peerLabel + ']: ' + file.name, null);
             return;
           }
           if (outEntry.paused) {
             const pPrefix = outEntry.remotePaused ? 'Paused by peer [' : 'Paused [';
-            setPeerRow(peer.id, false, pPrefix + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + outEntry.pct + '%)', outEntry);
+            setPeerRow(peer.id, false, pPrefix + peerLabel + ']: ' + file.name + ' (' + outEntry.pct + '%)', outEntry);
             return;
           }
           setPeerRow(peer.id, false, outEntry.lastStatus, outEntry);
@@ -1495,7 +1654,8 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           });
 
           let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
-          for (let off = cIdx * cSize; off < file.size; off += cSize) {
+          while (cIdx < totalChunks) {
+            const off = cIdx * cSize;
             if (outEntry.cancelled) break;
             if (transferPaused || outEntry.paused) {
               outEntry.pct = Math.round((cIdx / totalChunks) * 100);
@@ -1506,14 +1666,27 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
             const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
             if (outEntry.cancelled) break;
             const bytes = new Uint8Array(buf);
-            let bin = '';
-            for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-            sendCloudCandidate(dst, {
-              kind: isExe ? 'exe:file-chunk' : 'browser:file-chunk',
-              fileId,
-              chunkIndex: cIdx,
-              data: btoa(bin)
-            });
+            if (!isExe && currentKey) {
+              const iv = new Uint8Array(12);
+              crypto.getRandomValues(iv);
+              const encBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, buf);
+              if (outEntry.cancelled) break;
+              sendCloudCandidate(dst, {
+                kind: 'browser:file-chunk',
+                fileId,
+                chunkIndex: cIdx,
+                encrypted: true,
+                iv: uint8ToBase64(iv),
+                data: uint8ToBase64(new Uint8Array(encBuf))
+              });
+            } else {
+              sendCloudCandidate(dst, {
+                kind: isExe ? 'exe:file-chunk' : 'browser:file-chunk',
+                fileId,
+                chunkIndex: cIdx,
+                data: uint8ToBase64(bytes)
+              });
+            }
             cIdx++;
             await paceOutgoingBytes(bytes.byteLength, outEntry);
             if (outEntry.cancelled) break;
@@ -1521,7 +1694,7 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
             const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
             const pct = Math.round((cIdx / totalChunks) * 100);
             outEntry.pct = pct;
-            outEntry.lastStatus = 'Bridge -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+            outEntry.lastStatus = 'Bridge -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
             outEntry.renderRow();
             if (cIdx % 24 === 0) {
               await new Promise(resolve => {
@@ -1548,14 +1721,16 @@ export function generateStandalonePortableHtml(defaultRoomCode: string): string 
           sendCloudCandidate(dst, { kind: isExe ? 'exe:file-end' : 'browser:file-end', fileId });
           const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
           const finalMbps = (file.size / (1024 * 1024) / totalElapsed).toFixed(2);
-          setPeerRow(peer.id, false, 'Completed [' + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + finalMbps + ' MB/s avg)', null);
+          setPeerRow(peer.id, false, 'Completed [' + peerLabel + ']: ' + file.name + ' (' + finalMbps + ' MB/s avg)', null);
         } finally {
           activeOutgoing.delete(fileId);
           syncPauseBtnUi();
         }
       }
 
-      await Promise.all(targetPeers.map(p => sendToIndependentPeer(p)));
+      for (const file of selectedFiles) {
+        await Promise.all(targetPeers.map(p => sendToIndependentPeer(p, file)));
+      }
     });
 
     if (document.getElementById('room-input').value.trim()) {
@@ -1681,12 +1856,26 @@ export function downloadNativeWindowsKernelExe(
   defaultRoomCode: string = '',
   _cloudWsUrl?: string
 ) {
-  const safeRoom = (defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase();
+  const safeRoom = (defaultRoomCode || '').replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 64);
   const fallbackWs = typeof window !== 'undefined' && window.location && window.location.origin
     ? window.location.origin.replace(/^http/, 'ws') + '/ws-tunnel'
     : '';
   const rawCloudWs = String(_cloudWsUrl || fallbackWs || '').trim();
-  const safeCloudWs = /^(wss?:\/\/[a-z0-9.\-:\[\]]+\/[^\s"'<>\\]*)$/i.test(rawCloudWs) ? rawCloudWs : '';
+  let safeCloudWs = '';
+  if (rawCloudWs && rawCloudWs.length <= 256 && !/[\s"'<>\\]/.test(rawCloudWs)) {
+    try {
+      const parsed = new URL(rawCloudWs);
+      if (
+        (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') &&
+        /^[a-z0-9.\-:\[\]]+$/i.test(parsed.host) &&
+        /^\/[a-z0-9/_.\-]*$/i.test(parsed.pathname) &&
+        !parsed.username &&
+        !parsed.password
+      ) {
+        safeCloudWs = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+      }
+    } catch {}
+  }
 
   const csharpKernelSource = `
 using System;
@@ -1959,6 +2148,7 @@ namespace AetherTunnelNative
             return a;
         });
         private readonly ThreadLocal<byte[]> threadLocalIv = new ThreadLocal<byte[]>(delegate() { return new byte[16]; });
+        private readonly ThreadLocal<RNGCryptoServiceProvider> threadLocalRng = new ThreadLocal<RNGCryptoServiceProvider>(delegate() { return new RNGCryptoServiceProvider(); });
         private long totalAppBufferedBytes = 0;
         private const long HARD_RAM_CAP_BYTES = 1750L * 1024L * 1024L;
         private const long DISK_STAGE_TARGET_BYTES = 256L * 1024L * 1024L;
@@ -2032,6 +2222,7 @@ namespace AetherTunnelNative
         private string cloudPartPath = "";
         private string cloudOutPath = "";
         private long cloudExpectedSize = 0;
+        private long cloudChunkSize = CLOUD_CHUNK_SIZE;
         private long cloudReceivedBytes = 0;
         private long cloudSessionStartBytes = 0;
         private Stopwatch cloudRxSw = null;
@@ -2405,7 +2596,14 @@ namespace AetherTunnelNative
             btnOpenDir.Location = new Point(S(222), S(394));
             btnOpenDir.Size = new Size(S(194), S(34));
             btnOpenDir.Click += delegate {
-                try { Process.Start("explorer.exe", downloadDirectory); } catch { }
+                try
+                {
+                    if (!String.IsNullOrEmpty(downloadDirectory) && Directory.Exists(downloadDirectory))
+                    {
+                        Process.Start("explorer.exe", "\\"" + downloadDirectory.Replace("\\"", "") + "\\"");
+                    }
+                }
+                catch { }
             };
             leftCard.Controls.Add(btnOpenDir);
 
@@ -2758,15 +2956,52 @@ namespace AetherTunnelNative
         {
             if (String.IsNullOrEmpty(raw)) return "";
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < raw.Length && sb.Length < 36; i++)
+            for (int i = 0; i < raw.Length && sb.Length < 64; i++)
             {
                 char c = raw[i];
-                if (c != '"' && c != '\\\\' && c != '\\r' && c != '\\n' && c != '|')
+                if (c >= 32 && c != '"' && c != '\\\\' && c != '|')
                 {
                     sb.Append(c);
                 }
             }
             return sb.ToString().Trim();
+        }
+
+        private static string SanitizeSafeFileName(string rawName)
+        {
+            if (String.IsNullOrEmpty(rawName)) return "transfer.bin";
+            string s = rawName.Replace('\\\\', '_').Replace('/', '_').Replace(':', '_');
+            while (s.Contains("..")) s = s.Replace("..", "_");
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            StringBuilder sb = new StringBuilder(s.Length);
+            for (int i = 0; i < s.Length && sb.Length < 180; i++)
+            {
+                char c = s[i];
+                if (c < 32 || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || Array.IndexOf(invalidChars, c) >= 0)
+                {
+                    sb.Append('_');
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            string cleaned = sb.ToString().Trim().TrimStart('.');
+            if (cleaned.Length == 0 || cleaned == "." || cleaned == "..") return "transfer.bin";
+            return cleaned;
+        }
+
+        private string BuildSafeDownloadPath(string rawFileName, out string safeName)
+        {
+            safeName = SanitizeSafeFileName(rawFileName);
+            string baseDir = Path.GetFullPath(downloadDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string candidate = Path.GetFullPath(Path.Combine(baseDir, "AetherTunnel_" + safeName));
+            if (!candidate.StartsWith(baseDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                safeName = "transfer.bin";
+                candidate = Path.GetFullPath(Path.Combine(baseDir, "AetherTunnel_transfer.bin"));
+            }
+            return candidate;
         }
 
         private RoomPeerInfo UpsertRoomPeer(string key, string displayName, string clientType, out bool isNew, out bool rejectedFull)
@@ -4600,14 +4835,20 @@ namespace AetherTunnelNative
                                     stagedPages.Clear();
                                     readyCompletedBytes = 0;
 
-                                    udpFileName = newFileName;
+                                    string safeUdpName;
+                                    udpFinalPath = BuildSafeDownloadPath(newFileName, out safeUdpName);
+                                    udpFileName = safeUdpName;
                                     lastCompletedUdpFileName = "";
                                     lastCompletedUdpFileNameVolatile = "";
-                                    udpExpectedSize = newExpectedSize;
-                                    udpExpectedChunks = (int)Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
-                                    if (aParts.Length >= 4) Int32.TryParse(aParts[3], out udpExpectedChunks);
+                                    udpExpectedSize = Math.Max(0L, newExpectedSize);
+                                    long calcUdpChunks = Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
+                                    int parsedUdpChunks = 0;
+                                    if (aParts.Length >= 4) Int32.TryParse(aParts[3], out parsedUdpChunks);
+                                    if (calcUdpChunks > Int32.MaxValue) calcUdpChunks = Int32.MaxValue;
+                                    udpExpectedChunks = (parsedUdpChunks > 0 && Math.Abs((long)parsedUdpChunks - calcUdpChunks) <= 2)
+                                        ? parsedUdpChunks
+                                        : (int)calcUdpChunks;
 
-                                    udpFinalPath = Path.Combine(downloadDirectory, "AetherTunnel_" + udpFileName);
                                     udpPartPath = udpFinalPath + ".part";
                                     ReleaseConflictingRxHandlesForPart(udpPartPath, "udp");
 
@@ -4771,10 +5012,11 @@ namespace AetherTunnelNative
                                             try { SendUdpP2pPacket(waitMsg, waitMsg.Length, senderEp); } catch { }
                                         }
                                     }
-                                    string pCandPath = Path.Combine(downloadDirectory, "AetherTunnel_" + newFileName) + ".part";
+                                    string safePromptName;
+                                    string pCandPath = BuildSafeDownloadPath(newFileName, out safePromptName) + ".part";
                                     bool pHasRes = File.Exists(pCandPath) && ReadCheckpointBytes(pCandPath, newExpectedSize) > 0;
-                                    string pFile = newFileName;
-                                    long pSize = newExpectedSize;
+                                    string pFile = safePromptName;
+                                    long pSize = Math.Max(0L, newExpectedSize);
                                     string pHdr = hdr;
                                     IPEndPoint pEp = senderEp;
                                     ThreadPool.QueueUserWorkItem(delegate {
@@ -4848,9 +5090,12 @@ namespace AetherTunnelNative
                                     try
                                     {
                                         byte[] d = batch[i];
+                                        if (d == null || d.Length < 28) { indices[i] = -1; continue; }
                                         int pktTotalChunks = BitConverter.ToInt32(d, 8);
                                         if (pktTotalChunks != udpExpectedChunks) { indices[i] = -1; continue; }
-                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        int parsedIdx = BitConverter.ToInt32(d, 4);
+                                        if (parsedIdx < 0 || parsedIdx >= udpExpectedChunks) { indices[i] = -1; continue; }
+                                        indices[i] = parsedIdx;
                                         Buffer.BlockCopy(d, 12, seqIv, 0, 16);
                                         using (ICryptoTransform dec = seqAes.CreateDecryptor(keySnapshot, seqIv))
                                         {
@@ -4867,13 +5112,24 @@ namespace AetherTunnelNative
                                     try
                                     {
                                         byte[] d = batch[i];
+                                        if (d == null || d.Length < 28)
+                                        {
+                                            indices[i] = -1;
+                                            return;
+                                        }
                                         int pktTotalChunks = BitConverter.ToInt32(d, 8);
                                         if (pktTotalChunks != udpExpectedChunks)
                                         {
                                             indices[i] = -1;
                                             return;
                                         }
-                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        int parsedIdx = BitConverter.ToInt32(d, 4);
+                                        if (parsedIdx < 0 || parsedIdx >= udpExpectedChunks)
+                                        {
+                                            indices[i] = -1;
+                                            return;
+                                        }
+                                        indices[i] = parsedIdx;
                                         byte[] iv = threadLocalIv.Value;
                                         Buffer.BlockCopy(d, 12, iv, 0, 16);
                                         AesCryptoServiceProvider aes = threadLocalAes.Value;
@@ -4894,7 +5150,8 @@ namespace AetherTunnelNative
                                 int cIdx = indices[i];
                                 byte[] plain = plains[i];
                                 if (cIdx < 0 || plain == null) continue;
-                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length && udpChunkReceived[cIdx])
+                                if (udpChunkReceived == null || cIdx >= udpChunkReceived.Length) continue;
+                                if (udpChunkReceived[cIdx])
                                 {
                                     ackWindowBytes += plain.Length;
                                     uiWindowBytes += plain.Length;
@@ -4936,17 +5193,10 @@ namespace AetherTunnelNative
                                     continue;
                                 }
 
-                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length)
-                                {
-                                    udpChunkReceived[cIdx] = true;
-                                    udpUniqueReceivedCount++;
-                                    lastUniqueRxChunkTick = Environment.TickCount;
-                                    udpReceivedBytes = Math.Min(udpExpectedSize, udpReceivedBytes + plain.Length);
-                                }
-                                else
-                                {
-                                    udpReceivedBytes = Math.Max(udpReceivedBytes, ((long)cIdx * UDP_CHUNK_SIZE) + plain.Length);
-                                }
+                                udpChunkReceived[cIdx] = true;
+                                udpUniqueReceivedCount++;
+                                lastUniqueRxChunkTick = Environment.TickCount;
+                                udpReceivedBytes = Math.Min(udpExpectedSize, udpReceivedBytes + plain.Length);
 
                                 // Place chunk directly into aligned 4 MB pooled RAM page (zero small heap allocations kept in Gen2!)
                                 int pIdx = cIdx / CHUNKS_PER_STAGE_PAGE;
@@ -6325,13 +6575,13 @@ namespace AetherTunnelNative
                     else { activeCloudBrowserPeerId = srcPeer; lastCloudBrowserSeen = DateTime.UtcNow; lastBrowserSignalingChannel = ch; }
 
                     string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
-                    string incomingFileId = ExtractJsonString(text, "fileId");
-                    string incName = ExtractJsonString(text, "name");
-                    if (incName.Length == 0) incName = "transfer.bin";
-                    long incSize = ExtractJsonLong(text, "size");
+                    string incomingFileId = SanitizeJsonText(ExtractJsonString(text, "fileId"));
+                    string rawIncName = ExtractJsonString(text, "name");
+                    long incSize = Math.Max(0L, ExtractJsonLong(text, "size"));
                     long cChunkSize = ExtractJsonLong(text, "chunkSize");
-                    if (cChunkSize <= 0) cChunkSize = CLOUD_CHUNK_SIZE;
-                    string candOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + incName);
+                    if (cChunkSize < 1024 || cChunkSize > 1024 * 1024) cChunkSize = CLOUD_CHUNK_SIZE;
+                    string incName;
+                    string candOutPath = BuildSafeDownloadPath(rawIncName, out incName);
                     string candPartPath = candOutPath + ".part";
                     bool hasPart = File.Exists(candPartPath) && ReadCheckpointBytes(candPartPath, incSize) > 0;
 
@@ -6349,6 +6599,7 @@ namespace AetherTunnelNative
                             }
                             cloudFileName = incName;
                             cloudExpectedSize = incSize;
+                            cloudChunkSize = cChunkSize;
                             cloudOutPath = candOutPath;
                             cloudPartPath = candPartPath;
 
@@ -6381,7 +6632,7 @@ namespace AetherTunnelNative
                             cloudSessionStartBytes = alignedBytes;
                             cloudRxSw = Stopwatch.StartNew();
 
-                            SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + cloudFileName.Replace("\\"", "") + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
+                            SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + SanitizeJsonText(cloudFileName) + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
                             int startPermille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
                             UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, 0, 0, startPermille, true);
                         }
@@ -6418,25 +6669,27 @@ namespace AetherTunnelNative
                         if (cloudOutFile == null) return;
                         string b64 = ExtractJsonString(text, "data");
                         long chunkIdx = ExtractJsonLong(text, "chunkIndex");
-                        if (b64.Length > 0)
+                        long stepSize = cloudChunkSize > 0 ? cloudChunkSize : CLOUD_CHUNK_SIZE;
+                        if (chunkIdx < 0 || b64.Length == 0 || b64.Length > 512 * 1024) return;
+                        long writePos = chunkIdx * stepSize;
+                        if (writePos < 0 || (cloudExpectedSize > 0 && writePos > cloudExpectedSize + stepSize)) return;
+                        byte[] raw;
+                        try { raw = Convert.FromBase64String(b64); }
+                        catch { return; }
+                        if (cloudOutFile.Position != writePos) cloudOutFile.Seek(writePos, SeekOrigin.Begin);
+                        cloudOutFile.Write(raw, 0, raw.Length);
+                        cloudReceivedBytes = Math.Max(cloudReceivedBytes, writePos + raw.Length);
+
+                        if ((chunkIdx + 1) % 384 == 0)
                         {
-                            byte[] raw = Convert.FromBase64String(b64);
-                            long writePos = chunkIdx * CLOUD_CHUNK_SIZE;
-                            if (cloudOutFile.Position != writePos) cloudOutFile.Seek(writePos, SeekOrigin.Begin);
-                            cloudOutFile.Write(raw, 0, raw.Length);
-                            cloudReceivedBytes = Math.Max(cloudReceivedBytes, writePos + raw.Length);
-
-                            if ((chunkIdx + 1) % 384 == 0)
-                            {
-                                WriteCheckpointFile(cloudPartPath, cloudReceivedBytes, cloudExpectedSize);
-                            }
-
-                            double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
-                            long deltaBytes = Math.Max(1L, cloudReceivedBytes - cloudSessionStartBytes);
-                            double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
-                            int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
-                            UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, mbps, permille);
+                            WriteCheckpointFile(cloudPartPath, cloudReceivedBytes, cloudExpectedSize);
                         }
+
+                        double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
+                        long deltaBytes = Math.Max(1L, cloudReceivedBytes - cloudSessionStartBytes);
+                        double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
+                        int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
+                        UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, mbps, permille);
                         if ((chunkIdx + 1) % 8 == 0)
                         {
                             SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":" + chunkIdx.ToString() + "}");
@@ -6755,7 +7008,7 @@ namespace AetherTunnelNative
                         if (!ReadExactBytes(wsStream, maskKey, 4)) break;
                     }
 
-                    if (payloadLen > 64 * 1024 * 1024) break;
+                    if (payloadLen < 0 || payloadLen > 64 * 1024 * 1024) break;
                     byte[] data = new byte[(int)payloadLen];
                     if (payloadLen > 0 && !ReadExactBytes(wsStream, data, (int)payloadLen)) break;
 
@@ -6774,6 +7027,7 @@ namespace AetherTunnelNative
                     }
 
                     if (opcode != 0) fragOpcode = opcode;
+                    if (fragBuffer.Length + data.Length > 64 * 1024 * 1024) break;
                     fragBuffer.Write(data, 0, data.Length);
 
                     if (!fin) continue;
@@ -6819,13 +7073,12 @@ namespace AetherTunnelNative
                         }
                         else if (text.Contains("\\"exe:file-start\\""))
                         {
-                            string incomingFileId = ExtractJsonString(text, "fileId");
-                            currentFileName = ExtractJsonString(text, "name");
-                            if (currentFileName.Length == 0) currentFileName = "transfer.bin";
-                            expectedFileSize = ExtractJsonLong(text, "size");
+                            string incomingFileId = SanitizeJsonText(ExtractJsonString(text, "fileId"));
+                            string rawWsName = ExtractJsonString(text, "name");
+                            expectedFileSize = Math.Max(0L, ExtractJsonLong(text, "size"));
                             long wsChunkSize = ExtractJsonLong(text, "chunkSize");
-                            if (wsChunkSize <= 0) wsChunkSize = WS_CHUNK_SIZE;
-                            currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
+                            if (wsChunkSize < 1024 || wsChunkSize > 16 * 1024 * 1024) wsChunkSize = WS_CHUNK_SIZE;
+                            currentOutPath = BuildSafeDownloadPath(rawWsName, out currentFileName);
                             currentPartPath = currentOutPath + ".part";
 
                             if (currentOutFile != null)
@@ -6894,7 +7147,7 @@ namespace AetherTunnelNative
 
                             string ackJson = String.Format(
                                 "{{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"{0}\\",\\"name\\":\\"{1}\\",\\"size\\":{2},\\"resumeFromChunk\\":{3}}}",
-                                incomingFileId, currentFileName.Replace("\\"", ""), expectedFileSize, resumeFromChunk
+                                incomingFileId, SanitizeJsonText(currentFileName), expectedFileSize, resumeFromChunk
                             );
                             byte[] ackBytes = Encoding.UTF8.GetBytes(ackJson);
                             SendWebSocketFrame(wsStream, 0x01, ackBytes, 0, ackBytes.Length);
@@ -7097,8 +7350,9 @@ namespace AetherTunnelNative
                     }
                     else if (endpointStr.Length > 0)
                     {
-                        host = endpointStr;
+                        host = endpointStr.Trim();
                     }
+                    if (String.IsNullOrEmpty(host) || port <= 0 || port > 65535) return;
 
                     if (!silentAutoProbe)
                     {
@@ -7864,9 +8118,7 @@ namespace AetherTunnelNative
         private byte[] EncryptSingleUdpChunk(byte[] plainBuf, int plainLen, int chunkIndex, int totalChunks, byte[] keySnapshot)
         {
             byte[] iv = threadLocalIv.Value;
-            Array.Clear(iv, 8, 8);
-            WriteInt32LE(iv, 0, chunkIndex);
-            WriteInt32LE(iv, 4, 0x5A3C9E17 ^ chunkIndex);
+            threadLocalRng.Value.GetBytes(iv);
 
             byte[] cipher;
             AesCryptoServiceProvider aes = threadLocalAes.Value;
@@ -8814,8 +9066,7 @@ namespace AetherTunnelNative
                         {
                             int chunkIndex = waveStart + w;
                             byte[] iv = new byte[16];
-                            Buffer.BlockCopy(BitConverter.GetBytes(chunkIndex), 0, iv, 0, 4);
-                            Buffer.BlockCopy(BitConverter.GetBytes(Environment.TickCount ^ chunkIndex), 0, iv, 4, 4);
+                            threadLocalRng.Value.GetBytes(iv);
 
                             using (AesCryptoServiceProvider aes = new AesCryptoServiceProvider())
                             {
@@ -8989,10 +9240,11 @@ namespace AetherTunnelNative
 
                     if (frameType == 1)
                     {
-                        expectedFileSize = BitConverter.ToInt64(payload, 0);
+                        if (payloadLen < 12) break;
+                        expectedFileSize = Math.Max(0L, BitConverter.ToInt64(payload, 0));
                         int totalChunks = BitConverter.ToInt32(payload, 8);
-                        currentFileName = Encoding.UTF8.GetString(payload, 12, payloadLen - 12);
-                        currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
+                        string rawTcpName = Encoding.UTF8.GetString(payload, 12, payloadLen - 12);
+                        currentOutPath = BuildSafeDownloadPath(rawTcpName, out currentFileName);
                         currentPartPath = currentOutPath + ".part";
 
                         if (currentOutFile != null)
@@ -9127,7 +9379,11 @@ namespace AetherTunnelNative
                     }
                     else if (frameType == 2 && currentOutFile != null)
                     {
+                        if (payloadLen < 20) break;
                         int chunkIndex = BitConverter.ToInt32(payload, 0);
+                        if (chunkIndex < 0) continue;
+                        long writeOffset = (long)chunkIndex * CHUNK_SIZE;
+                        if (writeOffset < 0 || (expectedFileSize > 0 && writeOffset > expectedFileSize + CHUNK_SIZE)) continue;
                         byte[] iv = new byte[16];
                         Buffer.BlockCopy(payload, 4, iv, 0, 16);
 
@@ -9147,7 +9403,6 @@ namespace AetherTunnelNative
                             }
                         }
 
-                        long writeOffset = (long)chunkIndex * CHUNK_SIZE;
                         if (currentOutFile.Position != writeOffset) currentOutFile.Seek(writeOffset, SeekOrigin.Begin);
                         currentOutFile.Write(plain, 0, plain.Length);
                         receivedPlainBytes = Math.Max(receivedPlainBytes, writeOffset + plain.Length);

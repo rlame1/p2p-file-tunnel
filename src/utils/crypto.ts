@@ -82,14 +82,13 @@ export async function deriveTunnelKey(
 let noncePool = new Uint8Array(12 * 256);
 let noncePoolOffset = noncePool.byteLength;
 
-function nextFastIv(chunkIndex: number): Uint8Array {
+function nextFastIv(): Uint8Array {
   if (noncePoolOffset + 12 > noncePool.byteLength) {
     window.crypto.getRandomValues(noncePool);
     noncePoolOffset = 0;
   }
   const iv = noncePool.slice(noncePoolOffset, noncePoolOffset + 12);
   noncePoolOffset += 12;
-  new DataView(iv.buffer, iv.byteOffset, 12).setUint32(8, chunkIndex >>> 0, false);
   return iv;
 }
 
@@ -109,7 +108,7 @@ export async function encryptChunkBinaryFrame(
   transferNumId: number,
   chunkIndex: number
 ): Promise<ArrayBuffer> {
-  const iv = nextFastIv(chunkIndex);
+  const iv = nextFastIv();
 
   const encryptedBuffer = await window.crypto.subtle.encrypt(
     {
@@ -222,13 +221,14 @@ export async function decryptChunkBinaryFrame(
   return { transferNumId, chunkIndex, plainBuffer };
 }
 
-// Fallback Base64 encryptor for small text notes
+// Fallback Base64 encryptor for small text notes and cloud relay chunks
 export async function encryptChunk(
   key: CryptoKey,
   plainChunk: ArrayBuffer,
-  chunkIndex: number
+  _chunkIndex: number
 ): Promise<{ ivBase64: string; ciphertextBase64: string; byteLength: number }> {
-  const iv = nextFastIv(chunkIndex);
+  const iv = new Uint8Array(12);
+  window.crypto.getRandomValues(iv);
 
   const encryptedBuffer = await window.crypto.subtle.encrypt(
     {

@@ -67,6 +67,7 @@ function computeFileSha256(content: Buffer | string): string {
 }
 
 function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
+  const safeDefaultRoom = String(defaultRoom || '').replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 64);
   return `<!doctype html>
 <html lang="en" class="dark">
 <head>
@@ -98,7 +99,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         <div>
           <label class="block text-xs text-slate-400 mb-1">Tunnel Name</label>
           <div class="flex gap-2">
-            <input id="room-input" type="text" value="${defaultRoom}" placeholder="Enter tunnel name..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
+            <input id="room-input" type="text" value="${safeDefaultRoom}" placeholder="Enter tunnel name..." class="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-800 rounded-lg font-mono text-sky-400" />
             <button id="connect-btn" class="px-4 py-2 text-xs font-semibold bg-sky-400 text-slate-950 rounded-lg hover:bg-sky-300 cursor-pointer">Connect</button>
           </div>
         </div>
@@ -198,8 +199,30 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
     const cancelledIds = new Set();
     let activePeerRowUpdater = null;
 
-    function escapeHtml(s) {
-      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    function sanitizeSafeFileName(name) {
+      const cleaned = String(name || 'transfer.bin')
+        .replace(/[\u0000-\u001f\\/:*?"<>|]/g, '_')
+        .replace(/\.\.+/g, '_')
+        .trim()
+        .replace(/^\.+/, '');
+      return cleaned || 'transfer.bin';
+    }
+
+    function uint8ToBase64(bytes) {
+      let bin = '';
+      const step = 0x8000;
+      for (let i = 0; i < bytes.byteLength; i += step) {
+        const sub = bytes.subarray(i, Math.min(bytes.byteLength, i + step));
+        bin += String.fromCharCode.apply(null, Array.from(sub));
+      }
+      return btoa(bin);
+    }
+
+    function base64ToUint8(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
     }
 
     function syncPauseBtnUi() {
@@ -311,7 +334,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         if (!fromRemote) {
           sendReplyEverywhere({ kind: 'file:cancel', fileId: fid, name: fname, size: fsize, by: 'receiver' });
         }
-        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + escapeHtml(fname));
+        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + fname);
         syncPauseBtnUi();
         return;
       }
@@ -323,7 +346,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         if (!fromRemote) {
           sendReplyEverywhere({ kind: 'file:cancel', fileId: fid, name: cname, size: csize, by: 'receiver' });
         }
-        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + escapeHtml(cname));
+        renderStatus((fromRemote ? 'Stopped by ' + (remoteByName || 'sender') + ': ' : 'Stopped: ') + cname);
         syncPauseBtnUi();
         return;
       }
@@ -540,28 +563,61 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
 
     function renderStatus(text) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200">' + text + '</div>';
+      if (!list) return;
+      const box = document.createElement('div');
+      box.className = 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200';
+      box.textContent = String(text || '');
+      list.replaceChildren(box);
     }
 
     function renderError(text) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200">' + text + '</div>';
+      if (!list) return;
+      const box = document.createElement('div');
+      box.className = 'p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200';
+      box.textContent = String(text || '');
+      list.replaceChildren(box);
     }
 
     function renderDownload(name, url, size, mbps) {
       const list = document.getElementById('transfer-list');
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between"><span>Verified: ' + name + ' (' + (size/(1024*1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)</span><a href="' + url + '" download="' + name + '" class="px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded">Save File</a></div>';
+      if (!list) return;
+      const safeName = sanitizeSafeFileName(name);
+      const wrap = document.createElement('div');
+      wrap.className = 'p-3 bg-slate-950 border border-emerald-500/40 rounded flex items-center justify-between gap-3';
+      const label = document.createElement('span');
+      label.className = 'truncate';
+      label.textContent = 'Verified: ' + safeName + ' (' + (size/(1024*1024)).toFixed(2) + ' MB · ' + mbps + ' MB/s)';
+      const link = document.createElement('a');
+      link.href = typeof url === 'string' && url.startsWith('blob:') ? url : '#';
+      link.download = safeName;
+      link.className = 'px-3 py-1 bg-emerald-400 text-slate-950 font-semibold rounded shrink-0';
+      link.textContent = 'Save File';
+      wrap.appendChild(label);
+      wrap.appendChild(link);
+      list.replaceChildren(wrap);
     }
 
-    function renderTransferControls(fid, isPaused) {
-      const pauseLabel = isPaused ? 'Resume' : 'Pause';
-      const pauseCls = isPaused
+    function createTransferControls(fid, isPaused) {
+      const wrap = document.createElement('div');
+      wrap.className = 'flex items-center gap-1.5 shrink-0';
+      const pauseBtn = document.createElement('button');
+      pauseBtn.type = 'button';
+      pauseBtn.dataset.action = 'pause-resume';
+      pauseBtn.dataset.fid = String(fid || '');
+      pauseBtn.className = isPaused
         ? 'px-2.5 py-1 text-[11px] font-semibold bg-emerald-400 text-slate-950 rounded hover:bg-emerald-300 cursor-pointer'
         : 'px-2.5 py-1 text-[11px] font-semibold bg-amber-950/80 text-amber-200 border border-amber-700/60 rounded hover:bg-amber-900 cursor-pointer';
-      return '<div class="flex items-center gap-1.5 shrink-0">' +
-        '<button type="button" data-action="pause-resume" data-fid="' + escapeHtml(fid) + '" class="' + pauseCls + '">' + pauseLabel + '</button>' +
-        '<button type="button" data-action="stop" data-fid="' + escapeHtml(fid) + '" class="px-2.5 py-1 text-[11px] font-semibold bg-rose-950/80 text-rose-200 border border-rose-700/60 rounded hover:bg-rose-900 cursor-pointer">Stop</button>' +
-      '</div>';
+      pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      const stopBtn = document.createElement('button');
+      stopBtn.type = 'button';
+      stopBtn.dataset.action = 'stop';
+      stopBtn.dataset.fid = String(fid || '');
+      stopBtn.className = 'px-2.5 py-1 text-[11px] font-semibold bg-rose-950/80 text-rose-200 border border-rose-700/60 rounded hover:bg-rose-900 cursor-pointer';
+      stopBtn.textContent = 'Stop';
+      wrap.appendChild(pauseBtn);
+      wrap.appendChild(stopBtn);
+      return wrap;
     }
 
     function renderIncomingRow(rxObj, isBridge) {
@@ -573,15 +629,23 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       const elapsed = Math.max(0.02, (now - rxObj.startedAt) / 1000);
       const recvBytes = isBridge ? rxObj.bytes : (rxObj.receivedCount * (rxObj.chunkSize || 240 * 1024));
       const mbps = (recvBytes / (1024 * 1024) / elapsed).toFixed(2);
+      const safeName = sanitizeSafeFileName(rxObj.name);
       let label;
       if (rxObj.paused) {
-        label = (rxObj.remotePaused ? 'Paused by sender: ' : 'Paused: ') + escapeHtml(rxObj.name) + ' (' + pct + '%)';
+        label = (rxObj.remotePaused ? 'Paused by sender: ' : 'Paused: ') + safeName + ' (' + pct + '%)';
       } else {
-        label = (isBridge ? 'Receiving (Bridge): ' : 'Receiving: ') + escapeHtml(rxObj.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+        label = (isBridge ? 'Receiving (Bridge): ' : 'Receiving: ') + safeName + ' (' + pct + '% · ' + mbps + ' MB/s)';
       }
       const list = document.getElementById('transfer-list');
       if (!list) return;
-      list.innerHTML = '<div class="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3"><span class="truncate">' + label + '</span>' + renderTransferControls(rxObj.fileId, !!rxObj.paused) + '</div>';
+      const row = document.createElement('div');
+      row.className = 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3';
+      const span = document.createElement('span');
+      span.className = 'truncate';
+      span.textContent = label;
+      row.appendChild(span);
+      row.appendChild(createTransferControls(rxObj.fileId, !!rxObj.paused));
+      list.replaceChildren(row);
     }
 
     function finalizeIncomingIfReady() {
@@ -603,9 +667,26 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
 
     function finalizeCloudRx(src, endKind) {
       if (!rxCloudFile || rxCloudFile.cancelled || rxCloudFile.paused) return;
+      if (rxCloudFile.pendingDecrypts > 0) {
+        rxCloudFile.endPending = { src, endKind };
+        return;
+      }
+      let filled = 0;
+      const parts = [];
+      for (let i = 0; i < rxCloudFile.totalChunks; i++) {
+        if (rxCloudFile.chunks[i]) {
+          filled++;
+          parts.push(rxCloudFile.chunks[i]);
+        }
+      }
+      if (rxCloudFile.size > 0 && filled < rxCloudFile.totalChunks) {
+        renderError('Transfer incomplete (' + filled + '/' + rxCloudFile.totalChunks + ' chunks) — please retry.');
+        rxCloudFile = null;
+        syncPauseBtnUi();
+        return;
+      }
       const elapsed = Math.max(0.02, (performance.now() - rxCloudFile.startedAt) / 1000);
       const mbps = (rxCloudFile.size / (1024 * 1024) / elapsed).toFixed(2);
-      const parts = rxCloudFile.chunks.filter(Boolean);
       const blob = new Blob(parts, { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       renderDownload(rxCloudFile.name, url, rxCloudFile.size, mbps);
@@ -620,6 +701,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       if (!incomingFile || incomingFile.cancelled || !currentKey) return;
       const view = new DataView(buf);
       const chunkIndex = view.getUint32(8, false);
+      if (chunkIndex >= incomingFile.totalChunks) return;
       const iv = new Uint8Array(buf, 12, 12);
       const ciphertext = new Uint8Array(buf, 24);
       let dec;
@@ -673,15 +755,26 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         const chunkIndex = view.getUint32(8, false);
         const totalBytes = view.getUint32(12, false);
         const byteOffset = view.getUint32(16, false);
+        const partIndex = view.getUint16(20, false);
         const totalParts = view.getUint16(22, false);
+        if (totalBytes < 24 || totalBytes > 8 * 1024 * 1024 || totalParts < 1 || totalParts > 2048 || partIndex >= totalParts) {
+          return true;
+        }
+        const slice = new Uint8Array(buf, 24);
+        if (byteOffset + slice.byteLength > totalBytes) return true;
         const key = transferNumId + ':' + chunkIndex;
         let entry = partialFrames.get(key);
         if (!entry) {
-          entry = { buf: new Uint8Array(totalBytes), count: 0, totalParts };
+          if (partialFrames.size >= 128) return true;
+          entry = { buf: new Uint8Array(totalBytes), count: 0, totalParts, seen: new Set() };
           partialFrames.set(key, entry);
         }
-        entry.buf.set(new Uint8Array(buf, 24), byteOffset);
-        entry.count++;
+        if (entry.buf.byteLength !== totalBytes || entry.totalParts !== totalParts) return true;
+        if (!entry.seen.has(partIndex)) {
+          entry.seen.add(partIndex);
+          entry.buf.set(slice, byteOffset);
+          entry.count++;
+        }
         if (entry.count >= entry.totalParts) {
           partialFrames.delete(key);
           handleCompleteAethFrame(entry.buf.buffer);
@@ -764,26 +857,31 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         return;
       }
       if (msg.kind === 'file:meta') {
-        if (msg.fileId && cancelledIds.has(String(msg.fileId))) return;
-        if (incomingFile && incomingFile.fileId === msg.fileId && incomingFile.totalChunks === msg.totalChunks) {
+        const safeFileId = String(msg.fileId || ('rx-' + Date.now()));
+        if (cancelledIds.has(safeFileId)) return;
+        const safeMetaSize = Math.max(0, Number(msg.size) || 0);
+        const safeMetaChunkSize = Math.max(1024, Math.min(8 * 1024 * 1024, Math.floor(Number(msg.chunkSize) || 240 * 1024)));
+        const safeMetaTotalChunks = Math.max(1, Math.min(200000, Math.floor(Number(msg.totalChunks) || Math.ceil(safeMetaSize / safeMetaChunkSize) || 1)));
+        const safeMetaName = sanitizeSafeFileName(msg.name);
+        if (incomingFile && incomingFile.fileId === safeFileId && incomingFile.totalChunks === safeMetaTotalChunks) {
           let miss = 0;
           while (miss < incomingFile.totalChunks && incomingFile.chunks[miss] !== undefined) miss++;
-          const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk: miss };
+          const ack = { kind: 'file:resume-ack', fileId: safeFileId, name: safeMetaName, size: safeMetaSize, resumeFromChunk: miss };
           sendReplyEverywhere(ack);
           return;
         }
-        const rKey = msg.name + '::' + msg.size;
+        const rKey = safeMetaName + '::' + safeMetaSize;
         const prev = resumeCheckpoints.get(rKey);
-        let chunks = new Array(msg.totalChunks);
+        let chunks = new Array(safeMetaTotalChunks);
         let resumeFromChunk = 0;
-        if (prev && prev.chunks && prev.chunks.length === msg.totalChunks) {
+        if (prev && prev.chunks && prev.chunks.length === safeMetaTotalChunks) {
           chunks = prev.chunks;
           while (resumeFromChunk < chunks.length && chunks[resumeFromChunk] !== undefined) resumeFromChunk++;
         }
         rxDecryptErrShownFor = '';
-        incomingFile = { ...msg, chunkSize: msg.chunkSize || 240*1024, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0, paused: transferPaused, pausedAt: transferPaused ? performance.now() : 0, remotePaused: false, cancelled: false };
+        incomingFile = { ...msg, fileId: safeFileId, name: safeMetaName, size: safeMetaSize, totalChunks: safeMetaTotalChunks, chunkSize: safeMetaChunkSize, chunks, receivedCount: resumeFromChunk, startedAt: performance.now(), lastUi: 0, paused: transferPaused, pausedAt: transferPaused ? performance.now() : 0, remotePaused: false, cancelled: false };
         resumeCheckpoints.set(rKey, incomingFile);
-        const ack = { kind: 'file:resume-ack', fileId: msg.fileId, name: msg.name, size: msg.size, resumeFromChunk };
+        const ack = { kind: 'file:resume-ack', fileId: safeFileId, name: safeMetaName, size: safeMetaSize, resumeFromChunk };
         const peerObj = srcPeer ? peersMap.get(srcPeer) : null;
         if (peerObj && peerObj.dc && peerObj.dc.readyState === 'open') {
           try { peerObj.dc.send(JSON.stringify(ack)); } catch {}
@@ -1039,20 +1137,26 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       }
 
       if (p.kind === 'exe:file-start' || p.kind === 'browser:file-start') {
-        if (p.fileId && cancelledIds.has(String(p.fileId))) return;
+        const incomingFid = String(p.fileId || ('cloud-' + Date.now()));
+        if (cancelledIds.has(incomingFid)) return;
         const prefix = p.kind.startsWith('browser:') ? 'browser:' : 'exe:';
-        if (rxCloudFile && rxCloudFile.fileId === p.fileId) {
-          sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: p.fileId, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: rxCloudFile.receivedCount || 0 });
+        if (rxCloudFile && rxCloudFile.fileId === incomingFid) {
+          sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: incomingFid, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: rxCloudFile.receivedCount || 0 });
           return;
         }
+        const safeName = sanitizeSafeFileName(p.name);
+        const safeSize = Math.max(0, Number(p.size) || 0);
+        const safeTotalChunks = Math.max(1, Math.min(200000, Math.floor(Number(p.totalChunks) || 1)));
         rxCloudFile = {
-          fileId: p.fileId,
-          name: p.name || 'transfer.bin',
-          size: Number(p.size) || 0,
-          totalChunks: Math.max(1, Number(p.totalChunks) || 1),
-          chunks: new Array(Math.max(1, Number(p.totalChunks) || 1)),
+          fileId: incomingFid,
+          name: safeName,
+          size: safeSize,
+          totalChunks: safeTotalChunks,
+          chunks: new Array(safeTotalChunks),
           receivedCount: 0,
           bytes: 0,
+          pendingDecrypts: 0,
+          endPending: null,
           startedAt: performance.now(),
           lastUi: 0,
           paused: transferPaused,
@@ -1061,29 +1165,73 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
           cancelled: false,
           endedWhilePaused: null
         };
-        sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: p.fileId, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: 0 });
+        sendCloudCandidate(src, { kind: prefix + 'resume-ack', fileId: incomingFid, name: rxCloudFile.name, size: rxCloudFile.size, resumeFromChunk: 0 });
         renderIncomingRow(rxCloudFile, true);
         syncPauseBtnUi();
         return;
       }
 
-      if ((p.kind === 'exe:file-chunk' || p.kind === 'browser:file-chunk') && rxCloudFile && !rxCloudFile.cancelled && p.data) {
-        const cIdx = Math.max(0, Number(p.chunkIndex) || 0);
-        if (rxCloudFile.chunks[cIdx] === undefined) {
-          const bin = atob(p.data);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          rxCloudFile.chunks[cIdx] = bytes;
-          rxCloudFile.receivedCount = (rxCloudFile.receivedCount || 0) + 1;
-          rxCloudFile.bytes += bytes.byteLength;
-          const now = performance.now();
-          if (now - rxCloudFile.lastUi > 120) {
-            rxCloudFile.lastUi = now;
-            renderIncomingRow(rxCloudFile, true);
+      if ((p.kind === 'exe:file-chunk' || p.kind === 'browser:file-chunk') && rxCloudFile && !rxCloudFile.cancelled && typeof p.data === 'string' && p.data.length > 0) {
+        const cIdx = Number(p.chunkIndex);
+        if (!Number.isInteger(cIdx) || cIdx < 0 || cIdx >= rxCloudFile.totalChunks) return;
+        const targetRx = rxCloudFile;
+        if (targetRx.chunks[cIdx] === undefined) {
+          if (p.kind === 'browser:file-chunk' && p.encrypted && typeof p.iv === 'string') {
+            if (!currentKey) {
+              renderError('Missing tunnel E2EE key — verify Tunnel Name & Passphrase');
+              return;
+            }
+            targetRx.pendingDecrypts++;
+            (async () => {
+              try {
+                const ivBytes = base64ToUint8(p.iv);
+                if (ivBytes.byteLength !== 12) throw new Error('Invalid IV length');
+                const cipherBytes = base64ToUint8(p.data);
+                const decBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes, tagLength: 128 }, currentKey, cipherBytes);
+                if (rxCloudFile !== targetRx || targetRx.cancelled) return;
+                const bytes = new Uint8Array(decBuf);
+                if (targetRx.chunks[cIdx] === undefined) {
+                  targetRx.chunks[cIdx] = bytes;
+                  targetRx.receivedCount = (targetRx.receivedCount || 0) + 1;
+                  targetRx.bytes += bytes.byteLength;
+                  const now = performance.now();
+                  if (now - targetRx.lastUi > 120) {
+                    targetRx.lastUi = now;
+                    renderIncomingRow(targetRx, true);
+                  }
+                }
+              } catch {
+                if (rxCloudFile === targetRx && !targetRx.cancelled) {
+                  targetRx.cancelled = true;
+                  rxCloudFile = null;
+                  syncPauseBtnUi();
+                  renderError('AES-256-GCM decryption failed — verify Tunnel Name & E2EE Passphrase match sender');
+                }
+                return;
+              } finally {
+                if (targetRx.pendingDecrypts > 0) targetRx.pendingDecrypts--;
+              }
+              if (rxCloudFile === targetRx && !targetRx.cancelled && !targetRx.paused && targetRx.pendingDecrypts === 0 && targetRx.endPending) {
+                const ep = targetRx.endPending;
+                targetRx.endPending = null;
+                finalizeCloudRx(ep.src, ep.endKind);
+              }
+            })();
+          } else {
+            let bytes;
+            try { bytes = base64ToUint8(p.data); } catch { return; }
+            targetRx.chunks[cIdx] = bytes;
+            targetRx.receivedCount = (targetRx.receivedCount || 0) + 1;
+            targetRx.bytes += bytes.byteLength;
+            const now = performance.now();
+            if (now - targetRx.lastUi > 120) {
+              targetRx.lastUi = now;
+              renderIncomingRow(targetRx, true);
+            }
           }
         }
         if ((cIdx + 1) % 8 === 0) {
-          sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', fileId: rxCloudFile.fileId, chunkIndex: cIdx });
+          sendCloudCandidate(src, { kind: p.kind.startsWith('browser:') ? 'browser:chunk-ack' : 'exe:chunk-ack', fileId: targetRx.fileId, chunkIndex: cIdx });
         }
         return;
       }
@@ -1092,6 +1240,10 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         if (rxCloudFile.paused) {
           rxCloudFile.endedWhilePaused = { src, endKind: p.kind };
           renderIncomingRow(rxCloudFile, true);
+          return;
+        }
+        if (rxCloudFile.pendingDecrypts > 0) {
+          rxCloudFile.endPending = { src, endKind: p.kind };
           return;
         }
         finalizeCloudRx(src, p.kind);
@@ -1238,9 +1390,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       }
     });
     document.getElementById('file-input').addEventListener('change', async (e) => {
-      const files = e.target.files;
-      if (!files.length) return;
-      const file = files[0];
+      const selectedFiles = Array.from(e.target.files || []);
+      if (!selectedFiles.length) return;
       e.target.value = '';
       const targetId = (document.getElementById('target-peer-select') && document.getElementById('target-peer-select').value) || '*';
       const targetPeers = targetId === '*'
@@ -1248,7 +1399,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         : (peersMap.has(targetId) ? [peersMap.get(targetId)] : []);
 
       if (targetPeers.length === 0) {
-        renderStatus('Selected recipient is not present in room "' + escapeHtml(activeRoom) + '".');
+        renderStatus('Selected recipient is not present in room "' + activeRoom + '".');
         return;
       }
 
@@ -1257,14 +1408,22 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
       function renderAllPeerStatuses() {
         const list = document.getElementById('transfer-list');
         if (!list) return;
-        list.innerHTML = Array.from(peerRows.values()).join('');
+        list.replaceChildren(...Array.from(peerRows.values()));
       }
-      function setPeerRow(pid, isError, htmlText, activeEntry) {
+      function setPeerRow(pid, isError, plainText, activeEntry) {
         const cls = isError
           ? 'p-3 bg-red-950/60 border border-red-700/60 rounded font-mono text-red-200 flex items-center justify-between gap-3'
           : 'p-3 bg-slate-950 border border-slate-800 rounded font-mono text-slate-200 flex items-center justify-between gap-3';
-        const ctrls = activeEntry ? renderTransferControls(activeEntry.fileId, !!activeEntry.paused) : '';
-        peerRows.set(pid, '<div class="' + cls + '"><span class="truncate">' + htmlText + '</span>' + ctrls + '</div>');
+        const row = document.createElement('div');
+        row.className = cls;
+        const span = document.createElement('span');
+        span.className = 'truncate';
+        span.textContent = String(plainText || '');
+        row.appendChild(span);
+        if (activeEntry) {
+          row.appendChild(createTransferControls(activeEntry.fileId, !!activeEntry.paused));
+        }
+        peerRows.set(pid, row);
         renderAllPeerStatuses();
       }
 
@@ -1296,7 +1455,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
         return out;
       }
 
-      async function sendToIndependentPeer(peer) {
+      async function sendToIndependentPeer(peer, file) {
         let startedAt = performance.now();
         let paceEpochMs = performance.now();
         const peerLabel = peer.label || peer.id.slice(-8);
@@ -1338,17 +1497,17 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
             cancelled: false,
             cancelledBy: '',
             pct: 0,
-            lastStatus: 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (0%)',
+            lastStatus: 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (0%)',
             renderRow: null
           };
           outEntry.renderRow = () => {
             if (outEntry.cancelled) {
-              setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name), null);
+              setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + peerLabel + ']: ' + file.name, null);
               return;
             }
             if (outEntry.paused) {
               const pPrefix = outEntry.remotePaused ? 'Paused by peer [' : 'Paused [';
-              setPeerRow(peer.id, false, pPrefix + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + outEntry.pct + '%)', outEntry);
+              setPeerRow(peer.id, false, pPrefix + peerLabel + ']: ' + file.name + ' (' + outEntry.pct + '%)', outEntry);
               return;
             }
             setPeerRow(peer.id, false, outEntry.lastStatus, outEntry);
@@ -1408,7 +1567,6 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
                 const lEnd = Math.min(slab.byteLength, lStart + chunkSize);
                 const iv = new Uint8Array(12);
                 crypto.getRandomValues(iv);
-                new DataView(iv.buffer).setUint32(8, cIdx >>> 0, false);
                 const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, new Uint8Array(slab, lStart, lEnd - lStart));
                 const frame = new Uint8Array(24 + enc.byteLength);
                 const hv = new DataView(frame.buffer);
@@ -1448,7 +1606,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
               const mbps = (sentBytes / (1024 * 1024) / elapsed).toFixed(2);
               const pct = Math.round((sentBytes / Math.max(1, file.size)) * 100);
               outEntry.pct = pct;
-              outEntry.lastStatus = 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+              outEntry.lastStatus = 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
               outEntry.renderRow();
             }
 
@@ -1465,7 +1623,7 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
                 const elapsed = Math.max(0.02, (nowD - startedAt) / 1000);
                 const mbps = (sentBytes / (1024 * 1024) / elapsed).toFixed(2);
                 outEntry.pct = pct;
-                outEntry.lastStatus = 'WebRTC -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+                outEntry.lastStatus = 'WebRTC -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
                 outEntry.renderRow();
               } else if (nowD - lastBufAt > 15000) {
                 break;
@@ -1483,12 +1641,12 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
               return;
             }
             if (rxErr) {
-              setPeerRow(peer.id, true, '[' + escapeHtml(peerLabel) + '] Error: ' + escapeHtml(rxErr), null);
+              setPeerRow(peer.id, true, '[' + peerLabel + '] Error: ' + rxErr, null);
               return;
             }
             const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
             const finalMbps = (file.size / (1024 * 1024) / totalElapsed).toFixed(2);
-            setPeerRow(peer.id, false, 'Completed [' + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + finalMbps + ' MB/s avg)', null);
+            setPeerRow(peer.id, false, 'Completed [' + peerLabel + ']: ' + file.name + ' (' + finalMbps + ' MB/s avg)', null);
             return;
           } finally {
             rxCompleteResolvers.delete(fileId);
@@ -1515,17 +1673,17 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
           cancelled: false,
           cancelledBy: '',
           pct: 0,
-          lastStatus: 'Bridge -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (0%)',
+          lastStatus: 'Bridge -> ' + peerLabel + ': ' + file.name + ' (0%)',
           renderRow: null
         };
         outEntry.renderRow = () => {
           if (outEntry.cancelled) {
-            setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name), null);
+            setPeerRow(peer.id, false, (outEntry.cancelledBy === 'remote' ? 'Stopped by peer [' : 'Stopped [') + peerLabel + ']: ' + file.name, null);
             return;
           }
           if (outEntry.paused) {
             const pPrefix = outEntry.remotePaused ? 'Paused by peer [' : 'Paused [';
-            setPeerRow(peer.id, false, pPrefix + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + outEntry.pct + '%)', outEntry);
+            setPeerRow(peer.id, false, pPrefix + peerLabel + ']: ' + file.name + ' (' + outEntry.pct + '%)', outEntry);
             return;
           }
           setPeerRow(peer.id, false, outEntry.lastStatus, outEntry);
@@ -1560,7 +1718,8 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
           });
 
           let cIdx = Math.max(0, Math.min(await resumePromise, totalChunks));
-          for (let off = cIdx * cSize; off < file.size; off += cSize) {
+          while (cIdx < totalChunks) {
+            const off = cIdx * cSize;
             if (outEntry.cancelled) break;
             if (transferPaused || outEntry.paused) {
               outEntry.pct = Math.round((cIdx / totalChunks) * 100);
@@ -1571,14 +1730,27 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
             const buf = await file.slice(off, Math.min(file.size, off + cSize)).arrayBuffer();
             if (outEntry.cancelled) break;
             const bytes = new Uint8Array(buf);
-            let bin = '';
-            for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
-            sendCloudCandidate(dst, {
-              kind: isExe ? 'exe:file-chunk' : 'browser:file-chunk',
-              fileId,
-              chunkIndex: cIdx,
-              data: btoa(bin)
-            });
+            if (!isExe && currentKey) {
+              const iv = new Uint8Array(12);
+              crypto.getRandomValues(iv);
+              const encBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, currentKey, buf);
+              if (outEntry.cancelled) break;
+              sendCloudCandidate(dst, {
+                kind: 'browser:file-chunk',
+                fileId,
+                chunkIndex: cIdx,
+                encrypted: true,
+                iv: uint8ToBase64(iv),
+                data: uint8ToBase64(new Uint8Array(encBuf))
+              });
+            } else {
+              sendCloudCandidate(dst, {
+                kind: isExe ? 'exe:file-chunk' : 'browser:file-chunk',
+                fileId,
+                chunkIndex: cIdx,
+                data: uint8ToBase64(bytes)
+              });
+            }
             cIdx++;
             await paceOutgoingBytes(bytes.byteLength, outEntry);
             if (outEntry.cancelled) break;
@@ -1586,9 +1758,9 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
             const mbps = (Math.min(file.size, off + bytes.byteLength) / (1024 * 1024) / elapsed).toFixed(2);
             const pct = Math.round((cIdx / totalChunks) * 100);
             outEntry.pct = pct;
-            outEntry.lastStatus = 'Bridge -> ' + escapeHtml(peerLabel) + ': ' + escapeHtml(file.name) + ' (' + pct + '% · ' + mbps + ' MB/s)';
+            outEntry.lastStatus = 'Bridge -> ' + peerLabel + ': ' + file.name + ' (' + pct + '% · ' + mbps + ' MB/s)';
             outEntry.renderRow();
-            if (cIdx % 8 === 0) {
+            if (cIdx % 24 === 0) {
               await new Promise(resolve => {
                 const timer = setTimeout(() => {
                   cloudAckResolvers.delete(fileId);
@@ -1613,14 +1785,16 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
           sendCloudCandidate(dst, { kind: isExe ? 'exe:file-end' : 'browser:file-end', fileId });
           const totalElapsed = Math.max(0.02, (performance.now() - startedAt) / 1000);
           const finalMbps = (file.size / (1024 * 1024) / totalElapsed).toFixed(2);
-          setPeerRow(peer.id, false, 'Completed [' + escapeHtml(peerLabel) + ']: ' + escapeHtml(file.name) + ' (' + finalMbps + ' MB/s avg)', null);
+          setPeerRow(peer.id, false, 'Completed [' + peerLabel + ']: ' + file.name + ' (' + finalMbps + ' MB/s avg)', null);
         } finally {
           activeOutgoing.delete(fileId);
           syncPauseBtnUi();
         }
       }
 
-      await Promise.all(targetPeers.map(p => sendToIndependentPeer(p)));
+      for (const file of selectedFiles) {
+        await Promise.all(targetPeers.map(p => sendToIndependentPeer(p, file)));
+      }
     });
 
     if (document.getElementById('room-input').value.trim()) {
@@ -1633,7 +1807,24 @@ function generateSelfContainedAppHtml(defaultRoom: string = ''): string {
 </html>`;
 }
 
+let activeWorkflowPromise: Promise<WorkflowRunState> | null = null;
+
 async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
+  if (activeWorkflowPromise) {
+    return activeWorkflowPromise;
+  }
+  const runPromise = runAutomatedReleasePipelineInternal();
+  activeWorkflowPromise = runPromise;
+  try {
+    return await runPromise;
+  } finally {
+    if (activeWorkflowPromise === runPromise) {
+      activeWorkflowPromise = null;
+    }
+  }
+}
+
+async function runAutomatedReleasePipelineInternal(): Promise<WorkflowRunState> {
   const startedAt = Date.now();
   const steps: WorkflowStepStatus[] = [
     {
@@ -1762,7 +1953,7 @@ async function executeAutomatedReleasePipeline(): Promise<WorkflowRunState> {
       'echo "===================================================================="',
       'echo "  AetherTunnel — Standalone Encrypted P2P File Transfer Client"',
       'echo "===================================================================="',
-      'OUT_FILE="/tmp/AetherTunnel-Standalone-App.html"',
+      'OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/AetherTunnel-XXXXXX.html")"',
       `echo "${b64Html}" | base64 --decode > "$OUT_FILE" 2>/dev/null || echo "${b64Html}" | base64 -D > "$OUT_FILE"`,
       'if command -v google-chrome >/dev/null 2>&1; then',
       '  google-chrome --app="file://$OUT_FILE" --window-size=1280,820 >/dev/null 2>&1 &',
@@ -1913,6 +2104,8 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
@@ -1927,14 +2120,21 @@ async function startServer() {
 
   // Serve compiled release artifacts with attachment headers
   app.get('/downloads/:filename', async (req, res) => {
-    const safeName = path.basename(req.params.filename);
+    const safeName = path.basename(String(req.params.filename || ''));
+    if (!safeName || !/^[a-zA-Z0-9._-]+$/.test(safeName)) {
+      res.status(400).send('Invalid artifact filename');
+      return;
+    }
     if (safeName === 'AetherTunnel-win-x64.exe') {
       try {
         const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').toString().split(',')[0].trim();
         const wsProto = proto === 'https' ? 'wss' : 'ws';
-        const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+        const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').split(',')[0].trim();
+        const host = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawHost) ? rawHost : 'localhost:3000';
         const cloudWsUrl = `${wsProto}://${host}/ws-tunnel`;
-        const roomParam = typeof req.query.room === 'string' && req.query.room.trim() ? req.query.room.trim() : '';
+        const roomParam = typeof req.query.room === 'string'
+          ? req.query.room.trim().replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 64)
+          : '';
         const { createRequire } = await import('module');
         const requireCjs = createRequire(import.meta.url);
         const { buildWindowsGuiExe } = requireCjs('./scripts/pe-exe-builder.cjs');
@@ -1947,8 +2147,9 @@ async function startServer() {
         console.error('Dynamic EXE build error:', err);
       }
     }
-    const filePath = path.join(releaseDir, safeName);
-    if (!fs.existsSync(filePath)) {
+    const resolvedReleaseDir = path.resolve(releaseDir);
+    const filePath = path.resolve(resolvedReleaseDir, safeName);
+    if (!filePath.startsWith(resolvedReleaseDir + path.sep) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       res.status(404).send('Artifact not found');
       return;
     }
@@ -1962,7 +2163,21 @@ async function startServer() {
   });
 
   // Trigger a fresh automated build run on demand
-  app.post('/api/workflow-run', async (_req, res) => {
+  app.post('/api/workflow-run', async (req, res) => {
+    const originHeader = req.headers.origin;
+    const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+    if (originHeader && hostHeader) {
+      try {
+        const originHost = new URL(originHeader).host.toLowerCase();
+        if (originHost !== hostHeader) {
+          res.status(403).json({ error: 'Cross-origin workflow execution rejected' });
+          return;
+        }
+      } catch {
+        res.status(403).json({ error: 'Invalid Origin header' });
+        return;
+      }
+    }
     const state = await executeAutomatedReleasePipeline();
     res.json(state);
   });
@@ -1992,6 +2207,10 @@ async function startServer() {
   // Active Tunnel Room Status Check
   app.get('/api/room/:code', (req, res) => {
     const code = (req.params.code || '').toLowerCase().trim();
+    if (!/^[a-z0-9-]{1,64}$/.test(code)) {
+      res.status(400).json({ error: 'Invalid room code format' });
+      return;
+    }
     const room = rooms.get(code);
     res.json({
       roomCode: code,
@@ -2073,16 +2292,18 @@ async function startServer() {
         switch (msg.type) {
           case 'room:join': {
             const roomCode = String(msg.roomCode || '').toLowerCase().trim();
-            const peerId = String(msg.peerId || '');
-            const deviceLabel = String(msg.deviceLabel || 'Desktop Peer');
-            const natType = String(msg.natType || 'Port-Restricted Cone NAT');
+            const peerId = String(msg.peerId || '').trim();
+            const deviceLabel = String(msg.deviceLabel || 'Desktop Peer').slice(0, 80);
+            const natType = String(msg.natType || 'Port-Restricted Cone NAT').slice(0, 80);
             const clientType: 'browser' | 'exe' =
               msg.clientType === 'exe' || peerId.startsWith('exe-kernel-') || peerId.startsWith('aethertunnel-exe-')
                 ? 'exe'
                 : 'browser';
-            const cloudId = msg.cloudId ? String(msg.cloudId) : undefined;
+            const cloudId = msg.cloudId ? String(msg.cloudId).trim().slice(0, 128) : undefined;
 
-            if (!roomCode || !peerId) return;
+            if (!/^[a-z0-9-]{1,64}$/.test(roomCode) || !/^[a-zA-Z0-9._:-]{1,64}$/.test(peerId)) {
+              return;
+            }
 
             if (currentPeer && rooms.has(currentPeer.roomCode) && currentPeer.roomCode !== roomCode) {
               const prevRoom = rooms.get(currentPeer.roomCode)!;
@@ -2103,6 +2324,20 @@ async function startServer() {
               rooms.set(roomCode, new Map());
             }
             const room = rooms.get(roomCode)!;
+
+            const existingById = room.get(peerId);
+            if (existingById && existingById.ws !== ws && existingById.ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'room:error', reason: 'Peer ID already active in room' }));
+              return;
+            }
+            if (cloudId) {
+              for (const rc of room.values()) {
+                if (rc.id !== peerId && rc.cloudId === cloudId && rc.ws !== ws && rc.ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'room:error', reason: 'Cloud peer ID already active in room' }));
+                  return;
+                }
+              }
+            }
 
             if (!room.has(peerId) && room.size >= MAX_ROOM_PEERS) {
               ws.send(
@@ -2207,9 +2442,13 @@ async function startServer() {
                 }
               }
             }
+            const authorizedSrc =
+              msg.src && (msg.src === currentPeer.id || (currentPeer.cloudId && msg.src === currentPeer.cloudId))
+                ? msg.src
+                : currentPeer.cloudId || currentPeer.id;
             sendToRoomTarget(currentPeer.roomCode, currentPeer.id, targetWsId, {
               type: 'CANDIDATE',
-              src: msg.src || currentPeer.id,
+              src: authorizedSrc,
               dst,
               payload: msg.payload,
             });

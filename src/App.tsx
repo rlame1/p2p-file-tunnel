@@ -91,6 +91,15 @@ export const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
   },
 ];
 
+function sanitizeSafeTransferName(name: unknown): string {
+  const cleaned = String(name || 'transfer.bin')
+    .replace(/[\u0000-\u001f\\/:*?"<>|]/g, '_')
+    .replace(/\.\.+/g, '_')
+    .trim()
+    .replace(/^\.+/, '');
+  return cleaned || 'transfer.bin';
+}
+
 interface IncomingFileBuffer {
   id: string;
   transferNumId: number;
@@ -150,6 +159,7 @@ interface PartialSubFrameAssembly {
   buffer: Uint8Array;
   receivedParts: number;
   totalParts: number;
+  seenParts: Set<number>;
 }
 
 export default function App() {
@@ -157,11 +167,11 @@ export default function App() {
 
   const [roomCode, setRoomCode] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
-    return params.get('room')?.toLowerCase().trim() || '';
+    return (params.get('room')?.toLowerCase().trim() || '').replace(/[^a-z0-9-]/g, '').slice(0, 64);
   });
   const [joinCodeInput, setJoinCodeInput] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
-    return params.get('room')?.toLowerCase().trim() || '';
+    return (params.get('room')?.toLowerCase().trim() || '').replace(/[^a-z0-9-]/g, '').slice(0, 64);
   });
   const [passphrase, setPassphrase] = useState<string>('');
   const [keyFingerprint, setKeyFingerprint] = useState<string>('Deriving...');
@@ -927,7 +937,13 @@ export default function App() {
       }
       if (cancelledTransferIdsRef.current.has(fileId)) return;
       const bufEntry = incomingBuffersRef.current.get(fileId);
-      if (!bufEntry || bufEntry.rejected || bufEntry.cancelled || bufEntry.receivedChunks[chunkIndex] !== undefined) {
+      if (
+        !bufEntry ||
+        bufEntry.rejected ||
+        bufEntry.cancelled ||
+        chunkIndex >= bufEntry.totalChunks ||
+        bufEntry.receivedChunks[chunkIndex] !== undefined
+      ) {
         return;
       }
 
@@ -995,22 +1011,44 @@ export default function App() {
         const chunkIndex = view.getUint32(8, false);
         const totalFrameBytes = view.getUint32(12, false);
         const byteOffset = view.getUint32(16, false);
+        const partIndex = view.getUint16(20, false);
         const totalParts = view.getUint16(22, false);
+
+        if (
+          totalFrameBytes < 24 ||
+          totalFrameBytes > 8 * 1024 * 1024 ||
+          totalParts < 1 ||
+          totalParts > 2048 ||
+          partIndex >= totalParts
+        ) {
+          return true;
+        }
+        const sliceBytes = new Uint8Array(frameBuffer, 24);
+        if (byteOffset + sliceBytes.byteLength > totalFrameBytes) {
+          return true;
+        }
 
         const assemblyKey = `${transferNumId}:${chunkIndex}`;
         let assembly = partialSubFramesRef.current.get(assemblyKey);
         if (!assembly) {
+          if (partialSubFramesRef.current.size >= 128) return true;
           assembly = {
             buffer: new Uint8Array(totalFrameBytes),
             receivedParts: 0,
             totalParts,
+            seenParts: new Set<number>(),
           };
           partialSubFramesRef.current.set(assemblyKey, assembly);
         }
+        if (assembly.buffer.byteLength !== totalFrameBytes || assembly.totalParts !== totalParts) {
+          return true;
+        }
 
-        const sliceBytes = new Uint8Array(frameBuffer, 24);
-        assembly.buffer.set(sliceBytes, byteOffset);
-        assembly.receivedParts += 1;
+        if (!assembly.seenParts.has(partIndex)) {
+          assembly.seenParts.add(partIndex);
+          assembly.buffer.set(sliceBytes, byteOffset);
+          assembly.receivedParts += 1;
+        }
 
         if (assembly.receivedParts >= assembly.totalParts) {
           partialSubFramesRef.current.delete(assemblyKey);
@@ -1313,23 +1351,32 @@ export default function App() {
       }
 
       if (packet.kind === 'file:meta') {
-        const {
-          fileId,
-          transferNumId,
-          name,
-          size,
-          chunkSize,
-          mimeType,
-          totalChunks,
-          sha256,
-        } = packet;
+        const fileId = String(packet.fileId || `rx-${Date.now()}`);
+        const numId =
+          typeof packet.transferNumId === 'number' ? packet.transferNumId >>> 0 : 1001;
+        const name = sanitizeSafeTransferName(packet.name);
+        const size = Math.max(0, Number(packet.size) || 0);
+        const chunkSize = Math.max(
+          1024,
+          Math.min(8 * 1024 * 1024, Math.floor(Number(packet.chunkSize) || WIRE_CHUNK_BYTES))
+        );
+        const totalChunks = Math.max(
+          1,
+          Math.min(200000, Math.floor(Number(packet.totalChunks) || Math.ceil(size / chunkSize) || 1))
+        );
+        const mimeType =
+          typeof packet.mimeType === 'string' && packet.mimeType.trim()
+            ? packet.mimeType.trim().slice(0, 128)
+            : 'application/octet-stream';
+        const sha256 =
+          typeof packet.sha256 === 'string'
+            ? packet.sha256.slice(0, 128)
+            : 'streaming-aes-256-gcm';
 
         if (cancelledTransferIdsRef.current.has(fileId)) {
           return;
         }
 
-        const numId =
-          typeof transferNumId === 'number' ? transferNumId : 1001;
         const resumeKey = `${name}::${size}`;
 
         // Deduplicate repeated file:meta arrivals across multiple buses/retries so an in-progress
@@ -1491,7 +1538,10 @@ export default function App() {
               for (const orphanBuf of orphans) {
                 const ohv = new DataView(orphanBuf);
                 const oChunkIndex = ohv.getUint32(8, false);
-                if (bufEntry.receivedChunks[oChunkIndex] === undefined) {
+                if (
+                  oChunkIndex < bufEntry.totalChunks &&
+                  bufEntry.receivedChunks[oChunkIndex] === undefined
+                ) {
                   void (cryptoKeyRef.current
                     ? Promise.resolve(cryptoKeyRef.current)
                     : keyDerivationPromiseRef.current || Promise.resolve(null)
@@ -2591,6 +2641,27 @@ export default function App() {
       const fid = rxExeFileId;
       const fsize = rxExeFileSize;
       const fchunks = rxExeTotalChunks;
+      if (fsize > 0 && rxExeBytes < fsize) {
+        rxExeChunks = [];
+        rxExeFileId = '';
+        incomingControlHandlersRef.current.delete(fid);
+        pausedIncomingIdsRef.current.delete(fid);
+        setIncomingFileAlert(null);
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === fid
+              ? {
+                  ...t,
+                  status: 'error',
+                  verified: false,
+                  speedBps: 0,
+                  errorMessage: 'Transfer incomplete — please retry',
+                }
+              : t
+          )
+        );
+        return;
+      }
       const elapsedSec = Math.max(0.008, (performance.now() - rxExeStartedAt) / 1000);
       const avgSpeed = fsize / elapsedSec;
       const finalSpeed = rxExeSmoothedBps > 0 ? rxExeSmoothedBps : avgSpeed;
@@ -2746,9 +2817,9 @@ export default function App() {
                 const incomingExeFid = String(msg.fileId || `exe-${Date.now()}`);
                 if (cancelledTransferIdsRef.current.has(incomingExeFid)) return;
                 rxExeFileId = incomingExeFid;
-                rxExeFileName = String(msg.name || 'transfer.bin');
-                rxExeFileSize = Number(msg.size) || 0;
-                rxExeTotalChunks = Math.max(1, Number(msg.totalChunks) || 1);
+                rxExeFileName = sanitizeSafeTransferName(msg.name);
+                rxExeFileSize = Math.max(0, Number(msg.size) || 0);
+                rxExeTotalChunks = Math.max(1, Math.min(200000, Math.floor(Number(msg.totalChunks) || 1)));
                 rxExeChunks = [];
                 rxExeBytes = 0;
                 rxExeStartedAt = performance.now();
@@ -3066,6 +3137,9 @@ export default function App() {
     let rxPausedAt = 0;
     let rxCancelled = false;
     let rxEndedWhilePaused = false;
+    let rxPendingDecrypts = 0;
+    let rxEndedWhileDecrypting = false;
+    const rxInFlightChunks = new Set<number>();
     let rxSrcPeer = '';
     let rxReplyPrefix: 'browser:' | 'exe:' = 'exe:';
 
@@ -3115,6 +3189,10 @@ export default function App() {
 
     const finalizeCloudRx = () => {
       if (!rxFileId || rxRejected || rxCancelled || rxAwaitingConfirm || rxPaused) return;
+      if (rxPendingDecrypts > 0) {
+        rxEndedWhileDecrypting = true;
+        return;
+      }
       const fid = rxFileId;
       const fsize = rxFileSize;
       const fchunks = rxTotalChunks;
@@ -3122,8 +3200,31 @@ export default function App() {
       const avgSpeed = fsize / elapsedSec;
       const finalSpeed = rxSmoothedBps > 0 ? rxSmoothedBps : avgSpeed;
       const orderedParts: Uint8Array[] = [];
-      for (let i = 0; i < rxChunks.length; i++) {
+      for (let i = 0; i < fchunks; i++) {
         if (rxChunks[i]) orderedParts.push(rxChunks[i]!);
+      }
+      if (fsize > 0 && orderedParts.length < fchunks) {
+        rxChunks = [];
+        rxReceivedCount = 0;
+        rxFileId = '';
+        rxInFlightChunks.clear();
+        incomingControlHandlersRef.current.delete(fid);
+        pausedIncomingIdsRef.current.delete(fid);
+        setIncomingFileAlert(null);
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === fid
+              ? {
+                  ...t,
+                  status: 'error',
+                  verified: false,
+                  speedBps: 0,
+                  errorMessage: `Transfer incomplete (${orderedParts.length}/${fchunks} chunks)`,
+                }
+              : t
+          )
+        );
+        return;
       }
       const blob = new Blob(orderedParts as BlobPart[], {
         type: 'application/octet-stream',
@@ -3132,6 +3233,7 @@ export default function App() {
       rxChunks = [];
       rxReceivedCount = 0;
       rxFileId = '';
+      rxInFlightChunks.clear();
       incomingControlHandlersRef.current.delete(fid);
       pausedIncomingIdsRef.current.delete(fid);
       setIncomingFileAlert(null);
@@ -3436,12 +3538,18 @@ export default function App() {
         rxSrcPeer = srcPeer;
         rxReplyPrefix = incomingPrefix;
         rxFileId = incomingFid;
-        rxFileName = String(payload.name || 'transfer.bin');
-        rxFileSize = Number(payload.size) || 0;
-        const cSize = Number(payload.chunkSize) || 49152;
+        rxFileName = sanitizeSafeTransferName(payload.name);
+        rxFileSize = Math.max(0, Number(payload.size) || 0);
+        const cSize = Math.max(
+          1024,
+          Math.min(8 * 1024 * 1024, Math.floor(Number(payload.chunkSize) || 49152))
+        );
         rxTotalChunks = Math.max(
           1,
-          Number(payload.totalChunks) || Math.ceil(rxFileSize / cSize)
+          Math.min(
+            200000,
+            Math.floor(Number(payload.totalChunks) || Math.ceil(rxFileSize / cSize) || 1)
+          )
         );
         rxChunks = new Array(rxTotalChunks);
         rxReceivedCount = 0;
@@ -3457,6 +3565,9 @@ export default function App() {
         rxPausedAt = 0;
         rxCancelled = false;
         rxEndedWhilePaused = false;
+        rxPendingDecrypts = 0;
+        rxEndedWhileDecrypting = false;
+        rxInFlightChunks.clear();
 
         const fid = rxFileId;
         const fname = rxFileName;
@@ -3676,13 +3787,19 @@ export default function App() {
       ) {
         if (rxRejected || rxCancelled) return;
         const b64 = typeof payload.data === 'string' ? payload.data : '';
-        const chunkIndex = Math.max(0, Number(payload.chunkIndex) || 0);
-        if (b64 && rxChunks[chunkIndex] === undefined) {
-          const binStr = window.atob(b64);
-          const bytes = new Uint8Array(binStr.length);
-          for (let i = 0; i < binStr.length; i++) {
-            bytes[i] = binStr.charCodeAt(i);
-          }
+        const chunkIndex = Number(payload.chunkIndex);
+        if (
+          !b64 ||
+          !Number.isInteger(chunkIndex) ||
+          chunkIndex < 0 ||
+          chunkIndex >= rxTotalChunks
+        ) {
+          return;
+        }
+        const activeFid = rxFileId;
+        const commitChunkBytes = (bytes: Uint8Array) => {
+          if (rxFileId !== activeFid || rxRejected || rxCancelled) return;
+          if (rxChunks[chunkIndex] !== undefined) return;
           rxChunks[chunkIndex] = bytes;
           rxReceivedCount += 1;
           rxBytes += bytes.byteLength;
@@ -3693,12 +3810,12 @@ export default function App() {
               const winDt = (now - rxLastWinAt) / 1000;
               if (winDt >= 0.35 && rxBytes >= rxLastWinBytes) {
                 const inst = (rxBytes - rxLastWinBytes) / winDt;
-                rxSmoothedBps = rxSmoothedBps > 0 ? rxSmoothedBps * 0.72 + inst * 0.28 : inst;
+                rxSmoothedBps =
+                  rxSmoothedBps > 0 ? rxSmoothedBps * 0.72 + inst * 0.28 : inst;
                 rxLastWinAt = now;
                 rxLastWinBytes = rxBytes;
               }
               rxLastUiAt = now;
-              const fid = rxFileId;
               const bytesNow = rxBytes;
               const chunksNow = rxReceivedCount;
               const elapsedSec = Math.max(0.008, (now - rxStartedAt) / 1000);
@@ -3706,7 +3823,7 @@ export default function App() {
               const speedBps = rxSmoothedBps > 0 ? rxSmoothedBps : avgSpeedBps;
               setTransfers((prev) =>
                 prev.map((t) =>
-                  t.id === fid
+                  t.id === activeFid
                     ? {
                         ...t,
                         transferredChunks: chunksNow,
@@ -3718,6 +3835,70 @@ export default function App() {
                 )
               );
             }
+          }
+        };
+
+        if (rxChunks[chunkIndex] === undefined && !rxInFlightChunks.has(chunkIndex)) {
+          if (
+            payload.kind === 'browser:file-chunk' &&
+            payload.encrypted &&
+            typeof payload.iv === 'string'
+          ) {
+            rxInFlightChunks.add(chunkIndex);
+            rxPendingDecrypts += 1;
+            const ivB64 = String(payload.iv);
+            void (async () => {
+              try {
+                let key = cryptoKeyRef.current;
+                if (!key && keyDerivationPromiseRef.current) {
+                  key = await keyDerivationPromiseRef.current;
+                }
+                if (!key) throw new Error('Missing tunnel key');
+                const plainBuf = await decryptChunk(key, ivB64, b64);
+                commitChunkBytes(new Uint8Array(plainBuf));
+              } catch {
+                if (rxFileId === activeFid && !rxCancelled && !rxRejected) {
+                  rxCancelled = true;
+                  const errMsg =
+                    'AES-256-GCM decryption failed — verify Room Name & E2EE Passphrase match sender';
+                  setIncomingFileAlert(errMsg);
+                  setTransfers((prev) =>
+                    prev.map((t) =>
+                      t.id === activeFid
+                        ? { ...t, status: 'error', speedBps: 0, errorMessage: errMsg }
+                        : t
+                    )
+                  );
+                }
+              } finally {
+                rxInFlightChunks.delete(chunkIndex);
+                if (rxPendingDecrypts > 0) rxPendingDecrypts -= 1;
+                if (
+                  rxFileId === activeFid &&
+                  rxEndedWhileDecrypting &&
+                  rxPendingDecrypts === 0 &&
+                  !rxAwaitingConfirm &&
+                  !rxPaused &&
+                  !rxCancelled &&
+                  !rxRejected
+                ) {
+                  rxEndedWhileDecrypting = false;
+                  finalizeCloudRx();
+                }
+              }
+            })();
+          } else {
+            let bytes: Uint8Array;
+            try {
+              const binStr = window.atob(b64);
+              bytes = new Uint8Array(binStr.length);
+              for (let i = 0; i < binStr.length; i++) {
+                bytes[i] = binStr.charCodeAt(i);
+              }
+            } catch {
+              return;
+            }
+            commitChunkBytes(bytes);
           }
         }
         if ((chunkIndex + 1) % 8 === 0 && srcPeer) {
@@ -3738,6 +3919,7 @@ export default function App() {
           rxChunks = [];
           rxReceivedCount = 0;
           rxFileId = '';
+          rxInFlightChunks.clear();
           return;
         }
         if (rxAwaitingConfirm) {
@@ -3746,6 +3928,10 @@ export default function App() {
         }
         if (rxPaused) {
           rxEndedWhilePaused = true;
+          return;
+        }
+        if (rxPendingDecrypts > 0) {
+          rxEndedWhileDecrypting = true;
           return;
         }
         finalizeCloudRx();
@@ -5067,11 +5253,8 @@ export default function App() {
         initialOffsetBytes = chunkIdx * cloudChunkSize;
         lastWindowBytes = initialOffsetBytes;
 
-        for (
-          let offset = chunkIdx * cloudChunkSize;
-          offset < file.size;
-          offset += cloudChunkSize
-        ) {
+        while (chunkIdx < cloudTotalChunks) {
+          const offset = chunkIdx * cloudChunkSize;
           const keepGoing = await waitIfTransferPaused(fileId, queueItemId, (pausedMs) => {
             activeStartedAt += pausedMs;
             lastWindowAt = performance.now();
@@ -5084,14 +5267,40 @@ export default function App() {
             .slice(offset, Math.min(file.size, offset + cloudChunkSize))
             .arrayBuffer();
           if (isCancelledNow()) return 'cancelled';
-          const b64 = arrayBufferToBase64(buf);
 
-          sendCloudCandidateRef.current(dstPeer, {
-            kind: `${kindPrefix}file-chunk`,
-            fileId,
-            chunkIndex: chunkIdx,
-            data: b64,
-          });
+          if (kindPrefix === 'browser:') {
+            let encKey = cryptoKeyRef.current;
+            if (!encKey && keyDerivationPromiseRef.current) {
+              encKey = await keyDerivationPromiseRef.current;
+            }
+            if (encKey) {
+              const enc = await encryptChunk(encKey, buf, chunkIdx);
+              if (isCancelledNow()) return 'cancelled';
+              sendCloudCandidateRef.current(dstPeer, {
+                kind: 'browser:file-chunk',
+                fileId,
+                chunkIndex: chunkIdx,
+                encrypted: true,
+                iv: enc.ivBase64,
+                data: enc.ciphertextBase64,
+              });
+            } else {
+              sendCloudCandidateRef.current(dstPeer, {
+                kind: 'browser:file-chunk',
+                fileId,
+                chunkIndex: chunkIdx,
+                data: arrayBufferToBase64(buf),
+              });
+            }
+          } else {
+            const b64 = arrayBufferToBase64(buf);
+            sendCloudCandidateRef.current(dstPeer, {
+              kind: 'exe:file-chunk',
+              fileId,
+              chunkIndex: chunkIdx,
+              data: b64,
+            });
+          }
 
           chunkIdx += 1;
 

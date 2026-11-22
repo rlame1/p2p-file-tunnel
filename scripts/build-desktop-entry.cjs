@@ -85,7 +85,7 @@ const b64Html = Buffer.from(singleFileHtml, 'utf8').toString('base64');
 const unixLauncher = [
   '#!/usr/bin/env bash',
   'set -e',
-  'OUT_FILE="/tmp/AetherTunnel-Standalone-GUI.html"',
+  'OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/AetherTunnel-XXXXXX.html")"',
   `echo "${b64Html}" | base64 --decode > "$OUT_FILE" 2>/dev/null || echo "${b64Html}" | base64 -D > "$OUT_FILE"`,
   'if command -v open >/dev/null 2>&1; then',
   '  open "$OUT_FILE"',

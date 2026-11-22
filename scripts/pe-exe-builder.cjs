@@ -9,9 +9,24 @@
 function getCSharpKernelSource(defaultRoomCode = '', defaultCloudWsUrl = '') {
   const safeRoom = String(defaultRoomCode || '')
     .replace(/[^a-z0-9-]/gi, '')
-    .toLowerCase();
+    .toLowerCase()
+    .slice(0, 64);
   const rawCloudWs = String(defaultCloudWsUrl || '').trim();
-  const safeCloudWs = /^(wss?:\/\/[a-z0-9.\-:\[\]]+\/[^\s"'<>\\]*)$/i.test(rawCloudWs) ? rawCloudWs : '';
+  let safeCloudWs = '';
+  if (rawCloudWs && rawCloudWs.length <= 256 && !/[\s"'<>\\]/.test(rawCloudWs)) {
+    try {
+      const parsed = new URL(rawCloudWs);
+      if (
+        (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') &&
+        /^[a-z0-9.\-:\[\]]+$/i.test(parsed.host) &&
+        /^\/[a-z0-9/_.\-]*$/i.test(parsed.pathname) &&
+        !parsed.username &&
+        !parsed.password
+      ) {
+        safeCloudWs = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+      }
+    } catch { }
+  }
 
   return `
 using System;
@@ -284,6 +299,7 @@ namespace AetherTunnelNative
             return a;
         });
         private readonly ThreadLocal<byte[]> threadLocalIv = new ThreadLocal<byte[]>(delegate() { return new byte[16]; });
+        private readonly ThreadLocal<RNGCryptoServiceProvider> threadLocalRng = new ThreadLocal<RNGCryptoServiceProvider>(delegate() { return new RNGCryptoServiceProvider(); });
         private long totalAppBufferedBytes = 0;
         private const long HARD_RAM_CAP_BYTES = 1750L * 1024L * 1024L;
         private const long DISK_STAGE_TARGET_BYTES = 256L * 1024L * 1024L;
@@ -357,6 +373,7 @@ namespace AetherTunnelNative
         private string cloudPartPath = "";
         private string cloudOutPath = "";
         private long cloudExpectedSize = 0;
+        private long cloudChunkSize = CLOUD_CHUNK_SIZE;
         private long cloudReceivedBytes = 0;
         private long cloudSessionStartBytes = 0;
         private Stopwatch cloudRxSw = null;
@@ -730,7 +747,12 @@ namespace AetherTunnelNative
             btnOpenDir.Location = new Point(S(222), S(394));
             btnOpenDir.Size = new Size(S(194), S(34));
             btnOpenDir.Click += delegate {
-                try { Process.Start("explorer.exe", downloadDirectory); } catch { }
+                try {
+                    if (Directory.Exists(downloadDirectory))
+                    {
+                        Process.Start("explorer.exe", "\\"" + downloadDirectory + "\\"");
+                    }
+                } catch { }
             };
             leftCard.Controls.Add(btnOpenDir);
 
@@ -1083,15 +1105,52 @@ namespace AetherTunnelNative
         {
             if (String.IsNullOrEmpty(raw)) return "";
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < raw.Length && sb.Length < 36; i++)
+            for (int i = 0; i < raw.Length && sb.Length < 64; i++)
             {
                 char c = raw[i];
-                if (c != '"' && c != '\\\\' && c != '\\r' && c != '\\n' && c != '|')
+                if (c >= 32 && c != '"' && c != '\\\\' && c != '|')
                 {
                     sb.Append(c);
                 }
             }
             return sb.ToString().Trim();
+        }
+
+        private static string SanitizeSafeFileName(string rawName)
+        {
+            if (String.IsNullOrEmpty(rawName)) return "transfer.bin";
+            string s = rawName.Replace('\\\\', '_').Replace('/', '_').Replace(':', '_');
+            while (s.Contains("..")) s = s.Replace("..", "_");
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            StringBuilder sb = new StringBuilder(s.Length);
+            for (int i = 0; i < s.Length && sb.Length < 180; i++)
+            {
+                char c = s[i];
+                if (c < 32 || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || Array.IndexOf(invalidChars, c) >= 0)
+                {
+                    sb.Append('_');
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            string cleaned = sb.ToString().Trim().TrimStart('.');
+            if (cleaned.Length == 0 || cleaned == "." || cleaned == "..") return "transfer.bin";
+            return cleaned;
+        }
+
+        private string BuildSafeDownloadPath(string rawFileName, out string safeName)
+        {
+            safeName = SanitizeSafeFileName(rawFileName);
+            string baseDir = Path.GetFullPath(downloadDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string candidate = Path.GetFullPath(Path.Combine(baseDir, "AetherTunnel_" + safeName));
+            if (!candidate.StartsWith(baseDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                safeName = "transfer.bin";
+                candidate = Path.GetFullPath(Path.Combine(baseDir, "AetherTunnel_transfer.bin"));
+            }
+            return candidate;
         }
 
         private RoomPeerInfo UpsertRoomPeer(string key, string displayName, string clientType, out bool isNew, out bool rejectedFull)
@@ -2925,14 +2984,20 @@ namespace AetherTunnelNative
                                     stagedPages.Clear();
                                     readyCompletedBytes = 0;
 
-                                    udpFileName = newFileName;
+                                    string safeUdpName;
+                                    udpFinalPath = BuildSafeDownloadPath(newFileName, out safeUdpName);
+                                    udpFileName = safeUdpName;
                                     lastCompletedUdpFileName = "";
                                     lastCompletedUdpFileNameVolatile = "";
-                                    udpExpectedSize = newExpectedSize;
-                                    udpExpectedChunks = (int)Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
-                                    if (aParts.Length >= 4) Int32.TryParse(aParts[3], out udpExpectedChunks);
+                                    udpExpectedSize = Math.Max(0L, newExpectedSize);
+                                    long calcUdpChunks = Math.Max(1L, (udpExpectedSize + UDP_CHUNK_SIZE - 1) / UDP_CHUNK_SIZE);
+                                    int parsedUdpChunks = 0;
+                                    if (aParts.Length >= 4) Int32.TryParse(aParts[3], out parsedUdpChunks);
+                                    if (calcUdpChunks > Int32.MaxValue) calcUdpChunks = Int32.MaxValue;
+                                    udpExpectedChunks = (parsedUdpChunks > 0 && Math.Abs((long)parsedUdpChunks - calcUdpChunks) <= 2)
+                                        ? parsedUdpChunks
+                                        : (int)calcUdpChunks;
 
-                                    udpFinalPath = Path.Combine(downloadDirectory, "AetherTunnel_" + udpFileName);
                                     udpPartPath = udpFinalPath + ".part";
                                     ReleaseConflictingRxHandlesForPart(udpPartPath, "udp");
 
@@ -3096,10 +3161,11 @@ namespace AetherTunnelNative
                                             try { SendUdpP2pPacket(waitMsg, waitMsg.Length, senderEp); } catch { }
                                         }
                                     }
-                                    string pCandPath = Path.Combine(downloadDirectory, "AetherTunnel_" + newFileName) + ".part";
+                                    string safePromptName;
+                                    string pCandPath = BuildSafeDownloadPath(newFileName, out safePromptName) + ".part";
                                     bool pHasRes = File.Exists(pCandPath) && ReadCheckpointBytes(pCandPath, newExpectedSize) > 0;
-                                    string pFile = newFileName;
-                                    long pSize = newExpectedSize;
+                                    string pFile = safePromptName;
+                                    long pSize = Math.Max(0L, newExpectedSize);
                                     string pHdr = hdr;
                                     IPEndPoint pEp = senderEp;
                                     ThreadPool.QueueUserWorkItem(delegate {
@@ -3173,9 +3239,12 @@ namespace AetherTunnelNative
                                     try
                                     {
                                         byte[] d = batch[i];
+                                        if (d == null || d.Length < 28) { indices[i] = -1; continue; }
                                         int pktTotalChunks = BitConverter.ToInt32(d, 8);
                                         if (pktTotalChunks != udpExpectedChunks) { indices[i] = -1; continue; }
-                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        int parsedIdx = BitConverter.ToInt32(d, 4);
+                                        if (parsedIdx < 0 || parsedIdx >= udpExpectedChunks) { indices[i] = -1; continue; }
+                                        indices[i] = parsedIdx;
                                         Buffer.BlockCopy(d, 12, seqIv, 0, 16);
                                         using (ICryptoTransform dec = seqAes.CreateDecryptor(keySnapshot, seqIv))
                                         {
@@ -3192,13 +3261,24 @@ namespace AetherTunnelNative
                                     try
                                     {
                                         byte[] d = batch[i];
+                                        if (d == null || d.Length < 28)
+                                        {
+                                            indices[i] = -1;
+                                            return;
+                                        }
                                         int pktTotalChunks = BitConverter.ToInt32(d, 8);
                                         if (pktTotalChunks != udpExpectedChunks)
                                         {
                                             indices[i] = -1;
                                             return;
                                         }
-                                        indices[i] = BitConverter.ToInt32(d, 4);
+                                        int parsedIdx = BitConverter.ToInt32(d, 4);
+                                        if (parsedIdx < 0 || parsedIdx >= udpExpectedChunks)
+                                        {
+                                            indices[i] = -1;
+                                            return;
+                                        }
+                                        indices[i] = parsedIdx;
                                         byte[] iv = threadLocalIv.Value;
                                         Buffer.BlockCopy(d, 12, iv, 0, 16);
                                         AesCryptoServiceProvider aes = threadLocalAes.Value;
@@ -3218,8 +3298,8 @@ namespace AetherTunnelNative
                             {
                                 int cIdx = indices[i];
                                 byte[] plain = plains[i];
-                                if (cIdx < 0 || plain == null) continue;
-                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length && udpChunkReceived[cIdx])
+                                if (cIdx < 0 || udpChunkReceived == null || cIdx >= udpChunkReceived.Length || plain == null) continue;
+                                if (udpChunkReceived[cIdx])
                                 {
                                     ackWindowBytes += plain.Length;
                                     uiWindowBytes += plain.Length;
@@ -3261,17 +3341,10 @@ namespace AetherTunnelNative
                                     continue;
                                 }
 
-                                if (udpChunkReceived != null && cIdx < udpChunkReceived.Length)
-                                {
-                                    udpChunkReceived[cIdx] = true;
-                                    udpUniqueReceivedCount++;
-                                    lastUniqueRxChunkTick = Environment.TickCount;
-                                    udpReceivedBytes = Math.Min(udpExpectedSize, udpReceivedBytes + plain.Length);
-                                }
-                                else
-                                {
-                                    udpReceivedBytes = Math.Max(udpReceivedBytes, ((long)cIdx * UDP_CHUNK_SIZE) + plain.Length);
-                                }
+                                udpChunkReceived[cIdx] = true;
+                                udpUniqueReceivedCount++;
+                                lastUniqueRxChunkTick = Environment.TickCount;
+                                udpReceivedBytes = Math.Min(udpExpectedSize, udpReceivedBytes + plain.Length);
 
                                 // Place chunk directly into aligned 4 MB pooled RAM page (zero small heap allocations kept in Gen2!)
                                 int pIdx = cIdx / CHUNKS_PER_STAGE_PAGE;
@@ -4650,13 +4723,13 @@ namespace AetherTunnelNative
                     else { activeCloudBrowserPeerId = srcPeer; lastCloudBrowserSeen = DateTime.UtcNow; lastBrowserSignalingChannel = ch; }
 
                     string senderLabel = fromExe ? "Remote .EXE" : "Chrome Browser";
-                    string incomingFileId = ExtractJsonString(text, "fileId");
-                    string incName = ExtractJsonString(text, "name");
-                    if (incName.Length == 0) incName = "transfer.bin";
-                    long incSize = ExtractJsonLong(text, "size");
+                    string incomingFileId = SanitizeJsonText(ExtractJsonString(text, "fileId"));
+                    string rawIncName = ExtractJsonString(text, "name");
+                    long incSize = Math.Max(0L, ExtractJsonLong(text, "size"));
                     long cChunkSize = ExtractJsonLong(text, "chunkSize");
-                    if (cChunkSize <= 0) cChunkSize = CLOUD_CHUNK_SIZE;
-                    string candOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + incName);
+                    if (cChunkSize < 1024 || cChunkSize > 1024 * 1024) cChunkSize = CLOUD_CHUNK_SIZE;
+                    string incName;
+                    string candOutPath = BuildSafeDownloadPath(rawIncName, out incName);
                     string candPartPath = candOutPath + ".part";
                     bool hasPart = File.Exists(candPartPath) && ReadCheckpointBytes(candPartPath, incSize) > 0;
 
@@ -4674,6 +4747,7 @@ namespace AetherTunnelNative
                             }
                             cloudFileName = incName;
                             cloudExpectedSize = incSize;
+                            cloudChunkSize = cChunkSize;
                             cloudOutPath = candOutPath;
                             cloudPartPath = candPartPath;
 
@@ -4706,7 +4780,7 @@ namespace AetherTunnelNative
                             cloudSessionStartBytes = alignedBytes;
                             cloudRxSw = Stopwatch.StartNew();
 
-                            SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + cloudFileName.Replace("\\"", "") + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
+                            SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"" + incomingFileId + "\\",\\"name\\":\\"" + SanitizeJsonText(cloudFileName) + "\\",\\"size\\":" + cloudExpectedSize.ToString() + ",\\"resumeFromChunk\\":" + resumeFromChunk.ToString() + "}");
                             int startPermille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
                             UpdateTransferUi("Receiving from " + senderLabel + ": " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, 0, 0, startPermille, true);
                         }
@@ -4743,25 +4817,27 @@ namespace AetherTunnelNative
                         if (cloudOutFile == null) return;
                         string b64 = ExtractJsonString(text, "data");
                         long chunkIdx = ExtractJsonLong(text, "chunkIndex");
-                        if (b64.Length > 0)
+                        long stepSize = cloudChunkSize > 0 ? cloudChunkSize : CLOUD_CHUNK_SIZE;
+                        if (chunkIdx < 0 || b64.Length == 0 || b64.Length > 512 * 1024) return;
+                        long writePos = chunkIdx * stepSize;
+                        if (writePos < 0 || (cloudExpectedSize > 0 && writePos > cloudExpectedSize + stepSize)) return;
+                        byte[] raw;
+                        try { raw = Convert.FromBase64String(b64); }
+                        catch { return; }
+                        if (cloudOutFile.Position != writePos) cloudOutFile.Seek(writePos, SeekOrigin.Begin);
+                        cloudOutFile.Write(raw, 0, raw.Length);
+                        cloudReceivedBytes = Math.Max(cloudReceivedBytes, writePos + raw.Length);
+
+                        if ((chunkIdx + 1) % 384 == 0)
                         {
-                            byte[] raw = Convert.FromBase64String(b64);
-                            long writePos = chunkIdx * CLOUD_CHUNK_SIZE;
-                            if (cloudOutFile.Position != writePos) cloudOutFile.Seek(writePos, SeekOrigin.Begin);
-                            cloudOutFile.Write(raw, 0, raw.Length);
-                            cloudReceivedBytes = Math.Max(cloudReceivedBytes, writePos + raw.Length);
-
-                            if ((chunkIdx + 1) % 384 == 0)
-                            {
-                                WriteCheckpointFile(cloudPartPath, cloudReceivedBytes, cloudExpectedSize);
-                            }
-
-                            double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
-                            long deltaBytes = Math.Max(1L, cloudReceivedBytes - cloudSessionStartBytes);
-                            double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
-                            int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
-                            UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, mbps, permille);
+                            WriteCheckpointFile(cloudPartPath, cloudReceivedBytes, cloudExpectedSize);
                         }
+
+                        double sec = Math.Max(0.005, cloudRxSw.Elapsed.TotalSeconds);
+                        long deltaBytes = Math.Max(1L, cloudReceivedBytes - cloudSessionStartBytes);
+                        double mbps = (deltaBytes / (1024.0 * 1024.0)) / sec;
+                        int permille = (int)((cloudReceivedBytes * 1000L) / Math.Max(1L, cloudExpectedSize));
+                        UpdateTransferUi("Receiving: " + cloudFileName, cloudReceivedBytes, cloudExpectedSize, mbps, mbps, permille);
                         if ((chunkIdx + 1) % 8 == 0)
                         {
                             SendCloudPacketToChannel(ch, srcPeer, "{\\"kind\\":\\"exe:chunk-ack\\",\\"chunkIndex\\":" + chunkIdx.ToString() + "}");
@@ -5080,7 +5156,7 @@ namespace AetherTunnelNative
                         if (!ReadExactBytes(wsStream, maskKey, 4)) break;
                     }
 
-                    if (payloadLen > 64 * 1024 * 1024) break;
+                    if (payloadLen < 0 || payloadLen > 64 * 1024 * 1024) break;
                     byte[] data = new byte[(int)payloadLen];
                     if (payloadLen > 0 && !ReadExactBytes(wsStream, data, (int)payloadLen)) break;
 
@@ -5099,6 +5175,7 @@ namespace AetherTunnelNative
                     }
 
                     if (opcode != 0) fragOpcode = opcode;
+                    if (fragBuffer.Length + data.Length > 64 * 1024 * 1024) break;
                     fragBuffer.Write(data, 0, data.Length);
 
                     if (!fin) continue;
@@ -5144,13 +5221,12 @@ namespace AetherTunnelNative
                         }
                         else if (text.Contains("\\"exe:file-start\\""))
                         {
-                            string incomingFileId = ExtractJsonString(text, "fileId");
-                            currentFileName = ExtractJsonString(text, "name");
-                            if (currentFileName.Length == 0) currentFileName = "transfer.bin";
-                            expectedFileSize = ExtractJsonLong(text, "size");
+                            string incomingFileId = SanitizeJsonText(ExtractJsonString(text, "fileId"));
+                            string rawWsName = ExtractJsonString(text, "name");
+                            expectedFileSize = Math.Max(0L, ExtractJsonLong(text, "size"));
                             long wsChunkSize = ExtractJsonLong(text, "chunkSize");
-                            if (wsChunkSize <= 0) wsChunkSize = WS_CHUNK_SIZE;
-                            currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
+                            if (wsChunkSize < 1024 || wsChunkSize > 16 * 1024 * 1024) wsChunkSize = WS_CHUNK_SIZE;
+                            currentOutPath = BuildSafeDownloadPath(rawWsName, out currentFileName);
                             currentPartPath = currentOutPath + ".part";
 
                             if (currentOutFile != null)
@@ -5219,7 +5295,7 @@ namespace AetherTunnelNative
 
                             string ackJson = String.Format(
                                 "{{\\"kind\\":\\"exe:resume-ack\\",\\"fileId\\":\\"{0}\\",\\"name\\":\\"{1}\\",\\"size\\":{2},\\"resumeFromChunk\\":{3}}}",
-                                incomingFileId, currentFileName.Replace("\\"", ""), expectedFileSize, resumeFromChunk
+                                incomingFileId, SanitizeJsonText(currentFileName), expectedFileSize, resumeFromChunk
                             );
                             byte[] ackBytes = Encoding.UTF8.GetBytes(ackJson);
                             SendWebSocketFrame(wsStream, 0x01, ackBytes, 0, ackBytes.Length);
@@ -5422,8 +5498,9 @@ namespace AetherTunnelNative
                     }
                     else if (endpointStr.Length > 0)
                     {
-                        host = endpointStr;
+                        host = endpointStr.Trim();
                     }
+                    if (String.IsNullOrEmpty(host) || port <= 0 || port > 65535) return;
 
                     if (!silentAutoProbe)
                     {
@@ -6189,9 +6266,7 @@ namespace AetherTunnelNative
         private byte[] EncryptSingleUdpChunk(byte[] plainBuf, int plainLen, int chunkIndex, int totalChunks, byte[] keySnapshot)
         {
             byte[] iv = threadLocalIv.Value;
-            Array.Clear(iv, 8, 8);
-            WriteInt32LE(iv, 0, chunkIndex);
-            WriteInt32LE(iv, 4, 0x5A3C9E17 ^ chunkIndex);
+            threadLocalRng.Value.GetBytes(iv);
 
             byte[] cipher;
             AesCryptoServiceProvider aes = threadLocalAes.Value;
@@ -7139,8 +7214,7 @@ namespace AetherTunnelNative
                         {
                             int chunkIndex = waveStart + w;
                             byte[] iv = new byte[16];
-                            Buffer.BlockCopy(BitConverter.GetBytes(chunkIndex), 0, iv, 0, 4);
-                            Buffer.BlockCopy(BitConverter.GetBytes(Environment.TickCount ^ chunkIndex), 0, iv, 4, 4);
+                            threadLocalRng.Value.GetBytes(iv);
 
                             using (AesCryptoServiceProvider aes = new AesCryptoServiceProvider())
                             {
@@ -7314,10 +7388,11 @@ namespace AetherTunnelNative
 
                     if (frameType == 1)
                     {
-                        expectedFileSize = BitConverter.ToInt64(payload, 0);
+                        if (payloadLen < 12) break;
+                        expectedFileSize = Math.Max(0L, BitConverter.ToInt64(payload, 0));
                         int totalChunks = BitConverter.ToInt32(payload, 8);
-                        currentFileName = Encoding.UTF8.GetString(payload, 12, payloadLen - 12);
-                        currentOutPath = Path.Combine(downloadDirectory, "AetherTunnel_" + currentFileName);
+                        string rawTcpName = Encoding.UTF8.GetString(payload, 12, payloadLen - 12);
+                        currentOutPath = BuildSafeDownloadPath(rawTcpName, out currentFileName);
                         currentPartPath = currentOutPath + ".part";
 
                         if (currentOutFile != null)
@@ -7452,7 +7527,11 @@ namespace AetherTunnelNative
                     }
                     else if (frameType == 2 && currentOutFile != null)
                     {
+                        if (payloadLen < 20) break;
                         int chunkIndex = BitConverter.ToInt32(payload, 0);
+                        if (chunkIndex < 0) continue;
+                        long writeOffset = (long)chunkIndex * CHUNK_SIZE;
+                        if (writeOffset < 0 || (expectedFileSize > 0 && writeOffset > expectedFileSize + CHUNK_SIZE)) continue;
                         byte[] iv = new byte[16];
                         Buffer.BlockCopy(payload, 4, iv, 0, 16);
 
@@ -7472,7 +7551,6 @@ namespace AetherTunnelNative
                             }
                         }
 
-                        long writeOffset = (long)chunkIndex * CHUNK_SIZE;
                         if (currentOutFile.Position != writeOffset) currentOutFile.Seek(writeOffset, SeekOrigin.Begin);
                         currentOutFile.Write(plain, 0, plain.Length);
                         receivedPlainBytes = Math.Max(receivedPlainBytes, writeOffset + plain.Length);
@@ -7641,13 +7719,26 @@ function buildWindowsGuiExe(
   defaultRoomCode = '',
   defaultCloudWsUrl = 'wss://ais-pre-vbnfwcka5fzvdufqsqefco-732798873031.europe-west2.run.app/ws-tunnel'
 ) {
-  const safeRoomCode =
-    typeof defaultRoomCode === 'string' &&
-    defaultRoomCode.length > 0 &&
-    defaultRoomCode.length < 80 &&
-    !defaultRoomCode.includes('<')
-      ? defaultRoomCode
-      : '';
+  const safeRoomCode = String(defaultRoomCode || '')
+    .replace(/[^a-z0-9-]/gi, '')
+    .toLowerCase()
+    .slice(0, 64);
+  const rawWs = String(defaultCloudWsUrl || '').trim();
+  let safeCloudWsUrl = '';
+  if (rawWs && rawWs.length <= 256 && !/[\s"'<>\\]/.test(rawWs)) {
+    try {
+      const parsed = new URL(rawWs);
+      if (
+        (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') &&
+        /^[a-z0-9.\-:\[\]]+$/i.test(parsed.host) &&
+        /^\/[a-z0-9/_.\-]*$/i.test(parsed.pathname) &&
+        !parsed.username &&
+        !parsed.password
+      ) {
+        safeCloudWsUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+      }
+    } catch { }
+  }
   const fileAlignment = 0x200; // 512 bytes
   const sectionAlignment = 0x1000; // 4096 bytes
   const imageBase = 0x00400000;
@@ -7788,7 +7879,7 @@ function buildWindowsGuiExe(
   ]);
   code.copy(buf, 0x200);
 
-  const csSource = getCSharpKernelSource(safeRoomCode, defaultCloudWsUrl);
+  const csSource = getCSharpKernelSource(safeRoomCode, safeCloudWsUrl);
   const csBytes = Buffer.from(csSource, 'utf8');
   return Buffer.concat([buf, csBytes]);
 }
